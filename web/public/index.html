@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-memory — Memory Console</title>
+<style>
+:root {
+  --bg: #050507;
+  --panel: rgba(18,18,22,0.85);
+  --border: rgba(255,255,255,0.08);
+  --text: #e0e0e0;
+  --t-primary: #f0f0f0;
+  --t-secondary: #9a9aa4;
+  --t-bright: #fff;
+  --b-hover: rgba(255,255,255,0.25);
+  --accent: #7c6ff7;
+  --red: #f44;
+  --green: #4f4;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; }
+#graph { position: fixed; inset: 0; }
+#loading { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); font-size: 1.1rem; color: var(--t-secondary); z-index: 5; }
+#loading.error { color: var(--red); }
+#top-bar { position: fixed; top: 0; left: 0; right: 0; height: 48px; display: flex; align-items: center; padding: 0 16px; background: linear-gradient(180deg, rgba(5,5,7,0.9), transparent); z-index: 10; pointer-events: none; }
+#top-bar .logo { font-weight: 600; color: var(--t-bright); letter-spacing: 1px; font-size: .95rem; }
+#top-bar .stat-pill { margin-left: 16px; font-size: .75rem; color: var(--t-secondary); }
+#top-bar .stat-pill b { color: var(--t-primary); font-weight: 500; }
+#admin-btn { pointer-events: auto; margin-left: auto; background: rgba(18,18,22,0.8); border: 1px solid var(--border); color: var(--t-primary); padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: .8rem; transition: .2s; backdrop-filter: blur(10px); }
+#admin-btn:hover { border-color: var(--accent); color: var(--accent); }
+#admin-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(124,111,247,0.15); }
+#search-bar { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); width: 340px; z-index: 10; }
+#search-input { width: 100%; background: var(--panel); border: 1px solid var(--border); color: var(--t-primary); padding: 10px 16px; border-radius: 24px; font-size: .85rem; outline: none; backdrop-filter: blur(14px); }
+#search-input:focus { border-color: rgba(124,111,247,0.5); }
+#legend { position: fixed; left: 16px; bottom: 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; font-size: .72rem; color: var(--t-secondary); backdrop-filter: blur(14px); z-index: 10; min-width: 160px; }
+.legend-title { font-weight: 600; margin-bottom: 8px; color: var(--t-primary); }
+.legend-item { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.legend-count { margin-left: auto; opacity: .6; }
+.legend-divider { border-top: 1px solid var(--border); margin: 8px 0; }
+#controls-hint { position: fixed; bottom: 16px; right: 16px; font-size: .7rem; color: rgba(255,255,255,0.3); z-index: 10; }
+#side-panel { position: fixed; right: 16px; top: 64px; bottom: 56px; width: 360px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; transform: translateX(420px); transition: transform .3s ease; overflow-y: auto; backdrop-filter: blur(24px) saturate(1.4); z-index: 20; }
+#side-panel.open { transform: translateX(0); }
+.panel-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.close-btn { background: none; border: 1px solid var(--border); color: var(--t-secondary); width: 26px; height: 26px; border-radius: 6px; cursor: pointer; }
+.close-btn:hover { color: var(--t-bright); border-color: var(--b-hover); }
+.panel-type { font-size: .72rem; text-transform: uppercase; letter-spacing: 1px; }
+.panel-category { font-size: .8rem; color: var(--t-primary); }
+.panel-text { font-size: .92rem; line-height: 1.6; color: var(--t-primary); margin: 12px 0; white-space: pre-wrap; }
+.panel-section { margin-top: 12px; }
+.panel-section-label { font-size: .68rem; color: var(--t-secondary); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+.tag { display: inline-block; background: rgba(124,111,247,0.15); color: var(--accent); border-radius: 6px; padding: 2px 8px; font-size: .72rem; margin: 2px 4px 2px 0; }
+.importance-bar { background: rgba(255,255,255,0.08); border-radius: 4px; height: 6px; overflow: hidden; }
+.importance-fill { background: linear-gradient(90deg, var(--accent), #4FC3F7); height: 100%; border-radius: 4px; transition: width .4s; }
+.meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+.meta-item { font-size: .75rem; color: var(--t-secondary); }
+.meta-item b { color: var(--t-primary); font-weight: 500; }
+
+/* ─── 管理抽屉 ─── */
+#admin-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 420px; background: #0f1117; border-left: 1px solid var(--border); transform: translateX(100%); transition: transform .3s ease; z-index: 30; overflow-y: auto; padding: 16px; }
+#admin-drawer.open { transform: translateX(0); }
+.adm-header { display: flex; align-items: center; margin-bottom: 14px; }
+.adm-header h2 { font-size: 1rem; color: var(--t-primary); }
+.adm-close { margin-left: auto; background: none; border: 1px solid var(--border); color: var(--t-secondary); width: 28px; height: 28px; border-radius: 6px; cursor: pointer; }
+.adm-close:hover { color: var(--t-bright); }
+.card { background: #1a1d27; border: 1px solid #2a2d3a; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+.card h3 { font-size: .88rem; margin-bottom: 10px; color: var(--accent); }
+.row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.row label { min-width: 72px; color: #888; font-size: .78rem; }
+.row input, .row select { flex: 1; background: #0a0c12; border: 1px solid #2a2d3a; color: var(--text); padding: 7px 10px; border-radius: 6px; font-size: .82rem; outline: none; }
+.row input:focus, .row select:focus { border-color: var(--accent); }
+.btn { padding: 7px 14px; border: none; border-radius: 6px; font-size: .8rem; cursor: pointer; transition: .2s; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { filter: brightness(1.15); }
+.btn-danger { background: var(--red); color: #fff; }
+.btn-success { background: #1a6b3c; color: #fff; }
+.btn-orange { background: #f90; color: #000; }
+.btn-gray { background: #333; color: #fff; }
+.btn-group { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+#log { background: #000; border: 1px solid #2a2d3a; border-radius: 8px; padding: 10px; height: 200px; overflow-y: auto; font-family: 'Cascadia Code', Consolas, monospace; font-size: .72rem; line-height: 1.5; white-space: pre-wrap; }
+.log-info { color: #aaa; }
+.log-ok { color: var(--green); }
+.log-err { color: var(--red); }
+.log-hl { color: var(--accent); }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: .7rem; margin-left: 6px; }
+.badge-ok { background: #1a6b3c; color: var(--green); }
+.badge-err { background: #5c1a1a; color: var(--red); }
+.status-bar { display: flex; gap: 12px; font-size: .72rem; color: #888; margin-top: 8px; flex-wrap: wrap; }
+#memList { max-height: 260px; overflow-y: auto; font-size: .75rem; }
+.mem-item { padding: 6px 0; border-bottom: 1px solid #2a2d3a; display: flex; align-items: flex-start; gap: 8px; }
+.mem-item .mem-body { flex: 1; min-width: 0; }
+.mem-item .mem-cat { color: var(--accent); font-size: .72rem; }
+.mem-item .mem-text { margin-top: 2px; word-break: break-all; }
+.mem-item .mem-meta { color: #666; font-size: .65rem; margin-top: 2px; }
+.note { color: #888; font-size: .72rem; margin-top: 6px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div id="loading">✦ ai-memory 记忆星图正在展开...</div>
+<div id="graph"></div>
+
+<div id="top-bar">
+  <span class="logo">✦ ai-memory</span>
+  <span class="stat-pill">记忆 <b id="stat-nodes">—</b></span>
+  <span class="stat-pill">连线 <b id="stat-links">—</b></span>
+  <button id="admin-btn" onclick="toggleAdmin()">⚙ 管理</button>
+</div>
+
+<div id="search-bar">
+  <input type="text" id="search-input" placeholder="搜索记忆..." />
+</div>
+
+<div id="legend">
+  <div class="legend-title">记忆分类</div>
+  <div id="legend-items"></div>
+  <div class="legend-divider"></div>
+  <div class="legend-link">━ 关系 &nbsp; ┄ 相似度</div>
+</div>
+
+<div id="controls-hint">拖拽旋转 · 滚轮缩放 · 点击查看</div>
+
+<div id="side-panel">
+  <div class="panel-header">
+    <button class="close-btn" onclick="closePanel()">×</button>
+    <div class="panel-type" id="panel-type"></div>
+    <div class="panel-category" id="panel-category"></div>
+  </div>
+  <div class="panel-text" id="panel-text"></div>
+  <div class="panel-section" id="panel-tags-section">
+    <div class="panel-section-label">标签</div>
+    <div id="panel-tags"></div>
+  </div>
+  <div class="panel-section">
+    <div class="panel-section-label">重要性</div>
+    <div class="importance-bar"><div class="importance-fill" id="panel-importance"></div></div>
+  </div>
+  <div class="panel-section">
+    <div class="panel-section-label">详情</div>
+    <div class="meta-grid" id="panel-meta"></div>
+  </div>
+</div>
+
+<!-- ═══ 管理抽屉(副界面) ═══ -->
+<div id="admin-drawer">
+  <div class="adm-header">
+    <h2>🧠 记忆管理</h2>
+    <button class="adm-close" onclick="toggleAdmin()">×</button>
+  </div>
+
+  <div class="card">
+    <h3>🚀 反思整理</h3>
+    <p class="note" style="margin-bottom:8px">把记忆发给大模型判断合并/拆分/关联/重分类(需下方配置 LLM API)</p>
+    <div class="btn-group">
+      <button class="btn btn-primary" id="btnRun" onclick="runReflect('auto')">▶ 日常反思</button>
+      <button class="btn btn-orange" id="btnDeep" onclick="runReflect('deep')">🔬 深度校准</button>
+    </div>
+    <div class="status-bar"><span id="lastRun">上次运行: 从未</span></div>
+  </div>
+
+  <div class="card">
+    <h3>🧬 嵌入模型</h3>
+    <div class="row">
+      <label>来源</label>
+      <select id="embedMode" onchange="toggleEmbedMode()">
+        <option value="ollama">Ollama(本地)</option>
+        <option value="api">API(云端,Key)</option>
+      </select>
+    </div>
+    <div id="embedOllamaFields">
+      <div class="row"><label>Ollama URL</label><input id="embOllamaUrl" placeholder="http://127.0.0.1:11436"></div>
+      <div class="row"><label>模型</label><input id="embOllamaModel" placeholder="yuan-embedding-2.0-zh"></div>
+    </div>
+    <div id="embedApiFields" style="display:none">
+      <div class="row"><label>API 地址</label><input id="embApiUrl" placeholder="https://api.siliconflow.cn/v1"></div>
+      <div class="row"><label>API Key</label><input id="embApiKey" type="password" placeholder="sk-..."></div>
+      <div class="row"><label>模型</label><input id="embApiModel" placeholder="BAAI/bge-m3"></div>
+    </div>
+    <p class="note">⚠️ 嵌入维度固定 1024,换模型需同维或重建库;保存后重启 MCP server 生效</p>
+  </div>
+
+  <div class="card">
+    <h3>⚙️ 反思 LLM</h3>
+    <div class="row"><label>API 地址</label><input id="refUrl" placeholder="https://api.deepseek.com/v1"></div>
+    <div class="row"><label>API Key</label><input id="refKey" type="password" placeholder="sk-..."></div>
+    <div class="row"><label>模型</label><input id="refModel" placeholder="deepseek-chat"></div>
+  </div>
+
+  <div class="btn-group" style="margin-bottom:12px">
+    <button class="btn btn-primary" onclick="saveAllConfig()">💾 保存全部配置</button>
+    <span id="configStatus"></span>
+  </div>
+
+  <div class="card">
+    <h3>📝 记忆管理</h3>
+    <div class="row">
+      <input id="memFilter" placeholder="搜索记忆..." oninput="filterMems()">
+      <button class="btn btn-gray" onclick="loadMems()">↻</button>
+    </div>
+    <div id="memList"></div>
+  </div>
+
+  <div class="card">
+    <h3>📋 运行日志</h3>
+    <div id="log"></div>
+    <div class="btn-group"><button class="btn btn-gray" onclick="clearLog()">🗑 清日志</button></div>
+  </div>
+</div>
+
+<script src="//cdn.jsdelivr.net/npm/3d-force-graph"></script>
+<script>
+const CATEGORY_COLORS = {
+  milestone:     { color: '#FFA726', label: '里程碑' },
+  identity:      { color: '#66BB6A', label: '身份设定' },
+  relationship:  { color: '#42A5F5', label: '核心关系' },
+  emotional:     { color: '#FF6B6B', label: '情绪积淀' },
+  mood_snapshot: { color: '#FFD54F', label: '情绪快照' },
+  knowledge:     { color: '#26A69A', label: '知识/事实' },
+  preference:    { color: '#EC407A', label: '偏好' },
+  conversation:  { color: '#AB47BC', label: '对话片段' },
+  decision:      { color: '#FFA726', label: '决策' },
+  mistake:       { color: '#EF5350', label: '错误教训' },
+  general:       { color: '#78909C', label: '其他' },
+};
+
+const sidePanel = document.getElementById('side-panel');
+const loading = document.getElementById('loading');
+const adminDrawer = document.getElementById('admin-drawer');
+let graphInstance = null;
+let allData = null;
+
+function toggleAdmin() {
+  const open = adminDrawer.classList.toggle('open');
+  document.getElementById('admin-btn').classList.toggle('active', open);
+  if (open) { loadConfig(); loadMems(); }
+}
+
+function toggleEmbedMode() {
+  const mode = document.getElementById('embedMode').value;
+  document.getElementById('embedOllamaFields').style.display = mode === 'ollama' ? '' : 'none';
+  document.getElementById('embedApiFields').style.display = mode === 'api' ? '' : 'none';
+}
+
+fetch('/api/graph')
+  .then(r => r.json())
+  .then(data => {
+    allData = data;
+    document.getElementById('stat-nodes').textContent = data.nodes.length;
+    document.getElementById('stat-links').textContent = data.stats.totalLinks;
+
+    const legendEl = document.getElementById('legend-items');
+    const catCounts = {};
+    data.nodes.forEach(n => { catCounts[n.category] = (catCounts[n.category] || 0) + 1; });
+    Object.keys(CATEGORY_COLORS).forEach(cat => {
+      if (!catCounts[cat]) return;
+      const c = CATEGORY_COLORS[cat];
+      const item = document.createElement('div');
+      item.className = 'legend-item';
+      item.innerHTML = `<span class="legend-dot" style="background:${c.color}"></span> ${c.label} <span class="legend-count">${catCounts[cat]}</span>`;
+      legendEl.appendChild(item);
+    });
+
+    const categories = [...new Set(data.nodes.map(n => n.category))];
+    const anchorPos = {};
+    categories.forEach((cat, i) => {
+      const phi = Math.acos(1 - 2 * (i + 0.5) / categories.length);
+      const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+      const r = 120;
+      anchorPos[cat] = {
+        x: r * Math.sin(phi) * Math.cos(theta),
+        y: r * Math.sin(phi) * Math.sin(theta),
+        z: r * Math.cos(phi),
+      };
+    });
+    data.nodes.forEach(node => {
+      const a = anchorPos[node.category];
+      if (a) {
+        node.x = a.x + (Math.random() - 0.5) * 30;
+        node.y = a.y + (Math.random() - 0.5) * 30;
+        node.z = a.z + (Math.random() - 0.5) * 30;
+      }
+    });
+
+    graphInstance = new ForceGraph3D(document.getElementById('graph'))
+      .graphData(data)
+      .backgroundColor('#050507')
+      .nodeColor(n => (CATEGORY_COLORS[n.category] || {color:'#90A4AE'}).color)
+      .nodeVal(n => n.importance * 6 + 4)
+      .nodeOpacity(0.9)
+      .nodeLabel(n => {
+        const c = CATEGORY_COLORS[n.category] || {label: n.category};
+        return `<div style="background:rgba(10,10,14,0.92);backdrop-filter:blur(8px);padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);font-size:0.8rem;max-width:320px;"><div style="color:${(CATEGORY_COLORS[n.category]||{color:'#aaa'}).color};font-size:0.65rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">${c.label}</div>${n.label}</div>`;
+      })
+      .linkColor(l => l.type === 'similarity' ? 'rgba(100,100,120,0.12)' : 'rgba(79,195,247,0.20)')
+      .linkWidth(l => l.type === 'similarity' ? 0.3 : 0.8)
+      .linkDirectionalParticles(l => l.type === 'similarity' ? 0 : 2)
+      .linkDirectionalParticleWidth(0.03)
+      .linkDirectionalParticleSpeed(0.002)
+      .linkOpacity(0.4)
+      .showNavInfo(false)
+      .onNodeClick(node => {
+        showPanel(node);
+        graphInstance.cameraPosition(
+          { x: node.x * 1.8, y: node.y * 1.8, z: node.z * 1.8 },
+          { x: node.x, y: node.y, z: node.z },
+          1000
+        );
+      })
+      .onNodeHover(node => { document.body.style.cursor = node ? 'pointer' : 'default'; });
+
+    loading.style.display = 'none';
+  })
+  .catch(err => { loading.textContent = '❌ 加载失败: ' + err.message; loading.classList.add('error'); });
+
+function showPanel(node) {
+  const c = CATEGORY_COLORS[node.category] || {label: node.category};
+  document.getElementById('panel-type').textContent = `${node.type} · ${node.subject || ''}`;
+  document.getElementById('panel-type').style.color = c.color;
+  const tierLabel = node.tier === 'critical' ? '🔴 核心' : node.tier === 'temporary' ? '🟡 临时' : '🔵 标准';
+  document.getElementById('panel-category').textContent = c.label + ' · ' + tierLabel;
+  document.getElementById('panel-text').textContent = node.fullText;
+
+  const tagsEl = document.getElementById('panel-tags');
+  tagsEl.innerHTML = '';
+  document.getElementById('panel-tags-section').style.display = '';
+  if (node.tags && node.tags.length) {
+    for (const t of node.tags) {
+      const span = document.createElement('span');
+      span.className = 'tag';
+      span.textContent = t;
+      tagsEl.appendChild(span);
+    }
+  } else {
+    document.getElementById('panel-tags-section').style.display = 'none';
+  }
+
+  document.getElementById('panel-importance').style.width = (node.importance * 100) + '%';
+
+  const meta = document.getElementById('panel-meta');
+  meta.innerHTML = '';
+  const addMeta = (label, value) => {
+    const div = document.createElement('div');
+    div.className = 'meta-item';
+    div.innerHTML = `${label}: <b>${value}</b>`;
+    meta.appendChild(div);
+  };
+  addMeta('重要性', node.importance);
+  addMeta('情绪影响', node.emotionalImpact);
+  addMeta('分级', tierLabel);
+  if (node.tier === 'temporary' && node.expiresAt) addMeta('过期', new Date(node.expiresAt).toLocaleString('zh-CN'));
+  addMeta('创建', new Date(node.createdAt).toLocaleString('zh-CN'));
+  addMeta('访问', node.accessedCount + ' 次');
+  if (node.source) addMeta('来源', node.source);
+
+  sidePanel.classList.add('open');
+}
+
+function closePanel() { sidePanel.classList.remove('open'); }
+
+document.getElementById('search-input').addEventListener('input', (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  if (!graphInstance || !allData) return;
+  if (!q) {
+    allData.nodes.forEach(n => { n.color = (CATEGORY_COLORS[n.category] || {color:'#90A4AE'}).color; });
+  } else {
+    allData.nodes.forEach(n => {
+      const match = n.fullText.toLowerCase().includes(q) ||
+                    (n.tags || []).some(t => t.toLowerCase().includes(q)) ||
+                    n.category.includes(q) ||
+                    n.type.includes(q);
+      n.color = match ? (CATEGORY_COLORS[n.category] || {color:'#fff'}).color : 'rgba(60,60,70,0.15)';
+    });
+  }
+  graphInstance.graphData(allData);
+});
+
+// ═══════════════════ 管理抽屉逻辑 ═══════════════════
+function log(msg, cls='log-info') {
+  const el = document.getElementById('log');
+  const time = new Date().toLocaleTimeString();
+  el.innerHTML += `<span class="${cls}">[${time}] ${msg}</span>\n`;
+  el.scrollTop = el.scrollHeight;
+}
+
+async function loadConfig() {
+  try {
+    const r = await fetch('/api/config');
+    const d = await r.json();
+    const emb = d.embedding || {};
+    document.getElementById('embedMode').value = emb.mode || 'ollama';
+    document.getElementById('embOllamaUrl').value = emb.ollama_url || 'http://127.0.0.1:11436';
+    document.getElementById('embOllamaModel').value = emb.model || 'yuan-embedding-2.0-zh';
+    document.getElementById('embApiUrl').value = emb.api_url || '';
+    document.getElementById('embApiKey').value = emb.api_key && emb.api_key !== '****' ? emb.api_key : '';
+    document.getElementById('embApiModel').value = emb.api_model || '';
+    const ref = d.reflect || {};
+    document.getElementById('refUrl').value = ref.llm_url || 'https://api.deepseek.com/v1';
+    document.getElementById('refKey').value = ref.api_key && ref.api_key !== '****' ? ref.api_key : '';
+    document.getElementById('refModel').value = ref.model || 'deepseek-chat';
+    toggleEmbedMode();
+    document.getElementById('configStatus').innerHTML = '<span class="badge badge-ok">已加载</span>';
+  } catch(e) {
+    document.getElementById('configStatus').innerHTML = '<span class="badge badge-err">加载失败</span>';
+    log('加载配置失败: ' + e.message, 'log-err');
+  }
+}
+
+async function saveAllConfig() {
+  const mode = document.getElementById('embedMode').value;
+  const cfg = {
+    embedding: {
+      mode,
+      ollama_url: document.getElementById('embOllamaUrl').value.trim(),
+      model: document.getElementById('embOllamaModel').value.trim(),
+      api_url: document.getElementById('embApiUrl').value.trim(),
+      api_key: document.getElementById('embApiKey').value.trim(),
+      api_model: document.getElementById('embApiModel').value.trim(),
+    },
+    reflect: {
+      llm_url: document.getElementById('refUrl').value.trim(),
+      api_key: document.getElementById('refKey').value.trim(),
+      model: document.getElementById('refModel').value.trim() || 'deepseek-chat',
+    },
+  };
+  try {
+    const r = await fetch('/api/config', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(cfg)
+    });
+    const d = await r.json();
+    document.getElementById('configStatus').innerHTML = '<span class="badge badge-ok">已保存</span>';
+    log('配置已保存 ✓ ' + (d.note || ''), 'log-ok');
+  } catch(e) {
+    document.getElementById('configStatus').innerHTML = '<span class="badge badge-err">保存失败</span>';
+    log('保存失败: ' + e.message, 'log-err');
+  }
+}
+
+async function runReflect(mode) {
+  const btn = mode === 'deep' ? document.getElementById('btnDeep') : document.getElementById('btnRun');
+  btn.disabled = true; btn.textContent = '⏳ 反思中(可能需 1-2 分钟)...';
+  log(mode === 'deep' ? '🔬 深度校准 — 分析全部记忆...' : '▶ 日常反思...', 'log-hl');
+  try {
+    const r = await fetch('/api/reflect/run', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ mode })
+    });
+    const d = await r.json();
+    if (d.error) {
+      log('❌ ' + d.error, 'log-err');
+    } else if (d.skipped) {
+      log('⏭ 跳过: ' + (d.errors || []).join('; '), 'log-info');
+    } else {
+      log(`✅ 完成! 分析 ${d.conversationCount || d.memoryCount || '?'} 条,应用了 ${d.applied}/${d.actions} 个操作`, 'log-ok');
+      (d.errors || []).forEach(e => log('⚠️ ' + e, 'log-err'));
+      document.getElementById('lastRun').textContent = '上次运行: ' + new Date().toLocaleString();
+      refreshGraph();
+    }
+  } catch(e) {
+    log('❌ 反思失败: ' + e.message, 'log-err');
+  }
+  btn.disabled = false; btn.textContent = mode === 'deep' ? '🔬 深度校准' : '▶ 日常反思';
+}
+
+function clearLog() { document.getElementById('log').innerHTML = ''; }
+
+let allMems = [];
+
+async function loadMems() {
+  try {
+    const r = await fetch('/api/memory?limit=200');
+    allMems = await r.json();
+    renderMems(allMems);
+  } catch(e) { log('记忆加载失败: '+e.message, 'log-err'); }
+}
+
+function filterMems() {
+  const q = document.getElementById('memFilter').value.toLowerCase();
+  renderMems(q ? allMems.filter(m => (m.text||'').toLowerCase().includes(q)) : allMems);
+}
+
+function renderMems(list) {
+  const el = document.getElementById('memList');
+  el.innerHTML = list.slice(0,80).map(m => {
+    return `<div class="mem-item">
+      <div class="mem-body">
+        <span class="mem-cat">${m.category||'?'}</span>
+        ${m.tier==='critical'?'<span class="badge badge-ok">critical</span>':''}
+        ${m.locked?'<span style="color:#f90">🔒</span>':''}
+        <div class="mem-text">${(m.text||'').substring(0,70)}</div>
+        <div class="mem-meta">${(m.id||'').substring(0,8)} | ${(m.createdAt||'').substring(0,10)} | ${(m.source||'').substring(0,12)}</div>
+      </div>
+      <div class="mem-actions">
+        <button class="btn btn-danger" onclick="delMem('${m.id}')">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function delMem(id) {
+  if (!confirm('删除这条记忆?')) return;
+  try {
+    const r = await fetch('/api/memory/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id}) });
+    const d = await r.json();
+    log(d.deleted ? '已删除: '+id.substring(0,8) : '删除失败', d.deleted ? 'log-ok' : 'log-err');
+    loadMems();
+    refreshGraph();
+  } catch(e) { log('删除失败: '+e.message, 'log-err'); }
+}
+
+function refreshGraph() {
+  fetch('/api/graph').then(r => r.json()).then(data => {
+    allData = data;
+    document.getElementById('stat-nodes').textContent = data.nodes.length;
+    document.getElementById('stat-links').textContent = data.stats.totalLinks;
+    if (graphInstance) graphInstance.graphData(data);
+  }).catch(() => {});
+}
+</script>
+</body>
+</html>

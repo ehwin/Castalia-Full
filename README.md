@@ -87,6 +87,20 @@ Listens on `http://127.0.0.1:11436` (Ollama-compatible `/api/embed`, 1024-dim, m
 - `reflect_deep` — **deep calibration**: all memories → dedup/profile/graph → apply (needs `REFLECT_LLM_API_KEY`)
 - `reflect_batch_embed` — batch-vectorize pending memories
 
+## Web Console (3D main + admin side)
+
+Bundled web UI: fullscreen 3D memory graph as the main view, admin drawer (reflection, embedding/LLM config, memory management, logs) as the side panel.
+
+```bat
+cd web
+npm install
+node server.mjs        # → http://127.0.0.1:3345
+```
+
+- Config saved to `config.json` (embedding source + reflection LLM), applied on MCP server restart
+- Embedding source dropdown: **Ollama** (local URL + model) or **API** (cloud key, OpenAI-compatible `/embeddings`, e.g. SiliconFlow)
+- Reflection runs via a built-in MCP client calling `reflect_auto` / `reflect_deep`
+
 ## Tests
 
 ```bash

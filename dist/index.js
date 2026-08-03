@@ -6,6 +6,8 @@
  * 工具分两类：搜索/存储类工具（LLM 可见），
  * 对话自动化/反思类工具（由 harness 或代理内部调用）。
  */
+// ⚠️ 必须第一个 import:加载 config.json 覆盖环境变量(嵌入/反思配置)
+import './configLoader.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
