@@ -15,7 +15,20 @@ scripts\start-embed.bat
 Listens on `http://127.0.0.1:11436` (Ollama-compatible `/api/embed`, 1024-dim, model `IEITYuan/Yuan-embedding-2.0-zh`, cached locally — no re-download).
 > Any Ollama-compatible embed service outputting **1024-dim** works: point `OLLAMA_URL` + `EMBEDDING_MODEL` at it and skip this step.
 
-### 2. Connect from your MCP client
+### 2. One-command agent setup (borrowed from engram's `engram setup`)
+
+```bash
+python scripts/setup.py claude     # Claude Code → .mcp.json
+python scripts/setup.py opencode   # OpenCode    → .opencode.json
+python scripts/setup.py cursor     # Cursor      → .cursor/mcp.json
+python scripts/setup.py vscode     # VS Code     → .vscode/mcp.json
+python scripts/setup.py codex      # Codex       → prints `codex mcp add` command
+python scripts/setup.py json       # print standard mcpServers JSON
+```
+
+Or wire it manually:
+
+### 3. Connect from your MCP client
 
 ```json
 {
@@ -53,7 +66,7 @@ Listens on `http://127.0.0.1:11436` (Ollama-compatible `/api/embed`, 1024-dim, m
 | `REFLECT_LLM_MODEL` | `deepseek-chat` | Reflection LLM model |
 | `REFLECT_INTERVAL_HOURS` | `0` | Auto-reflect interval in hours; `0` = manual only |
 
-## Tools (24)
+## Tools (25)
 
 **Search**
 - `memory_search` — tag-first, vector KNN fallback, neutral scoring
@@ -76,7 +89,8 @@ Listens on `http://127.0.0.1:11436` (Ollama-compatible `/api/embed`, 1024-dim, m
 - `daily_summary_data` — conversations + processed data for the last N hours
 
 **Context / stats**
-- `context_get` — recent memories + stats for prompt injection
+- `memory_context` — **injection-ready context bundle**: recent + task-related (optional query) + cognitive logs + facts, with ground-truth instructions (borrowed from engram's `mem_context` / memory-os `fabric_brief`)
+- `context_get` — lightweight recent memories + stats
 - `stats_get` — memory statistics
 - `mood_journal` — emotional history (uses stored `emotionalImpact`)
 

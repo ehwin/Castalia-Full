@@ -261,6 +261,106 @@ server.tool(
   }
 );
 
+// ═══════════════════════════════════════════════════════════════════
+// 上下文包工具 — 借鉴 engram mem_context / memory-os fabric_brief
+// 一次调用拿到组装好的注入上下文:近期 + 相关 + 认知记录 + 事实
+// ═══════════════════════════════════════════════════════════════════
+
+server.tool(
+  'memory_context',
+  'Assemble an injection-ready context bundle: recent important memories + memories related to the current task (optional query) + cognitive logs (decisions/mistakes/patterns) + key facts. Call at session start or when you need memory context.',
+  {
+    query: z.string().optional().describe('Current task/topic to find related memories (optional)'),
+    hoursBack: z.number().optional().describe('Window for recent memories (default 48h)'),
+    recentLimit: z.number().optional().describe('Max recent memories (default 5)'),
+    relatedLimit: z.number().optional().describe('Max related memories (default 5)'),
+    asText: z.boolean().optional().describe('Return ready-to-inject prompt text (default true)'),
+  },
+  async (args) => {
+    try {
+      const db = DatabaseManager.getInstance();
+      const hoursBack = args.hoursBack ?? 48;
+      const recentLimit = args.recentLimit ?? 5;
+      const relatedLimit = args.relatedLimit ?? 5;
+
+      // 1. 近期重要记忆
+      const recent = getRecentMemories(CHAR_ID, recentLimit, hoursBack);
+
+      // 2. 与当前任务相关的记忆(向量搜索)
+      let related: any[] = [];
+      if (args.query) {
+        const r = await searchMemory({ query: args.query, topK: relatedLimit, profile: 'balanced', characterId: CHAR_ID });
+        related = r.map(m => ({ text: m.text, category: m.category, importance: m.importance, score: m.score, createdAt: m.createdAt }));
+      }
+
+      // 3. 认知记录(决策/错误/模式)
+      const cognitiveCats = ['decision', 'mistake'];
+      const cognitives = db.prepare(`
+        SELECT text, category, importance, created_at FROM memory
+        WHERE is_active = 1 AND character_id = ?
+          AND (category IN ('decision','mistake') OR tags LIKE '%pattern%')
+        ORDER BY created_at DESC LIMIT 9
+      `).all(CHAR_ID) as any[];
+
+      // 4. 关键事实(高置信度)
+      const facts = db.prepare(`
+        SELECT subject, predicate, object, confidence FROM facts
+        WHERE is_active = 1 AND confidence >= 0.7
+        ORDER BY confidence DESC, created_at DESC LIMIT 5
+      `).all() as any[];
+
+      const stats = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1').get() as any;
+
+      // 5. Ground Truth 提示词组装
+      const sections: string[] = [];
+      sections.push(`【当前记忆上下文】总记忆 ${stats.c} 条。请优先参考以下记忆,它们是之前会话沉淀的事实与经验:`);
+
+      if (recent.length > 0) {
+        sections.push(`\n■ 近期重要记忆(近 ${hoursBack} 小时):`);
+        recent.forEach((m: any, i: number) => {
+          sections.push(`${i + 1}. [${m.category}] ${m.text}${m.importance >= 0.8 ? ' (重要)' : ''}`);
+        });
+      }
+
+      if (related.length > 0) {
+        sections.push(`\n■ 与当前任务相关:「${args.query}」`);
+        related.forEach((m: any, i: number) => {
+          sections.push(`${i + 1}. [${m.category}] ${m.text}`);
+        });
+      }
+
+      if (cognitives.length > 0) {
+        sections.push(`\n■ 经验沉淀(决策/错误/模式):`);
+        cognitives.forEach((m: any, i: number) => {
+          const tag = m.category === 'mistake' ? '⚠️教训' : m.category === 'decision' ? '🎯决策' : '📐模式';
+          sections.push(`${i + 1}. ${tag} ${m.text}`);
+        });
+      }
+
+      if (facts.length > 0) {
+        sections.push(`\n■ 已知事实:`);
+        facts.forEach((f: any, i: number) => {
+          sections.push(`${i + 1}. ${f.subject} — ${f.predicate}: ${f.object}`);
+        });
+      }
+
+      sections.push(`\n【要求】以上记忆来自用户的真实历史,与当前任务相关时请直接使用,不要重新询问用户已知信息。`);
+
+      const bundle = {
+        prompt: sections.join('\n'),
+        recent: recent.map(m => ({ text: m.text, category: m.category, importance: m.importance, createdAt: m.createdAt })),
+        related,
+        cognitives: cognitives.map(m => ({ text: m.text, category: m.category })),
+        facts,
+        stats: { total: stats.c },
+        injectedAt: new Date().toISOString(),
+      };
+
+      return ok(args.asText === false ? bundle : { prompt: bundle.prompt });
+    } catch (e: any) { return err(e.message); }
+  }
+);
+
 server.tool(
   'stats_get',
   'Get memory system statistics: total count, by category, by source.',
