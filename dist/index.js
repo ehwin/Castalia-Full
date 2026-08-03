@@ -99,6 +99,59 @@ server.tool('memory_update', 'Update memory fields (text, category, tags, import
     }
 });
 // ═══════════════════════════════════════════════════════════════════
+// 认知记录工具 — agent 显式沉淀(决策/模式/错误)
+// 结构化认知:agent 边干活边"教"记忆体,跨会话复用
+// 检索:memory_search(category=decision|pattern|mistake)
+// ═══════════════════════════════════════════════════════════════════
+server.tool('memory_log_decision', 'Log an agent decision with rationale ("why I chose X"). Category=decision, searchable via memory_search(category=decision).', {
+    text: z.string().describe('The decision and its rationale'),
+    tags: z.array(z.string()).optional().describe('Optional tags'),
+}, async (args) => {
+    try {
+        const r = await saveMemory({
+            text: args.text, type: 'episodic', category: 'decision',
+            tags: args.tags ?? [], importance: 0.6, tier: 'standard',
+            source: 'agent_log', characterId: CHAR_ID,
+        });
+        return ok({ id: r.id, category: 'decision' });
+    }
+    catch (e) {
+        return err(e.message);
+    }
+});
+server.tool('memory_log_pattern', 'Log a pattern or insight discovered ("I found that X leads to Y"). Category=knowledge+pattern tag, searchable via memory_search.', {
+    text: z.string().describe('The pattern/insight'),
+    tags: z.array(z.string()).optional().describe('Optional tags'),
+}, async (args) => {
+    try {
+        const r = await saveMemory({
+            text: args.text, type: 'semantic', category: 'knowledge',
+            tags: ['pattern', ...(args.tags ?? [])], importance: 0.6, tier: 'standard',
+            source: 'agent_log', characterId: CHAR_ID,
+        });
+        return ok({ id: r.id, category: 'knowledge' });
+    }
+    catch (e) {
+        return err(e.message);
+    }
+});
+server.tool('memory_log_mistake', 'Log a mistake/lesson learned ("this trap cost me time, avoid it"). Category=mistake, tier=critical (protected from cleanup).', {
+    text: z.string().describe('The mistake and the lesson'),
+    tags: z.array(z.string()).optional().describe('Optional tags'),
+}, async (args) => {
+    try {
+        const r = await saveMemory({
+            text: args.text, type: 'episodic', category: 'mistake',
+            tags: args.tags ?? [], importance: 0.7, tier: 'critical',
+            source: 'agent_log', characterId: CHAR_ID,
+        });
+        return ok({ id: r.id, category: 'mistake', tier: 'critical' });
+    }
+    catch (e) {
+        return err(e.message);
+    }
+});
+// ═══════════════════════════════════════════════════════════════════
 // 对话自动化工具（proxy.py 内部调用）
 // ═══════════════════════════════════════════════════════════════════
 server.tool('auto_process', '[Internal] Process a conversation turn: save to log, update agent mood, observe user, queue VAD analysis. Called automatically after each LLM response.', {

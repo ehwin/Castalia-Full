@@ -53,7 +53,7 @@ Listens on `http://127.0.0.1:11436` (Ollama-compatible `/api/embed`, 1024-dim, m
 | `REFLECT_LLM_MODEL` | `deepseek-chat` | Reflection LLM model |
 | `REFLECT_INTERVAL_HOURS` | `0` | Auto-reflect interval in hours; `0` = manual only |
 
-## Tools (21)
+## Tools (24)
 
 **Search**
 - `memory_search` — tag-first, vector KNN fallback, neutral scoring
@@ -63,6 +63,11 @@ Listens on `http://127.0.0.1:11436` (Ollama-compatible `/api/embed`, 1024-dim, m
 - `memory_save` — store a memory (`skipEmbed` to skip vectorization)
 - `memory_update` / `memory_delete` — update fields / soft-delete
 - `memory_list` / `memory_recent` / `memory_graph` — enumerate / recent important / relation graph
+
+**Cognitive logging** (agent explicitly teaches the memory)
+- `memory_log_decision` — log a decision + rationale (category=decision)
+- `memory_log_pattern` — log a discovered pattern/insight (category=knowledge, tag=pattern)
+- `memory_log_mistake` — log a lesson learned (category=mistake, tier=critical, cleanup-protected)
 
 **Conversation automation** (call per dialog turn)
 - `auto_process` — save the turn + trigger digest
