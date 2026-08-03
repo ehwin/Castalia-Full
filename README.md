@@ -48,8 +48,12 @@ Listens on `http://127.0.0.1:11436` (Ollama-compatible `/api/embed`, 1024-dim, m
 | `WEIGHT_EMOTION` | `0.10` | Scoring: stored emotional-impact weight (weak) |
 | `WEIGHT_TIME` | `0.30` | Scoring: time-decay weight |
 | `HALF_LIFE_HOURS` | `720` | Time-decay half-life (hours, default 30 days) |
+| `REFLECT_LLM_URL` | `https://api.deepseek.com/v1` | OpenAI-compatible LLM endpoint for reflection |
+| `REFLECT_LLM_API_KEY` | *(unset)* | Reflection LLM key; reflection skipped when unset |
+| `REFLECT_LLM_MODEL` | `deepseek-chat` | Reflection LLM model |
+| `REFLECT_INTERVAL_HOURS` | `0` | Auto-reflect interval in hours; `0` = manual only |
 
-## Tools (19)
+## Tools (21)
 
 **Search**
 - `memory_search` — tag-first, vector KNN fallback, neutral scoring
@@ -71,9 +75,11 @@ Listens on `http://127.0.0.1:11436` (Ollama-compatible `/api/embed`, 1024-dim, m
 - `stats_get` — memory statistics
 - `mood_journal` — emotional history (uses stored `emotionalImpact`)
 
-**Reflection** (driver by an external LLM)
+**Reflection** (LLM-driven, bundled in-server)
 - `reflect_analyze` — unanalyzed conversations + reflection system prompt
 - `reflect_apply` — apply reflection actions (merge/split/extract/reclassify/delete/relate)
+- `reflect_auto` — **one-shot auto-reflection**: unanalyzed conversations → configured LLM → apply (needs `REFLECT_LLM_API_KEY`)
+- `reflect_deep` — **deep calibration**: all memories → dedup/profile/graph → apply (needs `REFLECT_LLM_API_KEY`)
 - `reflect_batch_embed` — batch-vectorize pending memories
 
 ## Tests
