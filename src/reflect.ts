@@ -16,6 +16,8 @@
 import { DatabaseManager } from './db.js';
 import { getEmbeddingCached } from './ollama.js';
 import { saveFacts, saveMemory, reEmbedMemory, batchEmbedPending } from './store.js';
+import fs from 'node:fs';
+import path from 'node:path';
 
 export interface ReflectMemory {
   id: string;
@@ -33,6 +35,14 @@ export interface ReflectMemory {
   lastAccessedAt: string;
   accessedCount: number;
   referenceCount: number;
+}
+
+export interface ReflectReceipt {
+  action: string;
+  status: 'applied' | 'failed' | 'skipped';
+  targetId: string | null;
+  reason: string;
+  rowsAffected: number;
 }
 
 export interface ReflectAction {
@@ -124,23 +134,35 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
   applied: number;
   errors: string[];
   details: string[];
+  receipts: ReflectReceipt[];
 }> {
   const db = DatabaseManager.getInstance();
-  const result = { applied: 0, errors: [] as string[], details: [] as string[] };
+  const result = { applied: 0, errors: [] as string[], details: [] as string[], receipts: [] as ReflectReceipt[] };
 
   for (const action of actions) {
+    const receipt: ReflectReceipt = {
+      action: action.action,
+      status: 'applied',
+      targetId: (action as any).targetId || (action as any).sourceId || null,
+      reason: '',
+      rowsAffected: 0,
+    };
     try {
       switch (action.action) {
         case 'merge': {
           // 合并多个记忆为一个
           if (!action.sourceIds || action.sourceIds.length < 2 || !action.newText) {
             result.errors.push('merge: need sourceIds and newText');
+            receipt.status = 'failed'; receipt.reason = 'need sourceIds and newText';
             continue;
           }
           const tx = db.transaction(() => {
             // 旧记忆全部软删除 + 删向量
             // v5.1: LLM 可能返回短ID前缀，用 LIKE 匹配
             for (const id of action.sourceIds!) {
+              const src = db.prepare('SELECT id FROM memory WHERE id LIKE ?').get(id + '%') as any;
+              if (src) receipt.rowsAffected++;
+              else { receipt.status = 'failed'; receipt.reason = `source not found: ${id}`; }
               db.prepare('UPDATE memory SET is_active = 0 WHERE id LIKE ?').run(id + '%');
               try {
                 db.prepare('DELETE FROM vec_memory WHERE rowid = (SELECT rowid FROM memory WHERE id LIKE ?)').run(id + '%');
@@ -161,7 +183,8 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
             characterId,
             source: 'reflect_merge',
           });
-          result.applied++;
+          if (receipt.status === 'failed') { result.errors.push(`merge: ${receipt.reason}`); continue; }
+          if (receipt.status === 'applied') result.applied++;
           result.details.push(`merge: ${action.sourceIds.length} → 1`);
           break;
         }
@@ -170,9 +193,12 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
           // 拆分一个记忆为多个
           if (!action.targetId || !action.fragments) {
             result.errors.push('split: need targetId and fragments');
+            receipt.status = 'failed'; receipt.reason = 'need targetId and fragments';
             continue;
           }
           // 软删除旧记忆（v5.1: LIKE 匹配短ID）
+          const _splitSrc = db.prepare('SELECT id FROM memory WHERE id LIKE ?').get(action.targetId + '%') as any;
+          if (!_splitSrc) { receipt.status = 'failed'; receipt.reason = `target not found: ${action.targetId}`; }
           db.prepare('UPDATE memory SET is_active = 0 WHERE id LIKE ?').run(action.targetId + '%');
           // 插入碎片
           const { saveMemory } = await import('./store.js');
@@ -187,7 +213,7 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
               source: 'reflect_split',
             });
           }
-          result.applied++;
+          if (receipt.status === 'applied') result.applied++;
           result.details.push(`split: 1 → ${action.fragments.length}`);
           break;
         }
@@ -195,14 +221,17 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
         case 'relate': {
           if (!action.sourceId || !action.targetIdRelate || !action.relationType) {
             result.errors.push('relate: need sourceId, targetIdRelate, relationType');
+            receipt.status = 'failed'; receipt.reason = 'need sourceId, targetIdRelate, relationType';
             continue;
           }
           // 护栏：规范化 relation type
           const relType = VALID_RELATIONS.has(action.relationType) ? action.relationType : 'related_to';
           const edgeId = `edge_reflect_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
-          db.prepare('INSERT OR IGNORE INTO edges (id, source_id, target_id, relation_type) VALUES (?, ?, ?, ?)')
+          const _relR = db.prepare('INSERT OR IGNORE INTO edges (id, source_id, target_id, relation_type) VALUES (?, ?, ?, ?)')
             .run(edgeId, action.sourceId, action.targetIdRelate, relType);
-          result.applied++;
+          receipt.rowsAffected = _relR.changes;
+          if (_relR.changes === 0) { receipt.status = 'failed'; receipt.reason = `edge exists or node missing: ${action.sourceId}→${action.targetIdRelate}`; }
+          if (receipt.status === 'applied') result.applied++;
           result.details.push(`relate: ${action.sourceId} → ${action.targetIdRelate} (${relType})`);
           break;
         }
@@ -212,6 +241,7 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
           const tid = action.targetId || (action as any).sourceId;
           if (!tid) {
             result.errors.push('reclassify: need targetId or sourceId');
+            receipt.status = 'failed'; receipt.reason = 'need targetId or sourceId';
             continue;
           }
           const updates: string[] = [];
@@ -220,6 +250,7 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
           if (action.newTypeSingle) {
             if (!VALID_TYPES.has(action.newTypeSingle)) {
               result.errors.push(`reclassify: invalid type "${action.newTypeSingle}", skipped`);
+              receipt.status = 'failed'; receipt.reason = `invalid type "${action.newTypeSingle}"`;
               continue;
             }
             updates.push('type = ?'); values.push(action.newTypeSingle);
@@ -227,6 +258,7 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
           if (action.newCategorySingle) {
             if (!VALID_CATEGORIES.has(action.newCategorySingle)) {
               result.errors.push(`reclassify: invalid category "${action.newCategorySingle}", skipped`);
+              receipt.status = 'failed'; receipt.reason = `invalid category "${action.newCategorySingle}"`;
               continue;
             }
             updates.push('category = ?'); values.push(action.newCategorySingle);
@@ -235,15 +267,18 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
             const valid = safeTags(action.newTags);
             if (!valid) {
               result.errors.push('reclassify: invalid tags (must be string array), skipped');
+              receipt.status = 'failed'; receipt.reason = 'invalid tags';
               continue;
             }
             updates.push('tags = ?'); values.push(JSON.stringify(valid));
           }
           if (updates.length > 0) {
             values.push(tid + '%');
-            db.prepare(`UPDATE memory SET ${updates.join(', ')}, updated_at = ? WHERE id LIKE ?`)
+            const _recR = db.prepare(`UPDATE memory SET ${updates.join(', ')}, updated_at = ? WHERE id LIKE ?`)
               .run(new Date().toISOString(), ...values);
-            result.applied++;
+            receipt.rowsAffected = _recR.changes;
+            if (_recR.changes === 0) { receipt.status = 'failed'; receipt.reason = `target not found: ${tid}`; }
+            if (receipt.status === 'applied') result.applied++;
             result.details.push(`reclassify: ${tid}`);
           }
           break;
@@ -253,6 +288,7 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
           // v5.0: 从源记忆中提取有效信息为新记忆（不删除源）
           if (!action.sourceId || !action.newText) {
             result.errors.push('extract: need sourceId and newText');
+            receipt.status = 'failed'; receipt.reason = 'need sourceId and newText';
             continue;
           }
           const validType = action.newType && VALID_TYPES.has(action.newType) ? action.newType : 'semantic';
@@ -277,7 +313,7 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
           // 给源记忆 +reference_count（v5.1: LIKE 匹配短ID）
           db.prepare('UPDATE memory SET reference_count = reference_count + 1 WHERE id LIKE ?').run(action.sourceId + '%');
 
-          result.applied++;
+          if (receipt.status === 'applied') result.applied++;
           result.details.push(`extract: from ${action.sourceId} → ${validType}/${validCat} (${tier})`);
           break;
         }
@@ -285,10 +321,13 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
         case 'delete': {
           if (!action.targetId) {
             result.errors.push('delete: need targetId');
+            receipt.status = 'failed'; receipt.reason = 'need targetId';
             continue;
           }
-          db.prepare('UPDATE memory SET is_active = 0 WHERE id LIKE ?').run(action.targetId + '%');
-          result.applied++;
+          const _delR = db.prepare('UPDATE memory SET is_active = 0 WHERE id LIKE ?').run(action.targetId + '%');
+          receipt.rowsAffected = _delR.changes;
+          if (_delR.changes === 0) { receipt.status = 'failed'; receipt.reason = `target not found: ${action.targetId}`; }
+          if (receipt.status === 'applied') result.applied++;
           result.details.push(`delete: ${action.targetId}`);
           break;
         }
@@ -296,11 +335,14 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
         case 'boost': {
           if (!action.targetId || action.delta === undefined) {
             result.errors.push('boost: need targetId and delta');
+            receipt.status = 'failed'; receipt.reason = 'need targetId and delta';
             continue;
           }
-          db.prepare('UPDATE memory SET importance = MIN(0.95, MAX(0.1, importance + ?)) WHERE id LIKE ?')
+          const _boR = db.prepare('UPDATE memory SET importance = MIN(0.95, MAX(0.1, importance + ?)) WHERE id LIKE ?')
             .run(action.delta, action.targetId + '%');
-          result.applied++;
+          receipt.rowsAffected = _boR.changes;
+          if (_boR.changes === 0) { receipt.status = 'failed'; receipt.reason = `target not found: ${action.targetId}`; }
+          if (receipt.status === 'applied') result.applied++;
           result.details.push(`boost: ${action.targetId} += ${action.delta}`);
           break;
         }
@@ -308,21 +350,30 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
         case 'decay': {
           if (!action.targetId || action.delta === undefined) {
             result.errors.push('decay: need targetId and delta');
+            receipt.status = 'failed'; receipt.reason = 'need targetId and delta';
             continue;
           }
-          db.prepare('UPDATE memory SET importance = MIN(0.95, MAX(0.1, importance - ?)) WHERE id LIKE ?')
+          const _deR = db.prepare('UPDATE memory SET importance = MIN(0.95, MAX(0.1, importance - ?)) WHERE id LIKE ?')
             .run(action.delta, action.targetId + '%');
-          result.applied++;
+          receipt.rowsAffected = _deR.changes;
+          if (_deR.changes === 0) { receipt.status = 'failed'; receipt.reason = `target not found: ${action.targetId}`; }
+          if (receipt.status === 'applied') result.applied++;
           result.details.push(`decay: ${action.targetId} -= ${action.delta}`);
           break;
         }
 
         default:
           result.errors.push(`unknown action: ${action.action}`);
+          receipt.status = 'skipped'; receipt.reason = `unknown action: ${action.action}`;
       }
     } catch (e: any) {
       result.errors.push(`${action.action}: ${e.message}`);
+      receipt.status = 'failed'; receipt.reason = e.message;
     }
+    if (receipt.status === 'failed' && receipt.reason && !result.errors.some(e => e.includes(receipt.reason))) {
+      result.errors.push(`${receipt.action}: ${receipt.reason}`);
+    }
+    result.receipts.push(receipt);
   }
 
   // ═══ v5.0: 批量向量化 digest 阶段跳过的记忆 ═══
@@ -474,6 +525,7 @@ export async function applyReflectResult(
   insightsCount: number;
   actionsApplied: number;
   errors: string[];
+  receipts: ReflectReceipt[];
 }> {
   const out = {
     summaryId: null as string | null,
@@ -483,6 +535,7 @@ export async function applyReflectResult(
     actionsApplied: 0,
     applied: 0,
     errors: [] as string[],
+    receipts: [] as ReflectReceipt[],
   };
 
   // 1. 存 summary
@@ -535,12 +588,35 @@ export async function applyReflectResult(
     }
   }
 
-  // 4. 应用记忆整理 actions
+  // 4. 应用记忆整理 actions + 逐动作回执落盘
   if (result.actions && result.actions.length > 0) {
     try {
       const ar = await applyReflectActions(result.actions, characterId);
       out.actionsApplied = ar.applied;
       out.errors.push(...ar.errors);
+      out.receipts = ar.receipts;
+      // ═══ v1.3: 回执落盘 — 失败动作原文存档,事后可人工修正 ═══
+      try {
+        const dir = process.env.REFLECT_RECEIPT_DIR || path.join(process.cwd(), 'reflect-receipts');
+        fs.mkdirSync(dir, { recursive: true });
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        fs.writeFileSync(
+          path.join(dir, `reflect-receipt-${ts}.json`),
+          JSON.stringify({
+            ts: new Date().toISOString(),
+            characterId,
+            actionCount: result.actions.length,
+            applied: ar.applied,
+            failed: ar.receipts.filter(r => r.status !== 'applied').length,
+            actions: result.actions,
+            receipts: ar.receipts,
+            errors: ar.errors,
+          }, null, 2),
+          'utf-8',
+        );
+      } catch (e: any) {
+        out.errors.push(`receipt write: ${e.message}`);
+      }
     } catch (e: any) {
       out.errors.push(`actions: ${e.message}`);
     }

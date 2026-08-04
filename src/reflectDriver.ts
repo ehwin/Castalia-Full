@@ -11,7 +11,7 @@
  *   REFLECT_LLM_MODEL     default deepseek-chat
  *   REFLECT_INTERVAL_HOURS auto-reflect interval (hours), 0 = off, default 0
  */
-import { getUnanalyzedConversations, listAllMemories, applyReflectResult } from './reflect.js';
+import { getUnanalyzedConversations, listAllMemories, applyReflectResult, ReflectReceipt } from './reflect.js';
 
 const LLM_URL = (process.env.REFLECT_LLM_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, '');
 const LLM_API_KEY = process.env.REFLECT_LLM_API_KEY || '';
@@ -175,6 +175,7 @@ export interface ReflectRunResult {
   applied: number;
   errors: string[];
   skipped?: boolean;
+  receipts?: ReflectReceipt[];
 }
 
 /** 日常反思:未分析对话 → 日记浓缩/提取 */
@@ -197,6 +198,7 @@ export async function runAutoReflect(charId: string, limit = 30): Promise<Reflec
     return {
       ok: true, mode: 'auto', conversationCount: conversations.length,
       actions: actions.length, applied: r.actionsApplied, errors: r.errors,
+      receipts: r.receipts,
     };
   } catch (e: any) {
     return { ...base, errors: [e.message] };
@@ -232,6 +234,7 @@ export async function runDeepReflect(charId: string, limit = 500): Promise<Refle
     return {
       ok: true, mode: 'deep', memoryCount: memories.length,
       actions: actions.length, applied: r.actionsApplied, errors: r.errors,
+      receipts: r.receipts,
     };
   } catch (e: any) {
     return { ...base, errors: [e.message] };

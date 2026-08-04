@@ -483,6 +483,9 @@ register(
       const db = DatabaseManager.getInstance();
       const row = db.prepare('SELECT * FROM memory WHERE id = ? AND is_active = 1').get(args.id) as any;
       if (!row) return err('memory not found: ' + args.id, 'NOT_FOUND');
+      // v1.3: 访问一次 → 热度 +1(配合热度升格:accessed_count ≥ 阈值自动升 tier)
+      db.prepare('UPDATE memory SET accessed_count = accessed_count + 1, last_accessed_at = ? WHERE id = ?')
+        .run(new Date().toISOString(), args.id);
       return ok({
         op: 'get',
         result: {
@@ -500,7 +503,7 @@ register(
           updatedAt: row.updated_at,
           metadata: {
             emotionalImpact: row.emotional_impact,
-            accessedCount: row.accessed_count,
+            accessedCount: row.accessed_count + 1,
             referenceCount: row.reference_count,
             locked: row.locked === 1,
           },

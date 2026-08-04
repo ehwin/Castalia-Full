@@ -3,6 +3,16 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.3] — 2026-08-04 热度升格 + reflect 回执
+
+### Added
+- **热度升格**(借鉴 UPSP memory_heat):`promoteByAccess()` — accessed_count ≥ `HEAT_PROMOTE_THRESHOLD`(默认 5)的 temporary 记忆自动升 standard(免清理)。清理前先升格(cleanupExpiredMemories 内)。`memory_get` 访问 +1 热度
+- **reflect 逐动作回执**:`applyReflectActions` 返回 `receipts[]` — 每条动作 {action, status: applied/failed/skipped, targetId, reason, rowsAffected}。UPDATE 影响 0 行 = failed("target not found"),不再静默算成功
+- **回执落盘**:`reflect-receipts/reflect-receipt-<ts>.json`(目录可用 `REFLECT_RECEIPT_DIR` 配置)— 含动作原文 + 每条回执,失败动作可事后人工修正
+
+### Fixed
+- reflect 幻觉 id 动作此前误计 applied(静默成功),现在 failed + errors 明确原因
+
 ## [Unreleased] — 2026-08-04 工具分级与暴露面矫正
 
 ### Added
