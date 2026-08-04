@@ -47,6 +47,21 @@ Or wire it manually:
 }
 ```
 
+## Unified Envelope (v1.1)
+
+All read tools return a standard envelope (aligned with Mem0 / Hermes conventions):
+
+```json
+{ "ok": true, "op": "search", "query": "...", "count": 3,
+  "results": [{ "id": "...", "text": "short snippet…", "truncated": true,
+                "kind": "episode", "score": 0.81, "createdAt": "..." }],
+  "hint": "用 memory_get(id) 取完整内容" }
+```
+
+- Every result carries an `id`; call `memory_get(id)` to expand full text
+- `text` is truncated at 200 chars with `truncated: true`
+- Failures: `{ "ok": false, "error": { "code": "NOT_FOUND", "message": "..." } }`
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -66,7 +81,7 @@ Or wire it manually:
 | `REFLECT_LLM_MODEL` | `deepseek-chat` | Reflection LLM model |
 | `REFLECT_INTERVAL_HOURS` | `0` | Auto-reflect interval in hours; `0` = manual only |
 
-## Tools (25)
+## Tools (26)
 
 **Search**
 - `memory_search` — tag-first, vector KNN fallback, neutral scoring
@@ -74,6 +89,7 @@ Or wire it manually:
 
 **Memory CRUD**
 - `memory_save` — store a memory (`skipEmbed` to skip vectorization)
+- `memory_get` — expand one memory by ID (full text + metadata)
 - `memory_update` / `memory_delete` — update fields / soft-delete
 - `memory_list` / `memory_recent` / `memory_graph` — enumerate / recent important / relation graph
 

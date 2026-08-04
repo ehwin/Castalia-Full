@@ -27,10 +27,10 @@ console.log = console.error;
 const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 
 function ok(data: any) {
-  return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+  return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, ...data }, null, 2) }] };
 }
-function err(msg: string) {
-  return { content: [{ type: 'text' as const, text: JSON.stringify({ success: false, error: msg }) }], isError: true as const };
+function err(msg: string, code = 'ERROR') {
+  return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, error: { code, message: msg } }, null, 2) }], isError: true as const };
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -48,8 +48,23 @@ server.tool(
   async (args) => {
     try {
       const r = await searchMemory({ query: args.query, topK: args.topK ?? 5, profile: 'balanced', category: args.category, characterId: CHAR_ID });
-      return ok({ count: r.length, results: r.map(m => ({ text: m.text, type: m.type, category: m.category, subject: m.subject, importance: m.importance, score: m.score, createdAt: m.createdAt })) });
-    } catch (e: any) { return err(e.message); }
+      return ok({
+        op: 'search',
+        query: args.query,
+        count: r.length,
+        results: r.map(m => ({
+          id: m.id,
+          text: m.text.length > 200 ? m.text.substring(0, 200) + '…' : m.text,
+          truncated: m.text.length > 200,
+          kind: m.type === 'episodic' ? 'episode' : m.type === 'semantic' ? 'reflection' : m.type,
+          category: m.category,
+          importance: m.importance,
+          score: m.score,
+          createdAt: m.createdAt,
+        })),
+        hint: '用 memory_get(id) 取完整内容',
+      });
+    } catch (e: any) { return err(e.message, 'SEARCH_FAILED'); }
   }
 );
 
@@ -64,8 +79,20 @@ server.tool(
   async (args) => {
     try {
       const r = await searchFacts(args.query, { subject: args.subject, topK: args.topK ?? 5, minConfidence: 0.3 });
-      return ok({ count: r.length, results: r.map(f => ({ fact: `${f.subject} ${f.predicate} ${f.object}`, confidence: f.confidence, similarity: f.similarity })) });
-    } catch (e: any) { return err(e.message); }
+      return ok({
+        op: 'fact_search',
+        query: args.query,
+        count: r.length,
+        results: r.map(f => ({
+          id: f.id,
+          subject: f.subject,
+          predicate: f.predicate,
+          object: f.object,
+          confidence: f.confidence,
+          similarity: f.similarity,
+        })),
+      });
+    } catch (e: any) { return err(e.message, 'FACT_SEARCH_FAILED'); }
   }
 );
 
@@ -412,8 +439,57 @@ server.tool(
       let filtered = memories;
       if (args.category) filtered = filtered.filter((m: any) => m.category === args.category);
       if (args.source) filtered = filtered.filter((m: any) => m.source === args.source);
-      return ok({ count: filtered.length, results: filtered.slice(0, args.limit) });
-    } catch (e: any) { return err(e.message); }
+      const sliced = filtered.slice(0, args.limit);
+      return ok({
+        op: 'list',
+        count: sliced.length,
+        results: sliced.map(m => ({
+          id: m.id,
+          text: m.text.length > 200 ? m.text.substring(0, 200) + '…' : m.text,
+          truncated: m.text.length > 200,
+          category: m.category,
+          importance: m.importance,
+          createdAt: m.createdAt,
+        })),
+        hint: '用 memory_get(id) 取完整内容',
+      });
+    } catch (e: any) { return err(e.message, 'LIST_FAILED'); }
+  }
+);
+
+server.tool(
+  'memory_get',
+  'Get one memory by ID with full text. Use to expand a search/recent/list result.',
+  { id: z.string().describe('Memory ID') },
+  async (args) => {
+    try {
+      const db = DatabaseManager.getInstance();
+      const row = db.prepare('SELECT * FROM memory WHERE id = ? AND is_active = 1').get(args.id) as any;
+      if (!row) return err('memory not found: ' + args.id, 'NOT_FOUND');
+      return ok({
+        op: 'get',
+        result: {
+          id: row.id,
+          text: row.text,
+          truncated: false,
+          type: row.type,
+          category: row.category,
+          tags: JSON.parse(row.tags || '[]'),
+          importance: row.importance,
+          tier: row.tier,
+          source: row.source,
+          subject: row.subject,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          metadata: {
+            emotionalImpact: row.emotional_impact,
+            accessedCount: row.accessed_count,
+            referenceCount: row.reference_count,
+            locked: row.locked === 1,
+          },
+        },
+      });
+    } catch (e: any) { return err(e.message, 'GET_FAILED'); }
   }
 );
 
@@ -438,8 +514,20 @@ server.tool(
   async (args) => {
     try {
       const r = getRecentMemories(CHAR_ID, args.limit, args.hoursBack);
-      return ok({ count: r.length, results: r });
-    } catch (e: any) { return err(e.message); }
+      return ok({
+        op: 'recent',
+        count: r.length,
+        results: r.map(m => ({
+          id: m.id,
+          text: m.text.length > 200 ? m.text.substring(0, 200) + '…' : m.text,
+          truncated: m.text.length > 200,
+          category: m.category,
+          importance: m.importance,
+          createdAt: m.createdAt,
+        })),
+        hint: '用 memory_get(id) 取完整内容',
+      });
+    } catch (e: any) { return err(e.message, 'RECENT_FAILED'); }
   }
 );
 

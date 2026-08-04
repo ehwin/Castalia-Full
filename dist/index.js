@@ -23,10 +23,10 @@ import { CHAR_ID, SERVER_NAME, SERVER_VERSION } from './env.js';
 console.log = console.error;
 const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 function ok(data) {
-    return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, ...data }, null, 2) }] };
 }
-function err(msg) {
-    return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: msg }) }], isError: true };
+function err(msg, code = 'ERROR') {
+    return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: { code, message: msg } }, null, 2) }], isError: true };
 }
 // ═══════════════════════════════════════════════════════════════════
 // 搜索类工具（LLM 可见）
@@ -38,10 +38,25 @@ server.tool('memory_search', 'Search past memories using tag-first then vector K
 }, async (args) => {
     try {
         const r = await searchMemory({ query: args.query, topK: args.topK ?? 5, profile: 'balanced', category: args.category, characterId: CHAR_ID });
-        return ok({ count: r.length, results: r.map(m => ({ text: m.text, type: m.type, category: m.category, subject: m.subject, importance: m.importance, score: m.score, createdAt: m.createdAt })) });
+        return ok({
+            op: 'search',
+            query: args.query,
+            count: r.length,
+            results: r.map(m => ({
+                id: m.id,
+                text: m.text.length > 200 ? m.text.substring(0, 200) + '…' : m.text,
+                truncated: m.text.length > 200,
+                kind: m.type === 'episodic' ? 'episode' : m.type === 'semantic' ? 'reflection' : m.type,
+                category: m.category,
+                importance: m.importance,
+                score: m.score,
+                createdAt: m.createdAt,
+            })),
+            hint: '用 memory_get(id) 取完整内容',
+        });
     }
     catch (e) {
-        return err(e.message);
+        return err(e.message, 'SEARCH_FAILED');
     }
 });
 server.tool('fact_search', 'Search structured facts (subject-predicate-object triples) about the user.', {
@@ -51,10 +66,22 @@ server.tool('fact_search', 'Search structured facts (subject-predicate-object tr
 }, async (args) => {
     try {
         const r = await searchFacts(args.query, { subject: args.subject, topK: args.topK ?? 5, minConfidence: 0.3 });
-        return ok({ count: r.length, results: r.map(f => ({ fact: `${f.subject} ${f.predicate} ${f.object}`, confidence: f.confidence, similarity: f.similarity })) });
+        return ok({
+            op: 'fact_search',
+            query: args.query,
+            count: r.length,
+            results: r.map(f => ({
+                id: f.id,
+                subject: f.subject,
+                predicate: f.predicate,
+                object: f.object,
+                confidence: f.confidence,
+                similarity: f.similarity,
+            })),
+        });
     }
     catch (e) {
-        return err(e.message);
+        return err(e.message, 'FACT_SEARCH_FAILED');
     }
 });
 // ═══════════════════════════════════════════════════════════════════
@@ -337,10 +364,57 @@ server.tool('memory_list', 'List all active memories, optionally filtered.', {
             filtered = filtered.filter((m) => m.category === args.category);
         if (args.source)
             filtered = filtered.filter((m) => m.source === args.source);
-        return ok({ count: filtered.length, results: filtered.slice(0, args.limit) });
+        const sliced = filtered.slice(0, args.limit);
+        return ok({
+            op: 'list',
+            count: sliced.length,
+            results: sliced.map(m => ({
+                id: m.id,
+                text: m.text.length > 200 ? m.text.substring(0, 200) + '…' : m.text,
+                truncated: m.text.length > 200,
+                category: m.category,
+                importance: m.importance,
+                createdAt: m.createdAt,
+            })),
+            hint: '用 memory_get(id) 取完整内容',
+        });
     }
     catch (e) {
-        return err(e.message);
+        return err(e.message, 'LIST_FAILED');
+    }
+});
+server.tool('memory_get', 'Get one memory by ID with full text. Use to expand a search/recent/list result.', { id: z.string().describe('Memory ID') }, async (args) => {
+    try {
+        const db = DatabaseManager.getInstance();
+        const row = db.prepare('SELECT * FROM memory WHERE id = ? AND is_active = 1').get(args.id);
+        if (!row)
+            return err('memory not found: ' + args.id, 'NOT_FOUND');
+        return ok({
+            op: 'get',
+            result: {
+                id: row.id,
+                text: row.text,
+                truncated: false,
+                type: row.type,
+                category: row.category,
+                tags: JSON.parse(row.tags || '[]'),
+                importance: row.importance,
+                tier: row.tier,
+                source: row.source,
+                subject: row.subject,
+                createdAt: row.created_at,
+                updatedAt: row.updated_at,
+                metadata: {
+                    emotionalImpact: row.emotional_impact,
+                    accessedCount: row.accessed_count,
+                    referenceCount: row.reference_count,
+                    locked: row.locked === 1,
+                },
+            },
+        });
+    }
+    catch (e) {
+        return err(e.message, 'GET_FAILED');
     }
 });
 server.tool('memory_graph', 'Get the memory relationship graph.', {}, async () => {
@@ -357,10 +431,22 @@ server.tool('memory_recent', 'Get recent important memories (no vector search, j
 }, async (args) => {
     try {
         const r = getRecentMemories(CHAR_ID, args.limit, args.hoursBack);
-        return ok({ count: r.length, results: r });
+        return ok({
+            op: 'recent',
+            count: r.length,
+            results: r.map(m => ({
+                id: m.id,
+                text: m.text.length > 200 ? m.text.substring(0, 200) + '…' : m.text,
+                truncated: m.text.length > 200,
+                category: m.category,
+                importance: m.importance,
+                createdAt: m.createdAt,
+            })),
+            hint: '用 memory_get(id) 取完整内容',
+        });
     }
     catch (e) {
-        return err(e.message);
+        return err(e.message, 'RECENT_FAILED');
     }
 });
 server.tool('recent_conversations', 'Get recent conversation log entries.', {
