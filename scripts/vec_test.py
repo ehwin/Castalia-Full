@@ -9,7 +9,7 @@ import time
 NODE = r"D:\system\New Folder\node.exe"
 SERVER = r"/path\ai-memory\dist\index.js"
 
-env = {**os.environ, **{
+env = {**os.environ, **{'MCP_TOOLS': os.environ.get('MCP_TOOLS', 'all'),
     "OLLAMA_URL": "http://127.0.0.1:11436",  # 独立嵌入服务
     "EMBEDDING_MODEL": "yuan-embedding-2.0-zh",
     "MEMORY_DB_PATH": r"/path\ai-memory\test_vec.sqlite",

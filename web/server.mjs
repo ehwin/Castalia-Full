@@ -65,7 +65,7 @@ function mcpCall(toolName, args = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(NODE_BIN, [MCP_SERVER], {
       cwd: ROOT,
-      env: { ...process.env, MEMORY_DB_PATH: DB_PATH, MEMORY_CONFIG: CONFIG_PATH },
+      env: { ...process.env, MEMORY_DB_PATH: DB_PATH, MEMORY_CONFIG: CONFIG_PATH, MCP_TOOLS: process.env.MCP_TOOLS || 'all' },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let buf = '';

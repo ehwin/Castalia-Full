@@ -34,11 +34,56 @@ function err(msg: string, code = 'ERROR') {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// 工具分级(借鉴 engram ProfileAgent/ProfileAdmin)
+// 暴露面原则:主 Agent 只读(search/get/recent/fact/graph),
+// 写入与管线工具归 harness,管理工具归 admin(console)。
+// 环境变量 MCP_TOOLS: 逗号分隔的 profile 或工具名;默认 'agent'(agent 友好)。
+//   MCP_TOOLS=all  → 全部注册(向后兼容)
+//   MCP_TOOLS=agent,admin → agent + admin 两组
+// ═══════════════════════════════════════════════════════════════════
+
+const TOOL_GROUPS: Record<string, string[]> = {
+  agent: ['memory_search', 'memory_get', 'memory_recent', 'fact_search', 'memory_graph'],
+  harness: ['auto_process', 'conversation_save', 'digest_run', 'reflect_auto', 'reflect_deep', 'reflect_batch_embed', 'memory_save', 'memory_update', 'memory_delete', 'memory_log'],
+  admin: ['memory_list', 'stats_get', 'mood_journal', 'recent_conversations', 'daily_summary_data', 'reflect_analyze', 'reflect_apply', 'memory_context', 'context_get'],
+};
+
+function resolveTools(input: string | undefined): Set<string> | null {
+  if (!input || input === 'all') return null; // null = 注册全部
+  const result = new Set<string>();
+  for (const token of input.split(',').map(t => t.trim())) {
+    if (token === 'all') return null;
+    if (TOOL_GROUPS[token]) TOOL_GROUPS[token].forEach(t => result.add(t));
+    else result.add(token);
+  }
+  return result;
+}
+
+const TOOL_ALLOWLIST = resolveTools(process.env.MCP_TOOLS);
+const TOOL_GROUP_OF: Record<string, string> = {};
+for (const [g, tools] of Object.entries(TOOL_GROUPS)) for (const t of tools) TOOL_GROUP_OF[t] = g;
+
+function shouldRegister(name: string): boolean {
+  if (TOOL_ALLOWLIST === null) return true;
+  if (TOOL_ALLOWLIST.has(name)) return true;
+  if (TOOL_ALLOWLIST.has('admin') || TOOL_ALLOWLIST.has('harness') || TOOL_ALLOWLIST.has('agent')) return false; // profile 已展开,不再匹配
+  return false;
+}
+
+function register(name: string, group: string, description: string, schema: any, handler: (args: any) => any) {
+  if (!shouldRegister(name)) {
+    if (process.env.MCP_LOG_TOOLS === '1') console.error(`[tools] skipped: ${name} (group=${group})`);
+    return;
+  }
+  server.tool(name, description, schema, handler);
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // 搜索类工具（LLM 可见）
 // ═══════════════════════════════════════════════════════════════════
 
-server.tool(
-  'memory_search',
+register(
+  'memory_search', 'agent',
   'Search past memories using tag-first then vector KNN fallback. Use when recalling past events, facts, or user preferences.',
   {
     query: z.string().describe('What to search for'),
@@ -68,8 +113,8 @@ server.tool(
   }
 );
 
-server.tool(
-  'fact_search',
+register(
+  'fact_search', 'agent',
   'Search structured facts (subject-predicate-object triples) about the user.',
   {
     query: z.string().describe('Query text'),
@@ -100,8 +145,8 @@ server.tool(
 // 存储类工具
 // ═══════════════════════════════════════════════════════════════════
 
-server.tool(
-  'memory_save',
+register(
+  'memory_save', 'harness',
   'Store a new memory or update existing one by exact text match.',
   {
     text: z.string().describe('Memory content'),
@@ -123,8 +168,8 @@ server.tool(
   }
 );
 
-server.tool(
-  'memory_delete',
+register(
+  'memory_delete', 'harness',
   'Soft-delete a memory by ID.',
   { id: z.string().describe('Memory ID to delete') },
   async (args) => {
@@ -133,8 +178,8 @@ server.tool(
   }
 );
 
-server.tool(
-  'memory_update',
+register(
+  'memory_update', 'harness',
   'Update memory fields (text, category, tags, importance, etc.).',
   {
     id: z.string().describe('Memory ID'),
@@ -158,60 +203,30 @@ server.tool(
 // 检索:memory_search(category=decision|pattern|mistake)
 // ═══════════════════════════════════════════════════════════════════
 
-server.tool(
-  'memory_log_decision',
-  'Log an agent decision with rationale ("why I chose X"). Category=decision, searchable via memory_search(category=decision).',
+register(
+  'memory_log', 'harness',
+  'Log a cognitive entry (decision/pattern/mistake) with kind. Internal mapping: decision→category=decision, pattern→knowledge+tag, mistake→category=mistake+tier=critical. Searchable via memory_search(category=...).',
   {
-    text: z.string().describe('The decision and its rationale'),
+    kind: z.enum(['decision', 'pattern', 'mistake']).describe('Kind of cognitive entry'),
+    text: z.string().max(2000).describe('The content: decision rationale / pattern insight / mistake lesson'),
     tags: z.array(z.string()).optional().describe('Optional tags'),
   },
   async (args) => {
     try {
+      const kind = args.kind as 'decision' | 'pattern' | 'mistake';
+      const map = {
+        decision: { type: 'episodic', category: 'decision', importance: 0.6, tier: 'standard', tags: args.tags ?? [] },
+        pattern: { type: 'semantic', category: 'knowledge', importance: 0.6, tier: 'standard', tags: ['pattern', ...(args.tags ?? [])] },
+        mistake: { type: 'episodic', category: 'mistake', importance: 0.7, tier: 'critical', tags: args.tags ?? [] },
+      } as const;
+      const conf = map[kind];
       const r = await saveMemory({
-        text: args.text, type: 'episodic', category: 'decision',
-        tags: args.tags ?? [], importance: 0.6, tier: 'standard',
+        text: args.text, type: conf.type, category: conf.category,
+        tags: conf.tags, importance: conf.importance, tier: conf.tier,
         source: 'agent_log', characterId: CHAR_ID,
       });
-      return ok({ id: r.id, category: 'decision' });
-    } catch (e: any) { return err(e.message); }
-  }
-);
-
-server.tool(
-  'memory_log_pattern',
-  'Log a pattern or insight discovered ("I found that X leads to Y"). Category=knowledge+pattern tag, searchable via memory_search.',
-  {
-    text: z.string().describe('The pattern/insight'),
-    tags: z.array(z.string()).optional().describe('Optional tags'),
-  },
-  async (args) => {
-    try {
-      const r = await saveMemory({
-        text: args.text, type: 'semantic', category: 'knowledge',
-        tags: ['pattern', ...(args.tags ?? [])], importance: 0.6, tier: 'standard',
-        source: 'agent_log', characterId: CHAR_ID,
-      });
-      return ok({ id: r.id, category: 'knowledge' });
-    } catch (e: any) { return err(e.message); }
-  }
-);
-
-server.tool(
-  'memory_log_mistake',
-  'Log a mistake/lesson learned ("this trap cost me time, avoid it"). Category=mistake, tier=critical (protected from cleanup).',
-  {
-    text: z.string().describe('The mistake and the lesson'),
-    tags: z.array(z.string()).optional().describe('Optional tags'),
-  },
-  async (args) => {
-    try {
-      const r = await saveMemory({
-        text: args.text, type: 'episodic', category: 'mistake',
-        tags: args.tags ?? [], importance: 0.7, tier: 'critical',
-        source: 'agent_log', characterId: CHAR_ID,
-      });
-      return ok({ id: r.id, category: 'mistake', tier: 'critical' });
-    } catch (e: any) { return err(e.message); }
+      return ok({ id: r.id, kind, category: conf.category, tier: conf.tier });
+    } catch (e: any) { return err(e.message, 'LOG_FAILED'); }
   }
 );
 
@@ -219,8 +234,8 @@ server.tool(
 // 对话自动化工具（proxy.py 内部调用）
 // ═══════════════════════════════════════════════════════════════════
 
-server.tool(
-  'auto_process',
+register(
+  'auto_process', 'harness',
   '[Internal] Process a conversation turn: save to log, update agent mood, observe user, queue VAD analysis. Called automatically after each LLM response.',
   {
     userMessage: z.string(),
@@ -238,8 +253,8 @@ server.tool(
   }
 );
 
-server.tool(
-  'digest_run',
+register(
+  'digest_run', 'harness',
   '[Internal] Run the digest cycle: flush VAD queue, cleanup expired memories, restore lost critical memories.',
   {},
   async () => {
@@ -250,8 +265,8 @@ server.tool(
   }
 );
 
-server.tool(
-  'conversation_save',
+register(
+  'conversation_save', 'harness',
   '[Internal] Save a raw conversation turn to the log (no analysis, no embedding).',
   {
     userMessage: z.string(),
@@ -271,8 +286,8 @@ server.tool(
 // 上下文/状态工具
 // ═══════════════════════════════════════════════════════════════════
 
-server.tool(
-  'context_get',
+register(
+  'context_get', 'admin',
   'Get memory context summary: recent memories + stats, for prompt injection.',
   {},
   async () => {
@@ -293,8 +308,8 @@ server.tool(
 // 一次调用拿到组装好的注入上下文:近期 + 相关 + 认知记录 + 事实
 // ═══════════════════════════════════════════════════════════════════
 
-server.tool(
-  'memory_context',
+register(
+  'memory_context', 'admin',
   'Assemble an injection-ready context bundle: recent important memories + memories related to the current task (optional query) + cognitive logs (decisions/mistakes/patterns) + key facts. Call at session start or when you need memory context.',
   {
     query: z.string().optional().describe('Current task/topic to find related memories (optional)'),
@@ -388,25 +403,27 @@ server.tool(
   }
 );
 
-server.tool(
-  'stats_get',
+register(
+  'stats_get', 'admin',
   'Get memory system statistics: total count, by category, by source.',
   {},
   async () => {
     try {
       const db = DatabaseManager.getInstance();
-      const total = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1').get() as any;
+      const total = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=?').get(CHAR_ID) as any;
       return ok({
+        op: 'stats',
         total: total.c,
-        byCategory: db.prepare('SELECT category,COUNT(*) as c FROM memory WHERE is_active=1 GROUP BY category').all(),
-        bySource: db.prepare('SELECT source,COUNT(*) as c FROM memory WHERE is_active=1 GROUP BY source').all(),
+        byCategory: db.prepare('SELECT category,COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? GROUP BY category').all(CHAR_ID),
+        bySource: db.prepare('SELECT source,COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? GROUP BY source').all(CHAR_ID),
+        characterId: CHAR_ID,
       });
-    } catch (e: any) { return err(e.message); }
+    } catch (e: any) { return err(e.message, 'STATS_FAILED'); }
   }
 );
 
-server.tool(
-  'mood_journal',
+register(
+  'mood_journal', 'admin',
   'Get mood history for the past N days.',
   { days: z.number().optional().default(7) },
   async (args) => {
@@ -425,11 +442,11 @@ server.tool(
 // 记忆列表/图谱工具
 // ═══════════════════════════════════════════════════════════════════
 
-server.tool(
-  'memory_list',
-  'List all active memories, optionally filtered.',
+register(
+  'memory_list', 'admin',
+  'List active memories, optionally filtered. Admin tool: hard limit 50 to protect context.',
   {
-    limit: z.number().optional().default(200),
+    limit: z.number().max(50).optional().default(50).describe('Max results (hard cap 50)'),
     category: z.string().optional(),
     source: z.string().optional(),
   },
@@ -457,8 +474,8 @@ server.tool(
   }
 );
 
-server.tool(
-  'memory_get',
+register(
+  'memory_get', 'agent',
   'Get one memory by ID with full text. Use to expand a search/recent/list result.',
   { id: z.string().describe('Memory ID') },
   async (args) => {
@@ -493,19 +510,31 @@ server.tool(
   }
 );
 
-server.tool(
-  'memory_graph',
-  'Get the memory relationship graph.',
-  {},
-  async () => {
+register(
+  'memory_graph', 'agent',
+  'Get the memory relationship graph. Neighborhood only: nodes capped by limit (default 50), edges kept only between returned nodes.',
+  { limit: z.number().max(200).optional().default(50).describe('Max nodes (default 50)') },
+  async (args) => {
     try {
-      return ok(getMemoryGraph(CHAR_ID));
-    } catch (e: any) { return err(e.message); }
+      const g = getMemoryGraph(CHAR_ID);
+      const limit = args.limit ?? 50;
+      const nodes = g.nodes.slice(0, limit);
+      const nodeIds = new Set(nodes.map((n: any) => n.id));
+      const edges = g.edges.filter((e: any) => nodeIds.has(e.sourceId) && nodeIds.has(e.targetId));
+      return ok({
+        op: 'graph',
+        count: nodes.length,
+        nodes,
+        edges,
+        truncated: g.nodes.length > limit,
+        hint: '图已按节点数截断,如需完整图用 Web Console',
+      });
+    } catch (e: any) { return err(e.message, 'GRAPH_FAILED'); }
   }
 );
 
-server.tool(
-  'memory_recent',
+register(
+  'memory_recent', 'agent',
   'Get recent important memories (no vector search, just time+importance).',
   {
     limit: z.number().optional().default(5),
@@ -531,8 +560,8 @@ server.tool(
   }
 );
 
-server.tool(
-  'recent_conversations',
+register(
+  'recent_conversations', 'admin',
   'Get recent conversation log entries.',
   {
     hoursBack: z.number().optional().default(24),
@@ -550,8 +579,8 @@ server.tool(
 // 反思工具
 // ═══════════════════════════════════════════════════════════════════
 
-server.tool(
-  'reflect_analyze',
+register(
+  'reflect_analyze', 'admin',
   'Get unanalyzed conversations bundled with system prompt for a big LLM to perform reflection.',
   { limit: z.number().optional().default(30) },
   async (args) => {
@@ -568,8 +597,8 @@ server.tool(
   }
 );
 
-server.tool(
-  'reflect_apply',
+register(
+  'reflect_apply', 'admin',
   'Apply reflection results (merge, extract, reclassify, delete actions).',
   {
     action: z.enum(['apply', 'preview']).optional().default('apply'),
@@ -590,32 +619,37 @@ server.tool(
   }
 );
 
-server.tool(
-  'reflect_auto',
-  'Run automatic reflection: feed unanalyzed conversations to the configured LLM, apply extracted memories/digest. Requires REFLECT_LLM_API_KEY.',
-  { limit: z.number().optional().default(30) },
+register(
+  'reflect_auto', 'harness',
+  'Run automatic reflection: feed unanalyzed conversations (or ALL memories when mode=deep) to the configured LLM, apply extracted actions. Requires REFLECT_LLM_API_KEY.',
+  {
+    limit: z.number().optional().default(30),
+    mode: z.enum(['daily', 'deep']).optional().default('daily').describe('daily=unanalyzed conversations; deep=full calibration'),
+  },
   async (args) => {
     try {
-      const r = await runAutoReflect(CHAR_ID, args.limit ?? 30);
-      return ok(r);
-    } catch (e: any) { return err(e.message); }
+      const r = args.mode === 'deep'
+        ? await runDeepReflect(CHAR_ID, args.limit ?? 500)
+        : await runAutoReflect(CHAR_ID, args.limit ?? 30);
+      return ok({ op: args.mode === 'deep' ? 'reflect_deep' : 'reflect_auto', ...r });
+    } catch (e: any) { return err(e.message, 'REFLECT_FAILED'); }
   }
 );
 
-server.tool(
-  'reflect_deep',
-  'Run deep calibration: feed ALL memories to the configured LLM for dedup/profile/graph actions. Requires REFLECT_LLM_API_KEY.',
+register(
+  'reflect_deep', 'harness',
+  '[Legacy] Deep calibration. Use reflect_auto(mode="deep") instead.',
   { limit: z.number().optional().default(500) },
   async (args) => {
     try {
       const r = await runDeepReflect(CHAR_ID, args.limit ?? 500);
-      return ok(r);
-    } catch (e: any) { return err(e.message); }
+      return ok({ op: 'reflect_deep', ...r });
+    } catch (e: any) { return err(e.message, 'REFLECT_FAILED'); }
   }
 );
 
-server.tool(
-  'reflect_batch_embed',
+register(
+  'reflect_batch_embed', 'harness',
   '[Internal] Batch embed all pending (un-embedded) memories. Called after reflect.',
   {},
   async () => {
@@ -630,8 +664,8 @@ server.tool(
 // 每日摘要工具
 // ═══════════════════════════════════════════════════════════════════
 
-server.tool(
-  'daily_summary_data',
+register(
+  'daily_summary_data', 'admin',
   'Get conversation and auto-process data for the past N hours.',
   { hoursBack: z.number().optional().default(24) },
   async (args) => {

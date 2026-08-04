@@ -80,8 +80,19 @@ All read tools return a standard envelope (aligned with Mem0 / Hermes convention
 | `REFLECT_LLM_API_KEY` | *(unset)* | Reflection LLM key; reflection skipped when unset |
 | `REFLECT_LLM_MODEL` | `deepseek-chat` | Reflection LLM model |
 | `REFLECT_INTERVAL_HOURS` | `0` | Auto-reflect interval in hours; `0` = manual only |
+| `MCP_TOOLS` | `agent` | Tool visibility: `agent` (read-only, default) / `harness` / `admin` / `all` / comma list |
 
-## Tools (26)
+## Tools (24, profile-gated)
+
+Tool visibility is controlled by `MCP_TOOLS` (default `agent` — read-only for the main agent):
+
+| Profile | Tools | Purpose |
+|---------|-------|---------|
+| **agent** (5) | `memory_search` / `fact_search` / `memory_get` / `memory_recent` / `memory_graph` | Read-only recall for the LLM |
+| **harness** (10) | `memory_save` / `update` / `delete` / `memory_log` / `auto_process` / `conversation_save` / `digest_run` / `reflect_auto` / `reflect_deep` / `reflect_batch_embed` | Writes + pipeline, called by harness/system |
+| **admin** (9) | `memory_list` / `stats_get` / `mood_journal` / `recent_conversations` / `daily_summary_data` / `reflect_analyze` / `reflect_apply` / `memory_context` / `context_get` | Management, Web Console |
+
+`MCP_TOOLS=all` registers everything (backward compatible).
 
 **Search**
 - `memory_search` — tag-first, vector KNN fallback, neutral scoring
