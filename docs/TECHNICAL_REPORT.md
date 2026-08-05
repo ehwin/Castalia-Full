@@ -156,16 +156,15 @@ reflect_deep(深度):listAllMemories(全量,≤500)
 ```
 finalScore = rawScore × importanceMult × tierBoost × accessBoost
 
-rawScore = 0.60×consistency + 0.10×emotion + 0.30×timeDecay
+rawScore = 0.65×consistency + 0.35×timeDecay
   consistency = min(相似度, 0.85)          # 语义/标签匹配
-  emotion     = |emotional_impact|/10      # 存库情绪标记(弱化)
   timeDecay   = 0.5^(小时/720)             # 30 天半衰期指数衰减
   importanceMult = 0.5 + importance
   tierBoost   = critical 2.0 / temporary 0.5
   accessBoost = 1 + log2(1+访问数)×0.1
 ```
 
-全部权重可经环境变量覆盖(WEIGHT_*/HALF_LIFE_HOURS/SEARCH_MIN_SCORE)。
+全部权重可经环境变量覆盖(WEIGHT_*/HALF_LIFE_HOURS/SEARCH_MIN_SCORE)。Castalia 无情绪维度(去情感版)。
 
 ---
 

@@ -11,9 +11,8 @@ import { DatabaseManager } from './db.js';
 import { embed } from './ollama.js';
 
 // 中性评分权重(可配)
-const WEIGHT_CONSISTENCY = parseFloat(process.env.WEIGHT_CONSISTENCY || '0.60');  // 语义/标签匹配
-const WEIGHT_EMOTION     = parseFloat(process.env.WEIGHT_EMOTION || '0.10');      // 情绪标记(存库字段,弱化)
-const WEIGHT_TIME        = parseFloat(process.env.WEIGHT_TIME || '0.30');         // 时间衰减
+const WEIGHT_CONSISTENCY = parseFloat(process.env.WEIGHT_CONSISTENCY || '0.65');  // 语义/标签匹配
+const WEIGHT_TIME        = parseFloat(process.env.WEIGHT_TIME || '0.35');         // 时间衰减
 
 // 时间衰减半衰期(小时),默认 30 天
 const HALF_LIFE_HOURS = parseFloat(process.env.HALF_LIFE_HOURS || (30 * 24).toString());
@@ -44,7 +43,6 @@ export interface SearchResult {
   category: string;
   subcategory: string | null;
   tags: string[];
-  emotionalImpact: number;
   importance: number;
   characterId: string | null;
   source: string | null;
@@ -66,7 +64,6 @@ function timeDecay(hoursSinceCreated: number): number {
 /** 统一评分:一致性 + 情绪(弱) + 时间 */
 function computeScore(similarity: number, row: any): number {
   const consistency = Math.min(Math.max(similarity, 0), 0.85);
-  const emotionalIntensity = Math.min(Math.abs(row.emotional_impact || 0) / 10, 1);
   const hoursSinceCreated = (Date.now() - new Date(row.created_at).getTime()) / (1000 * 60 * 60);
   const decay = timeDecay(hoursSinceCreated);
 
@@ -75,7 +72,6 @@ function computeScore(similarity: number, row: any): number {
   const accessBoost = 1 + Math.min(0.5, Math.log2(1 + (row.accessed_count || 0)) * 0.1);
 
   const rawScore = WEIGHT_CONSISTENCY * consistency
-                 + WEIGHT_EMOTION * emotionalIntensity
                  + WEIGHT_TIME * decay;
   return Math.round(rawScore * importanceMult * tierBoost * accessBoost * 1000) / 1000;
 }
@@ -165,7 +161,7 @@ function tagSearch(db: any, options: SearchOptions): SearchResult[] {
 
   const rows = db.prepare(`
     SELECT m.id, m.text, m.type, m.category, m.subcategory, m.tags,
-      m.emotional_impact, m.importance, m.character_id, m.source,
+      m.importance, m.character_id, m.source,
       m.subject, m.tier,
       m.created_at, m.last_accessed_at, m.accessed_count
     FROM memory m
@@ -184,7 +180,7 @@ function tagSearch(db: any, options: SearchOptions): SearchResult[] {
     return {
       id: row.id, text: row.text, type: row.type, category: row.category,
       subcategory: row.subcategory, tags: memTags,
-      emotionalImpact: row.emotional_impact, importance: row.importance,
+      importance: row.importance,
       characterId: row.character_id, source: row.source,
       subject: row.subject || 'user', tier: row.tier || 'standard',
       score: computeScore(tagScore, row), similarity: Math.round(tagScore * 1000) / 1000,
@@ -227,7 +223,7 @@ function vectorKnnSearch(
 
   const rows = db.prepare(`
     SELECT m.id, m.text, m.type, m.category, m.subcategory, m.tags,
-      m.emotional_impact, m.importance, m.character_id, m.source,
+      m.importance, m.character_id, m.source,
       m.subject, m.tier,
       m.created_at, m.last_accessed_at, m.accessed_count, m.rowid
     FROM memory m WHERE ${conditions.join(' AND ')}
@@ -243,7 +239,7 @@ function vectorKnnSearch(
       results.push({
         id: row.id, text: row.text, type: row.type, category: row.category,
         subcategory: row.subcategory, tags: JSON.parse(row.tags || '[]'),
-        emotionalImpact: row.emotional_impact, importance: row.importance,
+        importance: row.importance,
         characterId: row.character_id, source: row.source,
         subject: row.subject || 'user', tier: row.tier || 'standard',
         score, similarity: Math.round(similarity * 1000) / 1000,
@@ -268,7 +264,7 @@ function textFallbackSearch(
 
   const rows = db.prepare(`
     SELECT m.id, m.text, m.type, m.category, m.subcategory, m.tags,
-      m.emotional_impact, m.importance, m.character_id, m.source,
+      m.importance, m.character_id, m.source,
       m.subject, m.tier,
       m.created_at, m.last_accessed_at, m.accessed_count
     FROM memory m
@@ -281,7 +277,7 @@ function textFallbackSearch(
     .map(row => ({
       id: row.id, text: row.text, type: row.type, category: row.category,
       subcategory: row.subcategory, tags: JSON.parse(row.tags || '[]'),
-      emotionalImpact: row.emotional_impact, importance: row.importance,
+      importance: row.importance,
       characterId: row.character_id, source: row.source,
       subject: row.subject || 'user', tier: row.tier || 'standard',
       score: computeScore(0.3, row), similarity: 0.3,
@@ -311,8 +307,8 @@ export function getRecentMemories(characterId: string, limit: number = 5, hoursB
 
   const rows = db.prepare(`
     SELECT id, text, type, category, subcategory, tags,
-           emotional_impact, importance, character_id, source, subject, tier,
-           agent_mood, agent_desire, created_at, last_accessed_at, accessed_count
+           importance, character_id, source, subject, tier,
+           created_at, last_accessed_at, accessed_count
     FROM memory
     WHERE is_active = 1 AND character_id = ? AND created_at > ?
     ORDER BY importance DESC, created_at DESC
@@ -322,7 +318,7 @@ export function getRecentMemories(characterId: string, limit: number = 5, hoursB
   return rows.map(row => ({
     id: row.id, text: row.text, type: row.type, category: row.category,
     subcategory: row.subcategory, tags: JSON.parse(row.tags || '[]'),
-    emotionalImpact: row.emotional_impact, importance: row.importance,
+    importance: row.importance,
     characterId: row.character_id, source: row.source, subject: row.subject || 'user',
     tier: row.tier || 'standard',
     score: row.importance, similarity: 0,

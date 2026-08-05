@@ -45,7 +45,7 @@ function err(msg: string, code = 'ERROR') {
 const TOOL_GROUPS: Record<string, string[]> = {
   agent: ['memory_search', 'memory_get', 'memory_recent', 'fact_search', 'memory_graph'],
   harness: ['auto_process', 'conversation_save', 'digest_run', 'reflect_auto', 'reflect_deep', 'reflect_batch_embed', 'memory_save', 'memory_update', 'memory_delete', 'memory_log'],
-  admin: ['memory_list', 'stats_get', 'mood_journal', 'recent_conversations', 'daily_summary_data', 'reflect_analyze', 'reflect_apply', 'memory_context', 'context_get'],
+  admin: ['memory_list', 'stats_get', 'recent_conversations', 'daily_summary_data', 'reflect_analyze', 'reflect_apply', 'memory_context', 'context_get'],
 };
 
 function resolveTools(input: string | undefined): Set<string> | null {
@@ -153,7 +153,6 @@ register(
     type: z.enum(['episodic', 'semantic', 'entity', 'preference']).optional().default('episodic'),
     category: z.string().optional().default('general'),
     tags: z.array(z.string()).optional().default([]),
-    emotionalImpact: z.number().optional().default(0),
     importance: z.number().optional().default(0.5),
     tier: z.enum(['temporary', 'standard', 'critical']).optional().default('standard'),
     source: z.string().optional(),
@@ -162,7 +161,7 @@ register(
   },
   async (args) => {
     try {
-      const r = await saveMemory({ text: args.text, type: args.type, category: args.category, tags: args.tags, emotionalImpact: args.emotionalImpact, importance: args.importance, tier: args.tier, source: args.source, subject: args.subject, characterId: CHAR_ID, skipEmbed: args.skipEmbed });
+      const r = await saveMemory({ text: args.text, type: args.type, category: args.category, tags: args.tags, importance: args.importance, tier: args.tier, source: args.source, subject: args.subject, characterId: CHAR_ID, skipEmbed: args.skipEmbed });
       return ok({ id: r.id, text: r.text.substring(0, 100), type: r.type, category: r.category });
     } catch (e: any) { return err(e.message); }
   }
@@ -422,21 +421,6 @@ register(
   }
 );
 
-register(
-  'mood_journal', 'admin',
-  'Get mood history for the past N days.',
-  { days: z.number().optional().default(7) },
-  async (args) => {
-    try {
-      const db = DatabaseManager.getInstance();
-      const since = new Date(Date.now() - (args.days || 7) * 86400000).toISOString();
-      return ok({
-        days: args.days,
-        moods: db.prepare("SELECT emotional_impact as value, created_at, text, category FROM memory WHERE is_active=1 AND (category='emotional' OR category='mood_snapshot' OR tier='temporary') AND created_at>? ORDER BY created_at DESC LIMIT 30").all(since),
-      });
-    } catch (e: any) { return err(e.message); }
-  }
-);
 
 // ═══════════════════════════════════════════════════════════════════
 // 记忆列表/图谱工具
@@ -502,7 +486,6 @@ register(
           createdAt: row.created_at,
           updatedAt: row.updated_at,
           metadata: {
-            emotionalImpact: row.emotional_impact,
             accessedCount: row.accessed_count + 1,
             referenceCount: row.reference_count,
             locked: row.locked === 1,

@@ -10,6 +10,17 @@
 - 仓库改名 **Castalia**,推至 `github.com/ehwin/Castalia`(Private),默认分支 main
 - AIRI 版仓库名规划:**Castalia Anima**(情感线,自用版暂不上传,改完吸收进主项目后转通用情感支线)
 
+## [v1.4] — 2026-08-04 彻底去情感(Castalia = harness 定位)
+
+### Removed
+- `mood_journal` 工具(无情绪写入方的死工具)
+- `emotional_impact` / `agent_mood` / `agent_desire` 列 + v6.0 VAD 迁移块(建表与迁移)
+- 评分公式的情绪维度:`WEIGHT_EMOTION` 删除,权重归一 **一致性 0.65 + 时间衰减 0.35**
+- `memory_save` / `memory_get` 的 emotionalImpact 参数与返回字段
+- 预设分类 `emotional` / `mood_snapshot`;`VALID_CATEGORIES` 白名单同步清理
+
+> 情感能力完整保留在 AIRI 版(未来情感特化,仓库名规划 Castalia Anima);Castalia 定位纯 harness 记忆后端,零情感残留(全 src 0 处)。
+
 ## [v1.3] — 2026-08-04 热度升格 + reflect 回执
 
 ### Added

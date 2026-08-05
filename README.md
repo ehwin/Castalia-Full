@@ -72,9 +72,8 @@ All read tools return a standard envelope (aligned with Mem0 / Hermes convention
 | `CHAR_ID` | `default` | Instance/partition ID. Multiple instances can share one DB without cross-talk |
 | `MCP_SERVER_NAME` | `ai-memory` | MCP server display name |
 | `SEARCH_MIN_SCORE` | `0.15` | Min score threshold for vector search results |
-| `WEIGHT_CONSISTENCY` | `0.60` | Scoring: semantic/tag consistency weight |
-| `WEIGHT_EMOTION` | `0.10` | Scoring: stored emotional-impact weight (weak) |
-| `WEIGHT_TIME` | `0.30` | Scoring: time-decay weight |
+| `WEIGHT_CONSISTENCY` | `0.65` | Scoring: semantic/tag consistency weight |
+| `WEIGHT_TIME` | `0.35` | Scoring: time-decay weight |
 | `HALF_LIFE_HOURS` | `720` | Time-decay half-life (hours, default 30 days) |
 | `REFLECT_LLM_URL` | `https://api.deepseek.com/v1` | OpenAI-compatible LLM endpoint for reflection |
 | `REFLECT_LLM_API_KEY` | *(unset)* | Reflection LLM key; reflection skipped when unset |
@@ -82,7 +81,7 @@ All read tools return a standard envelope (aligned with Mem0 / Hermes convention
 | `REFLECT_INTERVAL_HOURS` | `0` | Auto-reflect interval in hours; `0` = manual only |
 | `MCP_TOOLS` | `agent` | Tool visibility: `agent` (read-only, default) / `harness` / `admin` / `all` / comma list |
 
-## Tools (24, profile-gated)
+## Tools (23, profile-gated)
 
 Tool visibility is controlled by `MCP_TOOLS` (default `agent` — read-only for the main agent):
 
@@ -90,7 +89,7 @@ Tool visibility is controlled by `MCP_TOOLS` (default `agent` — read-only for 
 |---------|-------|---------|
 | **agent** (5) | `memory_search` / `fact_search` / `memory_get` / `memory_recent` / `memory_graph` | Read-only recall for the LLM |
 | **harness** (10) | `memory_save` / `update` / `delete` / `memory_log` / `auto_process` / `conversation_save` / `digest_run` / `reflect_auto` / `reflect_deep` / `reflect_batch_embed` | Writes + pipeline, called by harness/system |
-| **admin** (9) | `memory_list` / `stats_get` / `mood_journal` / `recent_conversations` / `daily_summary_data` / `reflect_analyze` / `reflect_apply` / `memory_context` / `context_get` | Management, Web Console |
+| **admin** (8) | `memory_list` / `stats_get` / `recent_conversations` / `daily_summary_data` / `reflect_analyze` / `reflect_apply` / `memory_context` / `context_get` | Management, Web Console |
 
 `MCP_TOOLS=all` registers everything (backward compatible).
 

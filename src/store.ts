@@ -16,13 +16,10 @@ export interface StoreParams {
   category?: string;
   subcategory?: string;
   tags?: string[];
-  emotionalImpact?: number;
   importance?: number;
   characterId?: string;
   source?: string;
   subject?: 'user' | 'self' | 'environment';
-  agentMood?: number;
-  agentDesire?: string;
   tier?: 'temporary' | 'standard' | 'critical';
   expiresAt?: string;
   skipEmbed?: boolean;  // v5.0: digest 暂不向量化
@@ -35,13 +32,10 @@ export interface MemoryRecord {
   category: string;
   subcategory: string | null;
   tags: string[];
-  emotionalImpact: number;
   importance: number;
   characterId: string | null;
   source: string | null;
   subject: string;
-  agentMood: number | null;
-  agentDesire: string | null;
   tier: string;
   expiresAt: string | null;
   isActive: boolean;
@@ -69,17 +63,16 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
       id: exactDup.id, text: params.text,
       type: params.type ?? 'episodic', category: params.category ?? 'general',
       subcategory: params.subcategory ?? null, tags: params.tags ?? [],
-      emotionalImpact: params.emotionalImpact ?? 0, importance: params.importance ?? 0.5,
+      importance: params.importance ?? 0.5,
       characterId: params.characterId ?? null, source: params.source ?? null,
-      subject: params.subject ?? 'user', agentMood: params.agentMood ?? null,
-      agentDesire: params.agentDesire ?? null,
+      subject: params.subject ?? 'user',
       tier: params.tier ?? 'standard', expiresAt: null,
       isActive: true,
       createdAt: now, updatedAt: now, lastAccessedAt: now, accessedCount: 0,
     } as MemoryRecord;
-  }
+    }
 
-  // ═══ 向量去重：仅当不跳过 embed 时执行 ═══
+    // ═══ 向量去重：仅当不跳过 embed 时执行 ═══
   let vector: number[] | null = null;
   let isNearDup = false;
   let dupId: string | null = null;
@@ -124,13 +117,10 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
     category: params.category ?? 'general',
     subcategory: params.subcategory ?? null,
     tags: params.tags ?? [],
-    emotionalImpact: params.emotionalImpact ?? 0,
     importance: params.importance ?? 0.5,
     characterId: params.characterId ?? null,
     source: params.source ?? null,
     subject: params.subject ?? 'user',
-    agentMood: params.agentMood ?? null,
-    agentDesire: params.agentDesire ?? null,
     tier,
     expiresAt,
     isActive: true,
@@ -139,13 +129,12 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
 
   const storeTx = db.transaction(() => {
     db.prepare(`
-      INSERT INTO memory (id, text, type, category, subcategory, tags, emotional_impact, importance, character_id, source, subject, agent_mood, agent_desire, tier, expires_at, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memory (id, text, type, category, subcategory, tags, importance, character_id, source, subject, tier, expires_at, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       record.id, record.text, record.type, record.category, record.subcategory,
-      JSON.stringify(record.tags), record.emotionalImpact, record.importance,
+      JSON.stringify(record.tags), record.importance,
       record.characterId, record.source, record.subject,
-      record.agentMood, record.agentDesire,
       record.tier, record.expiresAt, 1,
       record.createdAt, record.updatedAt, record.lastAccessedAt, 0, 0
     );
@@ -194,7 +183,6 @@ export async function updateMemory(id: string, updates: Partial<StoreParams>): P
   if (updates.category !== undefined) { fields.push('category = ?'); values.push(updates.category); }
   if (updates.subcategory !== undefined) { fields.push('subcategory = ?'); values.push(updates.subcategory); }
   if (updates.tags !== undefined) { fields.push('tags = ?'); values.push(JSON.stringify(updates.tags)); }
-  if (updates.emotionalImpact !== undefined) { fields.push('emotional_impact = ?'); values.push(updates.emotionalImpact); }
   if (updates.importance !== undefined) { fields.push('importance = ?'); values.push(updates.importance); }
 
   if (fields.length === 0) return existing;

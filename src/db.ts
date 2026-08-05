@@ -41,13 +41,10 @@ export class DatabaseManager {
         category TEXT DEFAULT 'general',
         subcategory TEXT,
         tags TEXT DEFAULT '[]',
-        emotional_impact REAL DEFAULT 0,
         importance REAL DEFAULT 0.5,
         character_id TEXT,
         source TEXT,
         subject TEXT DEFAULT 'user',
-        agent_mood REAL,
-        agent_desire TEXT,
         tier TEXT DEFAULT 'standard',
         expires_at DATETIME,
         is_active INTEGER DEFAULT 1,
@@ -137,18 +134,10 @@ export class DatabaseManager {
     try { db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS vec_facts USING vec0(embedding float[${VEC_DIM}])`); } catch (_e) {}
 
     
-    // v6.0: VAD emotion columns
-    try { db.exec('ALTER TABLE memory ADD COLUMN vad_valence REAL DEFAULT NULL'); } catch (_e) {}
-    try { db.exec('ALTER TABLE memory ADD COLUMN vad_arousal REAL DEFAULT NULL'); } catch (_e) {}
-    try { db.exec('ALTER TABLE memory ADD COLUMN vad_dominance REAL DEFAULT NULL'); } catch (_e) {}
-    try { db.exec('ALTER TABLE memory ADD COLUMN tsundere_level REAL DEFAULT 0'); } catch (_e) {}
-    try { db.exec('CREATE INDEX IF NOT EXISTS idx_memory_vad_valence ON memory(vad_valence)'); } catch (_e) {}
-    try { db.exec('CREATE INDEX IF NOT EXISTS idx_memory_tsundere ON memory(tsundere_level)'); } catch (_e) {}
 
     // Seed default categories (SynaBun-style hierarchical)
     const defaultCategories = [
       { name: 'episodic', description: '事件记忆 — 发生了什么', is_parent: 1 },
-      { name: 'emotional', description: '情感经历 — 感动、开心、难过的重要时刻', parent: 'episodic' },
       { name: 'milestone', description: '成长里程碑 — 第一次、重要决定 [critical]', parent: 'episodic' },
       { name: 'conversation', description: '对话记忆 — 有意义的对话片段', parent: 'episodic' },
       { name: 'semantic', description: '事实记忆 — 知识和关系', is_parent: 1 },
@@ -157,7 +146,6 @@ export class DatabaseManager {
       { name: 'preference', description: '偏好记忆 — 用户喜好和习惯', is_parent: 1 },
       { name: 'entity', description: '实体记忆 — 人物、地点、物品', is_parent: 1 },
       { name: 'relationship', description: '关系记忆 — 人与人之间的关系 [critical]', parent: 'entity' },
-      { name: 'mood_snapshot', description: '情绪快照 — 情绪/精力/愿望，3天自动清理 [temporary]', parent: 'episodic' },
     ];
 
     const insertCat = db.prepare(`

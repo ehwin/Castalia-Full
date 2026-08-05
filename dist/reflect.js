@@ -22,7 +22,7 @@ import path from 'node:path';
 export function listAllMemories(characterId = 'airi', limit = 200) {
     const db = DatabaseManager.getInstance();
     const rows = db.prepare(`
-    SELECT id, text, type, category, tags, importance, emotional_impact,
+    SELECT id, text, type, category, tags, importance,
            subject, source, tier, expires_at, created_at, last_accessed_at, accessed_count, reference_count, locked
     FROM memory
     WHERE is_active = 1 AND character_id = ?
@@ -45,7 +45,6 @@ export function listAllMemories(characterId = 'airi', limit = 200) {
             category: r.category,
             tags,
             importance: r.importance,
-            emotionalImpact: r.emotional_impact,
             subject: r.subject,
             source: r.source,
             tier: r.tier || 'standard',
@@ -65,7 +64,7 @@ export function listAllMemories(characterId = 'airi', limit = 200) {
 // 护栏：拒绝明显无效的值，防止大模型幻觉污染数据库
 // ═════════════════════════════════════════════════
 const VALID_TYPES = new Set(['episodic', 'semantic', 'entity', 'preference']);
-const VALID_CATEGORIES = new Set(['conversation', 'emotional', 'milestone', 'identity', 'relationship', 'knowledge', 'preference', 'general', 'mood_snapshot']);
+const VALID_CATEGORIES = new Set(['conversation', 'milestone', 'identity', 'relationship', 'knowledge', 'preference', 'general']);
 const VALID_RELATIONS = new Set(['caused_by', 'part_of', 'follows', 'related_to', 'same_subject', 'causes', 'leads_to', 'sequence']);
 function safeTags(raw) {
     if (!raw)
