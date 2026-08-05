@@ -6,14 +6,14 @@
  */
 import { DatabaseManager, generateId } from './db.js';
 import { embed, getEmbeddingCached } from './ollama.js';
-import { PROJECT_ID } from './env.js';
+import { normalizeProject } from './env.js';
 let saveCount = 0;
 const CONSOLIDATE_INTERVAL = 50;
 export async function saveMemory(params) {
     const db = DatabaseManager.getInstance();
     const now = new Date().toISOString();
     const skipEmbed = params.skipEmbed === true;
-    const project = params.project || PROJECT_ID;
+    const project = normalizeProject(params.project);
     // ═══ 精确去重：完全相同的文本不重复存(仅限同项目) ═══
     const exactDup = db.prepare(`
     SELECT id FROM memory
@@ -169,7 +169,7 @@ export async function saveConversationTurn(userMsg, assistantMsg, characterId = 
     const db = DatabaseManager.getInstance();
     const now = new Date().toISOString();
     const id = generateId();
-    const proj = project || PROJECT_ID;
+    const proj = normalizeProject(project);
     let moodPrefix = '';
     if (moodValue !== undefined) {
         moodPrefix = `[mood: ${moodValue}`;
@@ -235,21 +235,30 @@ export async function reEmbedMemory(id) {
 }
 /**
  * v5.0: 批量向量化 — reflect 后一次性处理所有未嵌入记忆
+ * v1.5: 支持按项目隔离 — 传 project 只处理该项目;不传则默认项目
  * 扫描 is_active=1 但 vec_memory 中无对应向量的记录
  */
-export async function batchEmbedPending(characterId = 'airi') {
+export async function batchEmbedPending(characterId = 'airi', project) {
     const db = DatabaseManager.getInstance();
     const errors = [];
-    // 找所有有记忆但无向量的记录
+    // 找所有有记忆但无向量的记录(source 为 NULL 也算,修复 NULL != 'x' 恒假的坑)
+    const conditions = [
+        'm.is_active = 1',
+        'm.character_id = ?',
+        "COALESCE(m.source, '') != 'conversation_log'",
+        'm.rowid NOT IN (SELECT rowid FROM vec_memory)',
+    ];
+    const params = [characterId];
+    if (project) {
+        conditions.push('m.project = ?');
+        params.push(normalizeProject(project));
+    }
     const pending = db.prepare(`
     SELECT m.id, m.text, m.rowid FROM memory m
-    WHERE m.is_active = 1
-      AND m.character_id = ?
-      AND m.source != 'conversation_log'
-      AND m.rowid NOT IN (SELECT rowid FROM vec_memory)
+    WHERE ${conditions.join(' AND ')}
     ORDER BY m.created_at ASC
     LIMIT 200
-  `).all(characterId);
+  `).all(...params);
     let embedded = 0;
     for (const row of pending) {
         try {
@@ -275,7 +284,7 @@ export async function saveFacts(facts, sourceMemoryId = null, characterId = 'air
         return { inserted: 0, updated: 0 };
     const db = DatabaseManager.getInstance();
     const now = new Date().toISOString();
-    const proj = project || PROJECT_ID;
+    const proj = normalizeProject(project);
     let inserted = 0;
     let updated = 0;
     const upsert = db.prepare(`
@@ -302,10 +311,10 @@ export async function saveFacts(facts, sourceMemoryId = null, characterId = 'air
     try {
         const allFacts = db.prepare(`
       SELECT rowid, subject, predicate, object FROM facts
-      WHERE subject || ' ' || predicate || ' ' || object IN (
+      WHERE project = ? AND subject || ' ' || predicate || ' ' || object IN (
         ${facts.map(() => '?').join(',')}
       )
-    `).all(...facts.map(f => `${f.subject} ${f.predicate} ${f.object}`));
+    `).all(proj, ...facts.map(f => `${f.subject} ${f.predicate} ${f.object}`));
         for (const row of allFacts) {
             const factText = `${row.subject} ${row.predicate} ${row.object}`;
             try {
@@ -325,7 +334,7 @@ export async function saveFacts(facts, sourceMemoryId = null, characterId = 'air
  */
 export function getFactsBySubject(subject, characterId, project) {
     const db = DatabaseManager.getInstance();
-    const proj = project || PROJECT_ID;
+    const proj = normalizeProject(project);
     let query = 'SELECT * FROM facts WHERE subject = ? AND is_active = 1 AND project = ?';
     const params = [subject, proj];
     if (characterId) {

@@ -14,7 +14,7 @@
  */
 import { DatabaseManager } from './db.js';
 import { saveFacts, saveMemory, batchEmbedPending } from './store.js';
-import { PROJECT_ID } from './env.js';
+import { normalizeProject } from './env.js';
 import fs from 'node:fs';
 import path from 'node:path';
 /**
@@ -22,7 +22,7 @@ import path from 'node:path';
  */
 export function listAllMemories(characterId = 'airi', limit = 200, project) {
     const db = DatabaseManager.getInstance();
-    const proj = project || PROJECT_ID;
+    const proj = normalizeProject(project);
     const rows = db.prepare(`
     SELECT id, text, type, category, tags, importance,
            subject, source, tier, expires_at, created_at, last_accessed_at, accessed_count, reference_count, locked
@@ -357,9 +357,9 @@ export async function applyReflectActions(actions, characterId = 'airi', project
         }
         result.receipts.push(receipt);
     }
-    // ═══ v5.0: 批量向量化 digest 阶段跳过的记忆 ═══
+    // ═══ v5.0: 批量向量化 digest 阶段跳过的记忆(按项目隔离) ═══
     try {
-        const batchResult = await batchEmbedPending(characterId);
+        const batchResult = await batchEmbedPending(characterId, project);
         if (batchResult.embedded > 0) {
             result.details.push(`batch embedded ${batchResult.embedded} pending memories`);
         }
@@ -382,7 +382,7 @@ export function getAllMemories(characterId = 'airi', limit = 200, project) {
 /** 获取记忆关联图 */
 export function getMemoryGraph(characterId = 'airi', project) {
     const db = DatabaseManager.getInstance();
-    const proj = project || PROJECT_ID;
+    const proj = normalizeProject(project);
     const nodes = listAllMemories(characterId, 500, proj);
     const nodeIds = new Set(nodes.map((n) => n.id));
     let edgeRows = [];
@@ -450,7 +450,7 @@ export const REFLECT_SYSTEM_PROMPT = `你是记忆反思引擎。你的任务是
 export function getUnanalyzedConversations(characterId = 'airi', since, // ISO datetime，不传则取上次 reflect 之后
 limit = 30, project) {
     const db = DatabaseManager.getInstance();
-    const proj = project || PROJECT_ID;
+    const proj = normalizeProject(project);
     // 找到上次反思时间（最近一次 source='reflect_summary' 的创建时间）
     if (!since) {
         const lastReflect = db.prepare(`

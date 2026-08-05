@@ -9,7 +9,7 @@
  */
 import { DatabaseManager } from './db.js';
 import { embed } from './ollama.js';
-import { PROJECT_ID } from './env.js';
+import { normalizeProject } from './env.js';
 // 中性评分权重(可配)
 const WEIGHT_CONSISTENCY = parseFloat(process.env.WEIGHT_CONSISTENCY || '0.65'); // 语义/标签匹配
 const WEIGHT_TIME = parseFloat(process.env.WEIGHT_TIME || '0.35'); // 时间衰减
@@ -100,7 +100,7 @@ function tagSearch(db, options) {
         return [];
     const profile = options.profile ? SEARCH_PROFILES[options.profile] : null;
     const topK = options.topK ?? profile?.topK ?? 10;
-    const project = options.project || PROJECT_ID;
+    const project = normalizeProject(options.project);
     const tagCond = keywords.map(() => `m.tags LIKE ?`).join(' OR ');
     const tagParams = keywords.map(k => `%"${k}"%`);
     const looseCond = keywords.map(() => `m.tags LIKE ?`).join(' OR ');
@@ -156,7 +156,7 @@ function vectorKnnSearch(db, options, floatQuery, excludeIds, topK, minScore) {
     // v1.5: vec0 虚拟表禁止 JOIN(KNN 必须在 vec0 上 LIMIT),项目过滤放在第二段 memory 查询
     // 候选集放大(全库 KNN)保证单项目召回;隔离语义由 memory 查询的 project=? 保证
     const knnLimit = Math.min(topK * 8, 60);
-    const project = options.project || PROJECT_ID;
+    const project = normalizeProject(options.project);
     let knnRows;
     try {
         knnRows = db.prepare(`
@@ -222,7 +222,7 @@ function textFallbackSearch(db, options, excludeIds, topK, minScore) {
     const terms = options.query.split(/\s+/).filter(t => t.length > 0);
     if (terms.length === 0)
         return [];
-    const project = options.project || PROJECT_ID;
+    const project = normalizeProject(options.project);
     const likeConditions = terms.map(() => 'm.text LIKE ?').join(' OR ');
     const likeParams = terms.map(t => `%${t}%`);
     const rows = db.prepare(`
@@ -267,7 +267,7 @@ function updateAccessed(db, results) {
 export function getRecentMemories(characterId, limit = 5, hoursBack = 24, project) {
     const db = DatabaseManager.getInstance();
     const since = new Date(Date.now() - hoursBack * 3600000).toISOString();
-    const proj = project || PROJECT_ID;
+    const proj = normalizeProject(project);
     const rows = db.prepare(`
     SELECT id, text, project, type, category, subcategory, tags,
            importance, character_id, source, subject, tier,
@@ -296,7 +296,7 @@ export async function searchFacts(query, options = {}) {
     const db = DatabaseManager.getInstance();
     const topK = options.topK ?? 10;
     const minConfidence = options.minConfidence ?? 0.3;
-    const proj = options.project || PROJECT_ID;
+    const proj = normalizeProject(options.project);
     const queryVector = await embed(query);
     const floatQuery = new Float32Array(queryVector);
     const knnLimit = Math.min(topK * 8, 60);
@@ -319,8 +319,8 @@ export async function searchFacts(query, options = {}) {
     for (const r of knnRows) {
         rowidMap.set(Number(r.rowid), r.distance);
     }
-    const conditions = ['f.is_active = 1', `f.rowid IN (${knnRows.map(() => '?').join(',')})`];
-    const params = knnRows.map(r => Number(r.rowid));
+    const conditions = ['f.is_active = 1', 'f.project = ?', `f.rowid IN (${knnRows.map(() => '?').join(',')})`];
+    const params = [proj, ...knnRows.map(r => Number(r.rowid))];
     if (options.subject) {
         conditions.push('f.subject = ?');
         params.push(options.subject);

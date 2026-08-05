@@ -3,6 +3,23 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.5.1] — 2026-08-05 项目隔离边界修复(opencode 全项目测试发现)
+
+### Fixed
+- **fact_search 事实跨项目泄漏**(真 bug):二段查询漏 `f.project = ?`,`proj` 变量算了但从未用于查询 → 项目 A 搜索能返回项目 B 的事实,与隔离承诺相悖(openCode 边界测试发现,已实测无重叠)
+- **batchEmbedPending 隐藏 bug**:`m.source != 'conversation_log'` 对 `source=NULL` 恒为假,`memory_save`(source 默认 null)的记忆**永远无法被批量嵌入**;改为 `COALESCE(m.source,'') != 'conversation_log'`
+- **saveFacts 向量回写跨项目**:同 SPO 事实跨项目会被重复 embed,补 `project = ?`
+- **reflect 流水线跨项目批量嵌入**:`applyReflectActions` 末尾 `batchEmbedPending` 未透传 project
+
+### Changed
+- **`normalizeProject()`**(env.ts):项目名 trim + 空/空白回退默认项目,应用于全部写/读入口,消除 `''`/`' '`/`' alpha '` 脏命名空间
+- **`reflect_batch_embed` 工具**新增可选 `project` 参数;`batchEmbedPending(characterId, project?)` 支持项目过滤
+- `batchEmbedPending` 不传 project 时只处理默认项目(隔离语义一致;跨项目 pending 记忆不自动嵌入,不会串项目,仅漏嵌)
+
+### Note(设计内,不改)
+- `memory_get`/`delete`/`update` 凭全局唯一 UUID 操作,无 project 参数是刻意的(ID 即能力令牌,风险仅当 ID 泄露)
+- digest 过期清理 / promoteByAccess / restore-critical 全局执行:`expires_at` 是时间语义,与项目正交
+
 ## [v1.5] — 2026-08-05 项目隔离(Project Namespace)
 
 > 对齐 Hermes Project 概念:记忆按项目分区,不同项目调用各自的记忆空间,互不串扰。默认 `default` 项目完全向后兼容(老数据/老调用不受影响)。

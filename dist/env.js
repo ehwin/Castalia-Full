@@ -8,6 +8,14 @@
 export const CHAR_ID = process.env.CHAR_ID || 'default';
 /** 当前项目 ID(对齐 Hermes Project 概念):记忆按项目隔离。默认 'default' 保持向后兼容 */
 export const PROJECT_ID = process.env.CASTALIA_PROJECT || 'default';
+/**
+ * 规范化项目名:trim 前后空白;空字符串/纯空白回退到默认项目。
+ * 防止 '' / ' ' / ' alpha ' 这类脏值产生孤立项目命名空间。
+ */
+export function normalizeProject(p) {
+    const t = (p ?? '').trim();
+    return t.length > 0 ? t : PROJECT_ID;
+}
 /** MCP server 自描述名称 */
 export const SERVER_NAME = process.env.MCP_SERVER_NAME || 'castalia';
 /** 服务器版本号 */

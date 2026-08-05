@@ -19,7 +19,7 @@ import { runDigest, getRecentConversations, maybeDigest } from './digest.js';
 import { reflect, getAllMemories, getMemoryGraph, REFLECT_SYSTEM_PROMPT, getUnanalyzedConversations } from './reflect.js';
 import { autoProcess } from './autoProcessor.js';
 import { runAutoReflect, runDeepReflect } from './reflectDriver.js';
-import { CHAR_ID, PROJECT_ID, SERVER_NAME, SERVER_VERSION } from './env.js';
+import { CHAR_ID, PROJECT_ID, SERVER_NAME, SERVER_VERSION, normalizeProject } from './env.js';
 console.log = console.error;
 const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 function ok(data) {
@@ -259,7 +259,7 @@ register('context_get', 'admin', 'Get memory context summary: recent memories + 
     try {
         const db = DatabaseManager.getInstance();
         const recent = getRecentMemories(CHAR_ID, 5, 24, args.project);
-        const stats = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1 AND project=?').get(args.project || PROJECT_ID);
+        const stats = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1 AND project=?').get(normalizeProject(args.project));
         return ok({
             recentMemories: recent.map(m => ({ text: m.text, category: m.category, importance: m.importance, createdAt: m.createdAt })),
             stats: { total: stats.c },
@@ -286,7 +286,7 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
         const hoursBack = args.hoursBack ?? 48;
         const recentLimit = args.recentLimit ?? 5;
         const relatedLimit = args.relatedLimit ?? 5;
-        const proj = args.project || PROJECT_ID;
+        const proj = normalizeProject(args.project);
         // 1. 近期重要记忆
         const recent = getRecentMemories(CHAR_ID, recentLimit, hoursBack, proj);
         // 2. 与当前任务相关的记忆(向量搜索)
@@ -357,7 +357,7 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
 register('stats_get', 'admin', 'Get memory system statistics: total count, by category, by source.', { project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")') }, async (args) => {
     try {
         const db = DatabaseManager.getInstance();
-        const proj = args.project || PROJECT_ID;
+        const proj = normalizeProject(args.project);
         const total = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? AND project=?').get(CHAR_ID, proj);
         return ok({
             op: 'stats',
@@ -567,9 +567,9 @@ register('reflect_deep', 'harness', '[Legacy] Deep calibration. Use reflect_auto
         return err(e.message, 'REFLECT_FAILED');
     }
 });
-register('reflect_batch_embed', 'harness', '[Internal] Batch embed all pending (un-embedded) memories. Called after reflect.', {}, async () => {
+register('reflect_batch_embed', 'harness', '[Internal] Batch embed all pending (un-embedded) memories. Called after reflect.', { project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")') }, async (args) => {
     try {
-        const r = await batchEmbedPending(CHAR_ID);
+        const r = await batchEmbedPending(CHAR_ID, args.project);
         return ok(r);
     }
     catch (e) {
@@ -584,7 +584,7 @@ register('daily_summary_data', 'admin', 'Get conversation and auto-process data 
     try {
         const db = DatabaseManager.getInstance();
         const since = new Date(Date.now() - (args.hoursBack || 24) * 3600000).toISOString();
-        const proj = args.project || PROJECT_ID;
+        const proj = normalizeProject(args.project);
         const convs = db.prepare("SELECT text FROM memory WHERE is_active=1 AND source='conversation_log' AND project=? AND created_at>? ORDER BY created_at ASC LIMIT 100").all(proj, since).map((r) => r.text);
         const aps = db.prepare("SELECT text FROM memory WHERE is_active=1 AND source='auto_process' AND project=? AND created_at>? ORDER BY created_at ASC LIMIT 50").all(proj, since).map((r) => r.text);
         return ok({ conversations: [...convs, ...aps] });

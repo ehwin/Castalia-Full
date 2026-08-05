@@ -16,7 +16,7 @@
 import { DatabaseManager } from './db.js';
 import { getEmbeddingCached } from './ollama.js';
 import { saveFacts, saveMemory, reEmbedMemory, batchEmbedPending } from './store.js';
-import { PROJECT_ID } from './env.js';
+import { normalizeProject } from './env.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -77,7 +77,7 @@ export interface ReflectAction {
  */
 export function listAllMemories(characterId: string = 'airi', limit: number = 200, project?: string): ReflectMemory[] {
   const db = DatabaseManager.getInstance();
-  const proj = project || PROJECT_ID;
+  const proj = normalizeProject(project);
   const rows = db.prepare(`
     SELECT id, text, type, category, tags, importance,
            subject, source, tier, expires_at, created_at, last_accessed_at, accessed_count, reference_count, locked
@@ -379,9 +379,9 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
     result.receipts.push(receipt);
   }
 
-  // ═══ v5.0: 批量向量化 digest 阶段跳过的记忆 ═══
+  // ═══ v5.0: 批量向量化 digest 阶段跳过的记忆(按项目隔离) ═══
   try {
-    const batchResult = await batchEmbedPending(characterId);
+    const batchResult = await batchEmbedPending(characterId, project);
     if (batchResult.embedded > 0) {
       result.details.push(`batch embedded ${batchResult.embedded} pending memories`);
     }
@@ -407,7 +407,7 @@ export function getAllMemories(characterId: string = 'airi', limit: number = 200
 /** 获取记忆关联图 */
 export function getMemoryGraph(characterId: string = 'airi', project?: string): { nodes: any[]; edges: any[] } {
   const db = DatabaseManager.getInstance();
-  const proj = project || PROJECT_ID;
+  const proj = normalizeProject(project);
   const nodes = listAllMemories(characterId, 500, proj);
   const nodeIds = new Set(nodes.map((n: any) => n.id));
   let edgeRows: any[] = [];
@@ -485,7 +485,7 @@ export function getUnanalyzedConversations(
   project?: string,  // v1.5: 项目隔离
 ): { id: string; text: string; createdAt: string }[] {
   const db = DatabaseManager.getInstance();
-  const proj = project || PROJECT_ID;
+  const proj = normalizeProject(project);
 
   // 找到上次反思时间（最近一次 source='reflect_summary' 的创建时间）
   if (!since) {
