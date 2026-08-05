@@ -130,7 +130,7 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
   const storeTx = db.transaction(() => {
     db.prepare(`
       INSERT INTO memory (id, text, type, category, subcategory, tags, importance, character_id, source, subject, tier, expires_at, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       record.id, record.text, record.type, record.category, record.subcategory,
       JSON.stringify(record.tags), record.importance,

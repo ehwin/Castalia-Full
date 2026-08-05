@@ -9,7 +9,7 @@
 export const CHAR_ID: string = process.env.CHAR_ID || 'default';
 
 /** MCP server 自描述名称 */
-export const SERVER_NAME: string = process.env.MCP_SERVER_NAME || 'ai-memory';
+export const SERVER_NAME: string = process.env.MCP_SERVER_NAME || 'castalia';
 
 /** 服务器版本号 */
 export const SERVER_VERSION: string = process.env.MCP_SERVER_VERSION || '1.0.0';

@@ -1,7 +1,7 @@
 {
-  "name": "ai-memory-web",
+  "name": "castalia-web",
   "version": "1.0.0",
-  "description": "Web console for ai-memory: 3D visualization (main) + admin panel (side)",
+  "description": "Web console for Castalia: 3D visualization (main) + admin panel (side)",
   "type": "module",
   "main": "server.mjs",
   "scripts": {

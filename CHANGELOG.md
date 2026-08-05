@@ -3,6 +3,19 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [2026-08-05] 全库改名 + Hermes 接入支持
+
+### Changed
+- **内部名称统一为 Castalia**:package.json / MCP_SERVER_NAME 默认值 / web console / 示例配置 / 文档全部 `ai-memory → castalia`(GitHub 仓库名同步,`github.com/ehwin/Castalia`)
+- **测试脚本路径动态化**:smoke_test / vec_test 不再写死 `/path/...` 本机路径,改为基于脚本位置推导(公共版可在任意 clone 位置运行);node 探测优先 PATH,本机路径仅作 fallback
+- **mcp-config.example.json** 改为通用占位符路径,不再泄露作者机器路径
+
+### Added
+- **Hermes Agent 安装支持**:`python scripts/setup.py hermes` 输出 `hermes config set mcp_servers '...'` 命令;README 新增 Hermes 安装章节(含 Windows node 不在 PATH 的绝对路径坑、重启生效说明、MCP_TOOLS 建议)
+
+### Fixed
+- `memory_save` INSERT 语句 VALUES 19 个占位符 vs 18 列,所有写入报 `19 values for 18 columns` → 已修正为 18 个(影响全部写入路径,冒烟测试因此从 save 开始全挂)
+
 ## [2026-08-04] 协议统一 + 上 GitHub
 
 ### Changed
@@ -86,7 +99,7 @@
 
 ### Added
 - 从 AIRI 分支剥离:删除 emotion/agentState/bias/userLearning 四模块
-- 中性化:CHAR_ID 默认 'default'、SERVER_NAME 'ai-memory'、subject 枚举 ['user','agent','environment']
+- 中性化:CHAR_ID 默认 'default'、SERVER_NAME 'castalia'、subject 枚举 ['user','agent','environment']
 - `reflectDriver.ts` 反思驱动打包进 server(日常+深度,LLM 环境变量配置,无 key 优雅跳过)
 - 19 工具 + reflect_auto/reflect_deep
 

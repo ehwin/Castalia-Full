@@ -1,5 +1,5 @@
 /**
- * ai-memory Web Console — 3D 可视化主界面 + 管理副界面
+ * Castalia Web Console — 3D 可视化主界面 + 管理副界面
  *
  * 独立 Express 服务器:
  *   - /api/graph      : 读取记忆库,输出 { nodes, links } 供 3d-force-graph 渲染
@@ -101,7 +101,7 @@ function mcpCall(toolName, args = {}) {
     };
     child.stdin.write(JSON.stringify({
       jsonrpc: '2.0', id: initId, method: 'initialize',
-      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'ai-memory-web', version: '1.0' } },
+      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'castalia-web', version: '1.0' } },
     }) + '\n');
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }) + '\n');
   });
@@ -326,7 +326,7 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
   console.log(`
   ╔══════════════════════════════════════════╗
-  ║   ai-memory Web Console                  ║
+  ║   Castalia Web Console                  ║
   ║   http://127.0.0.1:${PORT}                  ║
   ║   DB: ${DB_PATH}  ║
   ╚══════════════════════════════════════════╝

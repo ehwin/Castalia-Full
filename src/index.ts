@@ -691,7 +691,7 @@ async function main() {
   // Cleanup expired every 30 minutes
   setInterval(() => {
     const cleaned = cleanupExpiredMemories();
-    if (cleaned > 0) console.error(`[ai-memory] cleaned ${cleaned} expired temporary memories`);
+    if (cleaned > 0) console.error(`[castalia] cleaned ${cleaned} expired temporary memories`);
   }, 30 * 60 * 1000);
 
   // Auto-reflect every N hours (REFLECT_INTERVAL_HOURS > 0 enables)
@@ -704,7 +704,7 @@ async function main() {
       }).catch((e: any) => console.error('[reflect-auto] error:', e.message));
     };
     setInterval(runOnce, reflectIntervalHours * 3600 * 1000);
-    console.error(`[ai-memory] auto-reflect every ${reflectIntervalHours}h`);
+    console.error(`[castalia] auto-reflect every ${reflectIntervalHours}h`);
   }
 
   const transport = new StdioServerTransport();

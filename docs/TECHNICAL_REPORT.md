@@ -1,4 +1,4 @@
-# ai-memory 技术报告
+# Castalia 技术报告
 
 > 版本:1.0.0(2026-08-03)
 > 定位:标准 MCP stdio 记忆服务器,SQLite + sqlite-vec 本地向量存储,零 API 成本
@@ -179,7 +179,7 @@ rawScore = 0.65×consistency + 0.35×timeDecay
 | `EMBEDDING_API_KEY` | 空 | 设置后走云端 `/embeddings` 模式 |
 | `MEMORY_DB_PATH` | `./memory.sqlite` | 数据库路径 |
 | `CHAR_ID` | `default` | 实例/角色分区 ID |
-| `MCP_SERVER_NAME` | `ai-memory` | MCP server 名 |
+| `MCP_SERVER_NAME` | `castalia` | MCP server 名 |
 | `SEARCH_MIN_SCORE` | `0.15` | 检索最低分阈值 |
 | `WEIGHT_CONSISTENCY/EMOTION/TIME` | 0.60/0.10/0.30 | 评分权重 |
 | `HALF_LIFE_HOURS` | `720` | 时间衰减半衰期 |

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ai-memory setup — 一键为你的 agent 配置 MCP 接入(借鉴 engram 的 `engram setup` 模式)
+Castalia setup — 一键为你的 agent 配置 MCP 接入(借鉴 engram 的 `engram setup` 模式)
 
 用法:
   python setup.py                      # 列出支持的 agent
@@ -9,6 +9,7 @@ ai-memory setup — 一键为你的 agent 配置 MCP 接入(借鉴 engram 的 `e
   python setup.py cursor               # Cursor       → .cursor/mcp.json
   python setup.py vscode               # VS Code      → .vscode/mcp.json
   python setup.py codex                # Codex CLI    → .codex/config.toml (mcp 命令)
+  python setup.py hermes               # Hermes Agent → 打印 `hermes config set` 命令
   python setup.py json                 # 输出标准 mcpServers JSON(自行粘贴)
 
 行为:
@@ -29,9 +30,9 @@ def shutil_which_node():
 
 
 def mcp_server_config():
-    """返回 ai-memory 的 MCP server 配置(绝对路径)"""
+    """返回 Castalia 的 MCP server 配置(绝对路径)"""
     return {
-        "ai-memory": {
+        "castalia": {
             "command": shutil_which_node(),
             "args": [os.path.join(ROOT, "dist", "index.js")],
             "env": {
@@ -103,14 +104,25 @@ def setup_vscode():
 
 def setup_codex():
     # Codex CLI:输出 mcp add 命令(Codex 的 MCP 通过命令管理)
-    cfg = mcp_server_config()["ai-memory"]
+    cfg = mcp_server_config()["castalia"]
     cmd = (
-        f"codex mcp add ai-memory -- {cfg['command']} {' '.join(cfg['args'])}"
+        f"codex mcp add castalia -- {cfg['command']} {' '.join(cfg['args'])}"
     )
     print("  Codex 通过命令管理 MCP,请手动执行:")
     print(f"    {cmd}")
     print("  或在 ~/.codex/config.toml 的 [mcp_servers] 段添加:")
     print(json.dumps(cfg, indent=2, ensure_ascii=False))
+
+
+def setup_hermes():
+    # Hermes Agent:config.yaml 的 mcp_servers 段(config set 一条命令搞定)
+    print("  Hermes Agent 使用 `hermes config set` 写入 config.yaml:")
+    payload = json.dumps(mcp_server_config(), ensure_ascii=False)
+    print(f"    hermes config set mcp_servers '{payload}'")
+    print()
+    print("  写入后重启 Hermes,工具将以 mcp_castalia_* 前缀出现(如 mcp_castalia_memory_search)。")
+    print("  注:Windows 上若 node 不在系统 PATH,请将 command 改为 node 的绝对路径,例如:")
+    print("    hermes config set mcp_servers '{\"castalia\": {\"command\": \"C:\\\\Program Files\\\\nodejs\\\\node.exe\", ...}}'")
 
 
 def setup_json():
@@ -123,19 +135,20 @@ AGENTS = {
     "cursor": setup_cursor,
     "vscode": setup_vscode,
     "codex": setup_codex,
+    "hermes": setup_hermes,
     "json": setup_json,
 }
 
 
 def main():
     if len(sys.argv) < 2 or sys.argv[1] not in AGENTS:
-        print("ai-memory setup — 支持以下 agent:")
+        print("Castalia setup — 支持以下 agent:")
         for name in AGENTS:
             print(f"  python setup.py {name}")
         print("\n例如: python setup.py claude")
         sys.exit(1)
 
-    print(f"ai-memory MCP 接入配置 → {sys.argv[1]}")
+    print(f"Castalia MCP 接入配置 → {sys.argv[1]}")
     print(f"  项目根: {ROOT}")
     print(f"  MCP server: {os.path.join(ROOT, 'dist', 'index.js')}")
     print()

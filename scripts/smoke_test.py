@@ -2,18 +2,20 @@
 """MCP stdio 冒烟测试 — 验证记忆体核心 CRUD 往返(不依赖嵌入服务)"""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
 
-NODE = r"D:\system\New Folder\node.exe"
-SERVER = r"/path\ai-memory\dist\index.js"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+NODE = shutil.which('node') or r"D:\system\New Folder\node.exe"  # fallback:本机 node
+SERVER = os.path.join(ROOT, "dist", "index.js")
 
 # 继承完整系统环境(env 传自定义 dict 会完全替换,导致 node crypto 初始化崩溃)
 env = {**os.environ, **{'MCP_TOOLS': os.environ.get('MCP_TOOLS', 'all'),
-    "OLLAMA_URL": "http://127.0.0.1:11435",
-    "EMBEDDING_MODEL": "yuan-embedding-2.0-zh",
-    "MEMORY_DB_PATH": r"/path\ai-memory\test_smoke.sqlite",
+    "OLLAMA_URL": os.environ.get('OLLAMA_URL', "http://127.0.0.1:11435"),
+    "EMBEDDING_MODEL": os.environ.get('EMBEDDING_MODEL', "yuan-embedding-2.0-zh"),
+    "MEMORY_DB_PATH": os.path.join(ROOT, "test_smoke.sqlite"),
     "CHAR_ID": "harness-test",
 }}
 
@@ -21,7 +23,7 @@ proc = subprocess.Popen(
     [NODE, SERVER],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     env=env,
-    cwd=r"/path\ai-memory",
+    cwd=ROOT,
 )
 
 msg_id = 0

@@ -7,6 +7,6 @@
 /** 角色/实例 ID:用于数据分区。默认 'default'(通用场景) */
 export const CHAR_ID = process.env.CHAR_ID || 'default';
 /** MCP server 自描述名称 */
-export const SERVER_NAME = process.env.MCP_SERVER_NAME || 'ai-memory';
+export const SERVER_NAME = process.env.MCP_SERVER_NAME || 'castalia';
 /** 服务器版本号 */
 export const SERVER_VERSION = process.env.MCP_SERVER_VERSION || '1.0.0';

@@ -1,21 +1,29 @@
-# ai-memory — Standalone MCP Memory Server for Agent Harnesses
+# Castalia — Standalone MCP Memory Server for Agent Harnesses
 
-Standard MCP stdio server (19 tools). Local vector memory on SQLite + sqlite-vec — **zero API cost**, works offline once the embedding model is cached.
+Standard MCP stdio server (23 tools, profile-gated). Local vector memory on SQLite + sqlite-vec — **zero API cost**, works offline once the embedding model is cached.
 
 Forked from the AIRI memory system as an independent, neutral, general-purpose memory component. No personality layer, no vendor lock-in — bring your own LLM, bring your own embedding service (any Ollama-compatible `/api/embed`, 1024-dim).
 
 ## Quick Start
 
-### 1. Start the embedding service (first load ~30-60s)
+### 1. Build + verify
+
+```bash
+npm install
+npm run build                  # tsc → dist/index.js
+python scripts/smoke_test.py   # core CRUD round-trip (no embedding service needed)
+```
+
+### 2. Start the embedding service (first load ~30-60s)
 
 ```bat
 scripts\start-embed.bat
 ```
 
 Listens on `http://127.0.0.1:11436` (Ollama-compatible `/api/embed`, 1024-dim, model `IEITYuan/Yuan-embedding-2.0-zh`, cached locally — no re-download).
-> Any Ollama-compatible embed service outputting **1024-dim** works: point `OLLAMA_URL` + `EMBEDDING_MODEL` at it and skip this step.
+> Any Ollama-compatible embed service outputting **1024-dim** works: point `OLLAMA_URL` + `EMBEDDING_MODEL` at it and skip this step. E.g. with a local Ollama: `OLLAMA_URL=http://127.0.0.1:11434 EMBEDDING_MODEL=qwen3-embedding:0.6b`.
 
-### 2. One-command agent setup (borrowed from engram's `engram setup`)
+### 3. One-command agent setup (borrowed from engram's `engram setup`)
 
 ```bash
 python scripts/setup.py claude     # Claude Code → .mcp.json
@@ -23,29 +31,73 @@ python scripts/setup.py opencode   # OpenCode    → .opencode.json
 python scripts/setup.py cursor     # Cursor      → .cursor/mcp.json
 python scripts/setup.py vscode     # VS Code     → .vscode/mcp.json
 python scripts/setup.py codex      # Codex       → prints `codex mcp add` command
+python scripts/setup.py hermes     # Hermes Agent → prints `hermes config set` command
 python scripts/setup.py json       # print standard mcpServers JSON
 ```
 
 Or wire it manually:
 
-### 3. Connect from your MCP client
+### 4. Connect from your MCP client
 
 ```json
 {
   "mcpServers": {
-    "ai-memory": {
+    "castalia": {
       "command": "node",
-      "args": ["D:\\AI\\ai-memory\\dist\\index.js"],
+      "args": ["/absolute/path/to/castalia/dist/index.js"],
       "env": {
         "OLLAMA_URL": "http://127.0.0.1:11436",
         "EMBEDDING_MODEL": "yuan-embedding-2.0-zh",
-        "MEMORY_DB_PATH": "D:\\AI\\ai-memory\\memory.sqlite",
+        "MEMORY_DB_PATH": "/absolute/path/to/castalia/memory.sqlite",
         "CHAR_ID": "default"
       }
     }
   }
 }
 ```
+
+## Hermes Agent
+
+[Hermes Agent](https://hermes-agent.nousresearch.com) has a native MCP client: any server under `mcp_servers` in `config.yaml` is discovered at startup, and its tools appear with the `mcp_castalia_*` prefix (e.g. `mcp_castalia_memory_search`, `mcp_castalia_memory_save`).
+
+### Install
+
+```bash
+python scripts/setup.py hermes
+```
+
+prints a ready-made `hermes config set mcp_servers '...'` command — run it, then **restart Hermes** (MCP servers are discovered at startup; no hot reload).
+
+Or set it manually with the built-in CLI (no JSON hand-editing):
+
+```bash
+hermes config set mcp_servers '{"castalia": {"command": "node", "args": ["/absolute/path/to/castalia/dist/index.js"], "env": {"MEMORY_DB_PATH": "/absolute/path/to/castalia/memory.sqlite", "CHAR_ID": "hermes"}, "timeout": 120}}'
+```
+
+> **Windows note**: if `node` is not on the system `PATH` (git-bash often appends its own paths), use the absolute path to `node.exe` as `command`, e.g. `"C:\\Program Files\\nodejs\\node.exe"`. Hermes passes only a filtered baseline environment to MCP subprocesses, so it won't inherit your shell's ad-hoc PATH additions.
+
+### Verify
+
+```bash
+hermes config get mcp_servers   # should print the castalia entry
+```
+
+After restart, ask Hermes "what memory tools do you have?" or look for `mcp_castalia_*` in the tool list. Then:
+
+```
+"记住:我的项目叫 Castalia"
+→ mcp_castalia_memory_save
+"我之前说过什么?"
+→ mcp_castalia_memory_search
+```
+
+### Recommended env for Hermes
+
+| Var | Value | Why |
+|-----|-------|-----|
+| `MCP_TOOLS` | `harness` (default `agent`) | agent = read-only (5 tools); `harness` adds writes; `admin` adds management. See Tools section |
+| `CHAR_ID` | e.g. `hermes` | separate partition per agent/role, share one DB safely |
+| `EMBEDDING_MODEL` | your 1024-dim model | e.g. `qwen3-embedding:0.6b` on a local Ollama |
 
 ## Unified Envelope (v1.1)
 
@@ -70,7 +122,7 @@ All read tools return a standard envelope (aligned with Mem0 / Hermes convention
 | `EMBEDDING_MODEL` | `yuan-embedding-2.0-zh` | Embedding model name; must output **1024-dim** |
 | `MEMORY_DB_PATH` | `./memory.sqlite` | SQLite database path (auto-created on first run) |
 | `CHAR_ID` | `default` | Instance/partition ID. Multiple instances can share one DB without cross-talk |
-| `MCP_SERVER_NAME` | `ai-memory` | MCP server display name |
+| `MCP_SERVER_NAME` | `castalia` | MCP server display name |
 | `SEARCH_MIN_SCORE` | `0.15` | Min score threshold for vector search results |
 | `WEIGHT_CONSISTENCY` | `0.65` | Scoring: semantic/tag consistency weight |
 | `WEIGHT_TIME` | `0.35` | Scoring: time-decay weight |
@@ -118,7 +170,6 @@ Tool visibility is controlled by `MCP_TOOLS` (default `agent` — read-only for 
 - `memory_context` — **injection-ready context bundle**: recent + task-related (optional query) + cognitive logs + facts, with ground-truth instructions (borrowed from engram's `mem_context` / memory-os `fabric_brief`)
 - `context_get` — lightweight recent memories + stats
 - `stats_get` — memory statistics
-- `mood_journal` — emotional history (uses stored `emotionalImpact`)
 
 **Reflection** (LLM-driven, bundled in-server)
 - `reflect_analyze` — unanalyzed conversations + reflection system prompt
@@ -170,3 +221,4 @@ License: MIT, see `LICENSE`. Upstream acknowledgements retained above.
 - Embedding service down → `memory_save` reports embed failure; check `curl http://127.0.0.1:11436/health`
 - Empty search results → lower `SEARCH_MIN_SCORE`, or verify `CHAR_ID` matches the writer
 - Port conflict → change port in `scripts\start-embed.bat` + `OLLAMA_URL`
+- Hermes: tools not appearing → restart Hermes; verify `hermes config get mcp_servers`; on Windows ensure `command` is an absolute path to `node.exe` (Hermes filters the subprocess environment)
