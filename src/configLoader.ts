@@ -33,8 +33,10 @@ try {
     if (ref.llm_url) process.env.REFLECT_LLM_URL = ref.llm_url.replace(/\/+$/, '');
     if (ref.api_key) process.env.REFLECT_LLM_API_KEY = ref.api_key;
     if (ref.model) process.env.REFLECT_LLM_MODEL = ref.model;
+    if (ref.factExtraction) process.env.REFLECT_FACT_EXTRACTION = String(ref.factExtraction);
+    if (ref.maxFacts != null) process.env.REFLECT_MAX_FACTS = String(ref.maxFacts);
 
-    console.error(`[config] loaded ${CONFIG_PATH} (embed=${emb.mode || 'ollama'}, reflect=${ref.model || 'unset'})`);
+    console.error(`[config] loaded ${CONFIG_PATH} (embed=${emb.mode || 'ollama'}, reflect=${ref.model || 'unset'}, facts=${process.env.REFLECT_FACT_EXTRACTION || 'auto'})`);
   }
 } catch (e: any) {
   console.error('[config] load failed:', e.message);

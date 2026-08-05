@@ -42,17 +42,24 @@ function openDb(readonly = false) {
 
 // ═══ 嵌入配置默认值(Ollama 本地) ═══
 function loadConfig() {
+  let cfg = {};
   if (existsSync(CONFIG_PATH)) {
-    try { return JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')); } catch {}
+    try { cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')); } catch {}
   }
+  // 默认值 + 已有配置合并:老配置缺新字段时仍返回默认,保证前端表单有值
   return {
     embedding: {
       mode: 'ollama',
       ollama_url: 'http://127.0.0.1:11436',
       model: 'yuan-embedding-2.0-zh',
       api_url: '', api_key: '', api_model: '',
+      ...(cfg.embedding || {}),
     },
-    reflect: { llm_url: 'https://api.deepseek.com/v1', api_key: '', model: 'deepseek-chat' },
+    reflect: {
+      llm_url: 'https://api.deepseek.com/v1', api_key: '', model: 'deepseek-chat',
+      factExtraction: 'auto', maxFacts: 15,
+      ...(cfg.reflect || {}),
+    },
   };
 }
 

@@ -3,6 +3,25 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.5.4] — 2026-08-05 facts 写入链路打通(独立反思 agent 提取)
+
+> 对齐 Claude Code 记忆模式:独立小模型 agent(反思)提取 facts,引擎确定性去重落库。选择项全部收进 admin 界面,不硬编码。
+
+### Fixed(三层断链根因)
+- **prompt 未要求 facts**:REFLECT_SYSTEM_PROMPT 原要求"只返回 JSON 数组"(纯 actions)→ 改为要求输出完整对象 `{summary, highlights, facts, insights, actions}`,facts 规则(SPO 定义/置信度/上限)拼入 prompt
+- **parseJsonRobust 只认数组**:`[...]` 数组、`{...}` 对象、markdown 围栏 + 前后废话全部支持;数组自动包成 `{actions:[...]}` 兼容老格式
+- **编排只传 actions**:runAutoReflect/runDeepReflect 现把完整结果传给 applyReflectResult,facts 真正落库;返回新增 `factsInserted`/`factsUpdated` 统计
+
+### Added(admin 界面可选,不硬编码)
+- `reflect.factExtraction`: `auto`(默认,反思时提取 facts) | `off`(只做 actions 整理,不写 facts 表)——off 时 prompt 不含 facts 字段,落库为 0
+- `reflect.maxFacts`: 每轮最多提取条数(默认 15)
+- configLoader 映射 `REFLECT_FACT_EXTRACTION` / `REFLECT_MAX_FACTS`;web/server.mjs 默认值合并 + GET/POST 透传;web/public 配置表单加"事实提取"下拉 + "单轮上限"输入
+- 独立小模型选择:`reflect.model`(已有,如 deepseek-chat)即反思 agent 的模型,与主对话解耦
+
+### Verified(独立复验,非自报)
+- mock LLM e2e:auto → facts 表实际写入 3 条;off → 0 条;mock 收到独立模型名
+- npm run build exit 0;smoke_test 全 PASS;临时文件已清理
+
 ## [v1.5.3] — 2026-08-05 嵌入管线三档可选(EMBED_MODE)
 
 ### Added

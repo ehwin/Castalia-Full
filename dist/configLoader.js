@@ -38,7 +38,11 @@ try {
             process.env.REFLECT_LLM_API_KEY = ref.api_key;
         if (ref.model)
             process.env.REFLECT_LLM_MODEL = ref.model;
-        console.error(`[config] loaded ${CONFIG_PATH} (embed=${emb.mode || 'ollama'}, reflect=${ref.model || 'unset'})`);
+        if (ref.factExtraction)
+            process.env.REFLECT_FACT_EXTRACTION = String(ref.factExtraction);
+        if (ref.maxFacts != null)
+            process.env.REFLECT_MAX_FACTS = String(ref.maxFacts);
+        console.error(`[config] loaded ${CONFIG_PATH} (embed=${emb.mode || 'ollama'}, reflect=${ref.model || 'unset'}, facts=${process.env.REFLECT_FACT_EXTRACTION || 'auto'})`);
     }
 }
 catch (e) {

@@ -184,6 +184,14 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
     <div class="row"><label>API 地址</label><input id="refUrl" placeholder="https://api.deepseek.com/v1"></div>
     <div class="row"><label>API Key</label><input id="refKey" type="password" placeholder="sk-..."></div>
     <div class="row"><label>模型</label><input id="refModel" placeholder="deepseek-chat"></div>
+    <div class="row"><label>事实提取</label>
+      <select id="refFactExtract">
+        <option value="auto">auto(反思时提取 facts)</option>
+        <option value="off">off(只整理 actions)</option>
+      </select>
+    </div>
+    <div class="row"><label>单轮上限</label><input id="refMaxFacts" type="number" min="1" max="100" placeholder="15"></div>
+    <p class="note">事实提取=off 时,反思不提取 SPO 三元组、不写 facts 表;上限控制每轮最多落库几条 facts。保存后重启 MCP server 生效</p>
   </div>
 
   <div class="btn-group" style="margin-bottom:12px">
@@ -397,6 +405,8 @@ async function loadConfig() {
     document.getElementById('refUrl').value = ref.llm_url || 'https://api.deepseek.com/v1';
     document.getElementById('refKey').value = ref.api_key && ref.api_key !== '****' ? ref.api_key : '';
     document.getElementById('refModel').value = ref.model || 'deepseek-chat';
+    document.getElementById('refFactExtract').value = ref.factExtraction || 'auto';
+    document.getElementById('refMaxFacts').value = ref.maxFacts ?? 15;
     toggleEmbedMode();
     document.getElementById('configStatus').innerHTML = '<span class="badge badge-ok">已加载</span>';
   } catch(e) {
@@ -420,6 +430,8 @@ async function saveAllConfig() {
       llm_url: document.getElementById('refUrl').value.trim(),
       api_key: document.getElementById('refKey').value.trim(),
       model: document.getElementById('refModel').value.trim() || 'deepseek-chat',
+      factExtraction: document.getElementById('refFactExtract').value === 'off' ? 'off' : 'auto',
+      maxFacts: parseInt(document.getElementById('refMaxFacts').value, 10) || 15,
     },
   };
   try {

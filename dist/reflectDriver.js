@@ -9,17 +9,66 @@
  *   REFLECT_LLM_URL       default https://api.deepseek.com/v1 (OpenAI-compatible)
  *   REFLECT_LLM_API_KEY   required; skipped when unset
  *   REFLECT_LLM_MODEL     default deepseek-chat
+ *   REFLECT_FACT_EXTRACTION auto | off  (default auto) — off 时 prompt 不要求 facts,也不落 facts
+ *   REFLECT_MAX_FACTS     每轮最多提取 facts 条数 (default 15)
  *   REFLECT_INTERVAL_HOURS auto-reflect interval (hours), 0 = off, default 0
  */
 import { getUnanalyzedConversations, listAllMemories, applyReflectResult } from './reflect.js';
 const LLM_URL = (process.env.REFLECT_LLM_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, '');
 const LLM_API_KEY = process.env.REFLECT_LLM_API_KEY || '';
 const LLM_MODEL = process.env.REFLECT_LLM_MODEL || 'deepseek-chat';
+const FACT_EXTRACTION = (process.env.REFLECT_FACT_EXTRACTION || 'auto').trim().toLowerCase();
+const MAX_FACTS = parseInt(process.env.REFLECT_MAX_FACTS || '15', 10) || 15;
 export function isReflectConfigured() {
     return !!LLM_API_KEY;
 }
-/** Daily-reflection prompt (digest + extraction, model-neutral) */
-export const REFLECT_SYSTEM_PROMPT = `You are a memory organization engine. Each entry has a "date" field (YYYY-MM-DD).
+export function isFactExtractionEnabled() {
+    return FACT_EXTRACTION !== 'off';
+}
+/** facts 提取规则片段(拼进 prompt) */
+function factsRules(maxFacts) {
+    return `【facts 提取规则】
+- subject: "user"（关于用户）/ "agent"（关于AI角色）/ "environment"（关于环境）
+- predicate: 使用这些预定义关系或自定义短语：
+  姓名 / 年龄 / 职业 / 喜好 / 厌恶 / 技能 / 居住地 / 工作单位 / 项目 / 技术栈 / 习惯 / 目标 / 关系
+- object: 事实的值
+- confidence: 0(推测)~1.0(明确陈述)
+- 最多 ${maxFacts} 条
+- 只提取有长期价值、明确陈述的事实；不提取情绪/临时状态`;
+}
+function factsFieldSpec(maxFacts) {
+    return `,
+  "facts": [
+    {"subject":"user","predicate":"姓名","object":"示例用户","confidence":0.95},
+    {"subject":"user","predicate":"职业","object":"程序员","confidence":0.9}
+  ]`;
+}
+/** 输出格式片段：factExtraction=off 时不含 facts 字段 */
+function outputFormatSpec(factExtraction, maxFacts) {
+    const facts = factExtraction === 'off' ? '' : factsFieldSpec(maxFacts);
+    return `══════════════════════
+【输出格式】只返回严格 JSON 对象，不要任何其他文字（代码围栏也不要有）：
+
+{
+  "summary": "自然语言总结（2-4句话）：概括这段时间用户做了什么、聊了什么、情绪状态如何",
+  "highlights": ["关键事件1", "关键事件2"]${facts},
+  "insights": ["关于用户性格/沟通风格/潜在需求的深层观察"],
+  "actions": [
+    {"action":"merge","sourceIds":["同日碎片id"],"newText":"日记约50字","newType":"episodic","newCategory":"conversation","newTags":["标签"],"newImportance":0.5},
+    {"action":"extract","sourceId":"源id","newText":"提取的记忆","newType":"episodic","newCategory":"emotional","newTags":["标签"],"newImportance":0.6,"tier":"standard"}
+  ]
+}
+
+【actions 规则】
+- 仅当确实需要整理已有记忆时才产生 actions
+- 不需要操作时 actions 为空数组 []
+${factExtraction === 'off'
+        ? '【facts】本轮不提取 facts。'
+        : factsRules(maxFacts)}`;
+}
+/** Daily-reflection prompt builder (digest + extraction, model-neutral) */
+export function buildReflectSystemPrompt(factExtraction = FACT_EXTRACTION, maxFacts = MAX_FACTS) {
+    return `You are a memory organization engine. Each entry has a "date" field (YYYY-MM-DD).
 
 ══════════════════════
 【按日期处理】
@@ -68,16 +117,15 @@ export const REFLECT_SYSTEM_PROMPT = `You are a memory organization engine. Each
 
 【任务3：标签】每条结果 1-3 个中文标签
 
-══════════════════════
-动作格式：
-{"action":"merge","sourceIds":["同日碎片id"],"newText":"日记约50字","newType":"episodic","newCategory":"conversation","newTags":["标签"],"newImportance":0.5}
-{"action":"extract","sourceId":"源id","newText":"提取的记忆","newType":"episodic","newCategory":"emotional","newTags":["标签"],"newImportance":0.6,"tier":"standard"}
-
 分类对照：identity=语义身份, preference=偏好, milestone=里程碑, relationship=关系, emotional=情感积淀, knowledge=知识
 
-只返回 JSON 数组。不确定不操作。`;
-/** Deep-calibration prompt (full-memory analysis) */
-export const DEEP_REFLECT_PROMPT = `你是记忆深度校准引擎。对全部记忆执行长时分析。
+${outputFormatSpec(factExtraction, maxFacts)}
+
+不确定不操作。`;
+}
+/** Deep-calibration prompt builder (full-memory analysis) */
+export function buildDeepReflectPrompt(factExtraction = FACT_EXTRACTION, maxFacts = MAX_FACTS) {
+    return `你是记忆深度校准引擎。对全部记忆执行长时分析。
 
 ══════════════════════
 【目标】从所有记忆中提炼长期模式，清理冗余，生成用户画像
@@ -107,13 +155,38 @@ export const DEEP_REFLECT_PROMPT = `你是记忆深度校准引擎。对全部�
 
 ══════════════════════
 锁规则：locked=1 的记忆仅供理解上下文，绝对不修改/删除/合并
-不确定不操作。只返回 JSON 数组。`;
-/** 多策略解析 LLM 返回的 JSON(容忍常见错误) */
+${outputFormatSpec(factExtraction, maxFacts)}
+不确定不操作。`;
+}
+/** 向后兼容：默认配置下的 prompt（外部可能仍引用这两个常量） */
+export const REFLECT_SYSTEM_PROMPT = buildReflectSystemPrompt();
+export const DEEP_REFLECT_PROMPT = buildDeepReflectPrompt();
+/**
+ * 多策略解析 LLM 返回的 JSON(容忍常见错误)
+ * 支持 [...] 数组和 {...} 对象,以及 markdown 代码围栏包裹:
+ *   - 数组 → 包成 { actions: [...] }(老 prompt 的只返回数组格式)
+ *   - 对象 → 原样返回
+ */
 function parseJsonRobust(raw) {
-    const m = raw.match(/\[[\s\S]*\]/);
-    if (!m)
+    let s = (raw || '').trim();
+    // 剥离 markdown 代码围栏
+    const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fence)
+        s = fence[1].trim();
+    // 提取最外层 {...} 或 [...] 块
+    const body = (() => {
+        if (s.startsWith('{') || s.startsWith('['))
+            return s;
+        const obj = s.match(/\{[\s\S]*\}/);
+        if (obj)
+            return obj[0];
+        const arr = s.match(/\[[\s\S]*\]/);
+        if (arr)
+            return arr[0];
         return null;
-    let s = m[0];
+    })();
+    if (!body)
+        return null;
     const strategies = [
         (x) => JSON.parse(x),
         (x) => JSON.parse(x.replace(/,\s*([}\]])/g, '$1')),
@@ -123,13 +196,30 @@ function parseJsonRobust(raw) {
     ];
     for (const fn of strategies) {
         try {
-            const r = fn(s);
+            const r = fn(body);
             if (Array.isArray(r))
+                return { actions: r };
+            if (r && typeof r === 'object')
                 return r;
         }
         catch { /* try next */ }
     }
     return null;
+}
+/** 把 parseJsonRobust 结果规范化为 applyReflectResult 期望的 ReflectResult */
+function normalizeReflectResult(parsed) {
+    const out = { ...parsed };
+    out.actions = Array.isArray(parsed.actions) ? parsed.actions : [];
+    if (FACT_EXTRACTION === 'off') {
+        out.facts = [];
+    }
+    else if (Array.isArray(parsed.facts)) {
+        out.facts = parsed.facts.slice(0, MAX_FACTS);
+    }
+    else {
+        out.facts = [];
+    }
+    return out;
 }
 /** 调用 LLM(OpenAI 兼容,非流式) */
 async function callLlm(systemPrompt, userPrompt) {
@@ -172,17 +262,18 @@ export async function runAutoReflect(charId, limit = 30, project) {
             return { ...base, ok: true, conversationCount: 0, skipped: true, errors: ['无未分析对话'] };
         }
         const userPrompt = `请分析以下对话，输出反思JSON：\n\n${conversations.map(c => c.text).join('\n---\n').substring(0, 30000)}`;
-        const llm = await callLlm(REFLECT_SYSTEM_PROMPT, userPrompt);
+        const llm = await callLlm(buildReflectSystemPrompt(), userPrompt);
         if (!llm)
             return { ...base, errors: ['LLM 调用失败'] };
-        const actions = parseJsonRobust(llm.content || llm.reasoning);
-        if (!actions)
-            return { ...base, errors: ['未找到有效 JSON 动作'] };
-        const r = await applyReflectResult({ actions }, charId, project);
+        const parsed = parseJsonRobust(llm.content || llm.reasoning);
+        if (!parsed)
+            return { ...base, errors: ['未找到有效 JSON 结果'] };
+        const result = normalizeReflectResult(parsed);
+        const r = await applyReflectResult(result, charId, project);
         return {
             ok: true, mode: 'auto', conversationCount: conversations.length,
-            actions: actions.length, applied: r.actionsApplied, errors: r.errors,
-            receipts: r.receipts,
+            actions: (result.actions || []).length, applied: r.actionsApplied, errors: r.errors,
+            receipts: r.receipts, factsInserted: r.factsInserted, factsUpdated: r.factsUpdated,
         };
     }
     catch (e) {
@@ -209,18 +300,19 @@ export async function runDeepReflect(charId, limit = 500, project) {
             locked: m.locked || 0, source: m.source || '',
             date: (m.createdAt || '').slice(0, 10),
         }));
-        const userPrompt = `全部记忆列表：\n\n${JSON.stringify(slim, null, 1)}\n\n请深度分析，返回 JSON 操作数组。`;
-        const llm = await callLlm(DEEP_REFLECT_PROMPT, userPrompt);
+        const userPrompt = `全部记忆列表：\n\n${JSON.stringify(slim, null, 1)}\n\n请深度分析，返回 JSON 操作对象。`;
+        const llm = await callLlm(buildDeepReflectPrompt(), userPrompt);
         if (!llm)
             return { ...base, errors: ['LLM 调用失败'] };
-        const actions = parseJsonRobust(llm.content || llm.reasoning);
-        if (!actions)
-            return { ...base, errors: ['未找到有效 JSON 动作'] };
-        const r = await applyReflectResult({ actions }, charId, project);
+        const parsed = parseJsonRobust(llm.content || llm.reasoning);
+        if (!parsed)
+            return { ...base, errors: ['未找到有效 JSON 结果'] };
+        const result = normalizeReflectResult(parsed);
+        const r = await applyReflectResult(result, charId, project);
         return {
             ok: true, mode: 'deep', memoryCount: memories.length,
-            actions: actions.length, applied: r.actionsApplied, errors: r.errors,
-            receipts: r.receipts,
+            actions: (result.actions || []).length, applied: r.actionsApplied, errors: r.errors,
+            receipts: r.receipts, factsInserted: r.factsInserted, factsUpdated: r.factsUpdated,
         };
     }
     catch (e) {
