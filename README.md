@@ -66,23 +66,32 @@ Or wire it manually:
 python scripts/setup.py hermes
 ```
 
-prints a ready-made `hermes config set mcp_servers '...'` command — run it, then **restart Hermes** (MCP servers are discovered at startup; no hot reload).
+prints a ready-made `hermes mcp add` command — run it (answer `Y` to enable all tools), then **start a new session** (MCP servers are discovered at startup; no hot reload).
 
-Or set it manually with the built-in CLI (no JSON hand-editing):
+Or add it manually with the built-in CLI — note `--args` **must be the last option**:
 
 ```bash
-hermes config set mcp_servers '{"castalia": {"command": "node", "args": ["/absolute/path/to/castalia/dist/index.js"], "env": {"MEMORY_DB_PATH": "/absolute/path/to/castalia/memory.sqlite", "CHAR_ID": "hermes"}, "timeout": 120}}'
+hermes mcp add castalia \
+  --command "C:\Program Files\nodejs\node.exe" \
+  --env "MEMORY_DB_PATH=C:\path\to\castalia\memory.sqlite" \
+        "CHAR_ID=hermes" \
+        "EMBEDDING_MODEL=qwen3-embedding:0.6b" \
+        "OLLAMA_URL=http://127.0.0.1:11434" \
+  --args "C:\path\to\castalia\dist\index.js"
 ```
 
-> **Windows note**: if `node` is not on the system `PATH` (git-bash often appends its own paths), use the absolute path to `node.exe` as `command`, e.g. `"C:\\Program Files\\nodejs\\node.exe"`. Hermes passes only a filtered baseline environment to MCP subprocesses, so it won't inherit your shell's ad-hoc PATH additions.
+> ⚠️ **Do NOT use `hermes config set mcp_servers '{...}'`** — it stores the JSON as a *string*, and the MCP client ignores non-dict values, so the server silently never loads. Always use `hermes mcp add` (writes a real dict under `mcp_servers`).
+>
+> **Windows note**: if `node` is not on the system `PATH` (git-bash often appends its own paths), use the absolute path to `node.exe` as `command`, e.g. `"C:\Program Files\nodejs\node.exe"`. Hermes passes only a filtered baseline environment to MCP subprocesses, so it won't inherit your shell's ad-hoc PATH additions.
 
 ### Verify
 
 ```bash
-hermes config get mcp_servers   # should print the castalia entry
+hermes mcp list      # should show castalia with status ✓ enabled
+hermes mcp test castalia   # connects, expects "Tools discovered: 23"
 ```
 
-After restart, ask Hermes "what memory tools do you have?" or look for `mcp_castalia_*` in the tool list. Then:
+After starting a new session, ask Hermes "what memory tools do you have?" or look for `mcp_castalia_*` in the tool list. Then:
 
 ```
 "记住:我的项目叫 Castalia"

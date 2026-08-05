@@ -115,14 +115,21 @@ def setup_codex():
 
 
 def setup_hermes():
-    # Hermes Agent:config.yaml 的 mcp_servers 段(config set 一条命令搞定)
-    print("  Hermes Agent 使用 `hermes config set` 写入 config.yaml:")
-    payload = json.dumps(mcp_server_config(), ensure_ascii=False)
-    print(f"    hermes config set mcp_servers '{payload}'")
+    # Hermes Agent:用 `hermes mcp add` 写入 config.yaml(注意 --args 必须放最后)
+    cfg = mcp_server_config()["castalia"]
+    envs = " ".join(f'"{k}={v}"' for k, v in cfg.get("env", {}).items())
+    print("  Hermes Agent 使用 `hermes mcp add` 写入 config.yaml:")
+    print(f"    hermes mcp add castalia --command \"{cfg['command']}\"")
+    if envs:
+        print(f"      --env {envs}")
+    print(f"      --args \"{cfg['args'][0]}\"")
     print()
-    print("  写入后重启 Hermes,工具将以 mcp_castalia_* 前缀出现(如 mcp_castalia_memory_search)。")
-    print("  注:Windows 上若 node 不在系统 PATH,请将 command 改为 node 的绝对路径,例如:")
-    print("    hermes config set mcp_servers '{\"castalia\": {\"command\": \"C:\\\\Program Files\\\\nodejs\\\\node.exe\", ...}}'")
+    print("  执行后回答 Y 启用全部工具,然后【新开一个会话】生效(Hermes 无 MCP 热重载)。")
+    print("  验证:hermes mcp list / hermes mcp test castalia(期望 Tools discovered: 23)")
+    print()
+    print("  ⚠️ 不要用 `hermes config set mcp_servers '{...}'` — 会把 JSON 存成字符串,")
+    print("     MCP 客户端要求 dict,字符串会被忽略导致 server 永不加载(2026-08-05 实测踩坑)。")
+    print("  💡 Windows 上若 node 不在系统 PATH(如 git-bash 自带的 node),请把 --command 换成 node.exe 绝对路径。")
 
 
 def setup_json():
