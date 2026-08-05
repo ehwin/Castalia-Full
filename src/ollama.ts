@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Embedding — SQLite 持久化缓存
  *
  * 支持两种嵌入来源(由环境变量 EMBEDDING_API_KEY 区分):
@@ -11,6 +11,7 @@
  * - 暴露 getEmbeddingCached() 供 store.ts 使用
  */
 import { DatabaseManager } from './db.js';
+import { isEmbedEnabled } from './env.js';
 import crypto from 'node:crypto';
 
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';  // Ollama embed server (standard port)
@@ -26,6 +27,11 @@ function hashText(text: string): string {
 }
 
 export async function embed(text: string): Promise<number[]> {
+  // EMBED_MODE=none → 禁用嵌入(调用方应已降级;这里兜底抛错避免静默外部调用)
+  if (!isEmbedEnabled()) {
+    throw new Error('embedding disabled: EMBED_MODE=none');
+  }
+
   // 1. 内存缓存
   const memCached = memCache.get(text);
   if (memCached) return memCached;

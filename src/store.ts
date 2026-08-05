@@ -6,7 +6,7 @@
  */
 import { DatabaseManager, generateId } from './db.js';
 import { embed, getEmbeddingCached } from './ollama.js';
-import { PROJECT_ID, normalizeProject } from './env.js';
+import { PROJECT_ID, normalizeProject, isEmbedEnabled } from './env.js';
 
 let saveCount = 0;
 const CONSOLIDATE_INTERVAL = 50;
@@ -76,12 +76,12 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
     } as MemoryRecord;
     }
 
-    // ═══ 向量去重：仅当不跳过 embed 时执行(仅限同项目) ═══
+    // ═══ 向量去重：仅当不跳过 embed 且嵌入可用时执行(仅限同项目) ═══
   let vector: number[] | null = null;
   let isNearDup = false;
   let dupId: string | null = null;
 
-  if (!skipEmbed) {
+  if (!skipEmbed && isEmbedEnabled()) {
     try {
       vector = await getEmbeddingCached(params.text);
       const floatVec = new Float32Array(vector);
@@ -197,7 +197,7 @@ export async function updateMemory(id: string, updates: Partial<StoreParams>): P
 
   db.prepare(`UPDATE memory SET ${fields.join(', ')} WHERE id = ?`).run(...values);
 
-  if (updates.text !== undefined) {
+  if (updates.text !== undefined && isEmbedEnabled()) {
     const newVec = await getEmbeddingCached(updates.text);
     db.prepare('DELETE FROM vec_memory WHERE rowid = (SELECT rowid FROM memory WHERE id = ?)').run(id);
     const rowInfo = db.prepare('SELECT rowid FROM memory WHERE id = ?').get(id) as any;
@@ -301,6 +301,7 @@ export async function reEmbedMemory(id: string): Promise<boolean> {
  * 扫描 is_active=1 但 vec_memory 中无对应向量的记录
  */
 export async function batchEmbedPending(characterId: string = 'airi', project?: string): Promise<{ embedded: number; errors: string[] }> {
+  if (!isEmbedEnabled()) return { embedded: 0, errors: ['embedding disabled (EMBED_MODE=none)'] };
   const db = DatabaseManager.getInstance();
   const errors: string[] = [];
 
@@ -401,6 +402,7 @@ export async function saveFacts(
   }
 
   // 为新增 / 更新的事实生成 embedding 并写入 vec_facts
+  if (!isEmbedEnabled()) return { inserted, updated };
   try {
     const allFacts = db.prepare(`
       SELECT rowid, subject, predicate, object FROM facts

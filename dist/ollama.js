@@ -11,6 +11,7 @@
  * - 暴露 getEmbeddingCached() 供 store.ts 使用
  */
 import { DatabaseManager } from './db.js';
+import { isEmbedEnabled } from './env.js';
 import crypto from 'node:crypto';
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434'; // Ollama embed server (standard port)
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'yuan-embedding-2.0-zh'; // 1024 dim
@@ -22,6 +23,10 @@ function hashText(text) {
     return crypto.createHash('sha256').update(text).digest('hex');
 }
 export async function embed(text) {
+    // EMBED_MODE=none → 禁用嵌入(调用方应已降级;这里兜底抛错避免静默外部调用)
+    if (!isEmbedEnabled()) {
+        throw new Error('embedding disabled: EMBED_MODE=none');
+    }
     // 1. 内存缓存
     const memCached = memCache.get(text);
     if (memCached)

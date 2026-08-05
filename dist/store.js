@@ -6,7 +6,7 @@
  */
 import { DatabaseManager, generateId } from './db.js';
 import { embed, getEmbeddingCached } from './ollama.js';
-import { normalizeProject } from './env.js';
+import { normalizeProject, isEmbedEnabled } from './env.js';
 let saveCount = 0;
 const CONSOLIDATE_INTERVAL = 50;
 export async function saveMemory(params) {
@@ -34,11 +34,11 @@ export async function saveMemory(params) {
             createdAt: now, updatedAt: now, lastAccessedAt: now, accessedCount: 0,
         };
     }
-    // ═══ 向量去重：仅当不跳过 embed 时执行(仅限同项目) ═══
+    // ═══ 向量去重：仅当不跳过 embed 且嵌入可用时执行(仅限同项目) ═══
     let vector = null;
     let isNearDup = false;
     let dupId = null;
-    if (!skipEmbed) {
+    if (!skipEmbed && isEmbedEnabled()) {
         try {
             vector = await getEmbeddingCached(params.text);
             const floatVec = new Float32Array(vector);
@@ -153,7 +153,7 @@ export async function updateMemory(id, updates) {
     values.push(new Date().toISOString());
     values.push(id);
     db.prepare(`UPDATE memory SET ${fields.join(', ')} WHERE id = ?`).run(...values);
-    if (updates.text !== undefined) {
+    if (updates.text !== undefined && isEmbedEnabled()) {
         const newVec = await getEmbeddingCached(updates.text);
         db.prepare('DELETE FROM vec_memory WHERE rowid = (SELECT rowid FROM memory WHERE id = ?)').run(id);
         const rowInfo = db.prepare('SELECT rowid FROM memory WHERE id = ?').get(id);
@@ -239,6 +239,8 @@ export async function reEmbedMemory(id) {
  * 扫描 is_active=1 但 vec_memory 中无对应向量的记录
  */
 export async function batchEmbedPending(characterId = 'airi', project) {
+    if (!isEmbedEnabled())
+        return { embedded: 0, errors: ['embedding disabled (EMBED_MODE=none)'] };
     const db = DatabaseManager.getInstance();
     const errors = [];
     // 找所有有记忆但无向量的记录(source 为 NULL 也算,修复 NULL != 'x' 恒假的坑)
@@ -308,6 +310,8 @@ export async function saveFacts(facts, sourceMemoryId = null, characterId = 'air
         }
     }
     // 为新增 / 更新的事实生成 embedding 并写入 vec_facts
+    if (!isEmbedEnabled())
+        return { inserted, updated };
     try {
         const allFacts = db.prepare(`
       SELECT rowid, subject, predicate, object FROM facts

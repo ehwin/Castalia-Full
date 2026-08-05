@@ -16,6 +16,17 @@ export function normalizeProject(p) {
     const t = (p ?? '').trim();
     return t.length > 0 ? t : PROJECT_ID;
 }
+/**
+ * 嵌入模式三档可选:
+ *   none   → 纯本地:标签/正则 + 文本回退检索,零外部服务(不调 Ollama/API)
+ *   ollama → 本地嵌入服务(OLLAMA_URL,默认,零 API 成本)
+ *   api    → OpenAI 兼容 API(需 EMBEDDING_API_KEY)
+ * 嵌入服务不可用时向量检索自动回退文本,记忆照常存取。
+ */
+export const EMBED_MODE = (process.env.EMBED_MODE || 'ollama').toLowerCase();
+export function isEmbedEnabled() {
+    return EMBED_MODE !== 'none';
+}
 /** MCP server 自描述名称 */
 export const SERVER_NAME = process.env.MCP_SERVER_NAME || 'castalia';
 /** 服务器版本号 */

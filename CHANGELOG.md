@@ -3,6 +3,19 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.5.3] — 2026-08-05 嵌入管线三档可选(EMBED_MODE)
+
+### Added
+- **`EMBED_MODE` 环境变量**三档可选:
+  - `none` → **纯本地**:标签/正则 + 文本回退检索,零外部服务(不调 Ollama/API,记忆照常存取)
+  - `ollama` → 本地嵌入服务(默认,`OLLAMA_URL`,零 API 成本)
+  - `api` → OpenAI 兼容 API(`EMBEDDING_API_KEY`)
+- `isEmbedEnabled()`(env.ts):全链路统一开关;`embed()` 在 none 模式直接抛错兜底
+- 语义降级:`EMBED_MODE=none` 时搜索跳过向量 KNN 走文本回退、saveMemory 跳过向量去重、batchEmbedPending 返回 disabled、saveFacts 跳过向量回写——**全部实测通过**(嵌入服务指向死端口也不报错)
+
+### Changed
+- search.ts Phase 2 / searchFacts / store.ts 向量路径全部加 `isEmbedEnabled()` 守卫
+
 ## [v1.5.2] — 2026-08-05 memory_save 支持自定义过期时间
 
 ### Added

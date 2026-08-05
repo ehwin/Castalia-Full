@@ -9,7 +9,7 @@
  */
 import { DatabaseManager } from './db.js';
 import { embed } from './ollama.js';
-import { normalizeProject } from './env.js';
+import { normalizeProject, isEmbedEnabled } from './env.js';
 
 // 中性评分权重(可配)
 const WEIGHT_CONSISTENCY = parseFloat(process.env.WEIGHT_CONSISTENCY || '0.65');  // 语义/标签匹配
@@ -97,16 +97,21 @@ export async function searchMemory(options: SearchOptions): Promise<SearchResult
     return tagResults.slice(0, topK);
   }
 
-  // ═══ Phase 2: 标签不够 → 向量 KNN 补充 ═══
+  // ═══ Phase 2: 标签不够 → 向量 KNN 补充(EMBED_MODE=none 时跳过,纯文本回退) ═══
   const existingIds = new Set(tagResults.map(r => r.id));
   let vectorResults: SearchResult[] = [];
 
-  try {
-    const queryVector = await embed(options.query);
-    const floatQuery = new Float32Array(queryVector);
-    vectorResults = vectorKnnSearch(db, options, floatQuery, existingIds, topK, minScore);
-  } catch {
-    // 向量搜索失败 → 文本回退
+  if (isEmbedEnabled()) {
+    try {
+      const queryVector = await embed(options.query);
+      const floatQuery = new Float32Array(queryVector);
+      vectorResults = vectorKnnSearch(db, options, floatQuery, existingIds, topK, minScore);
+    } catch {
+      // 向量搜索失败 → 文本回退
+      vectorResults = textFallbackSearch(db, options, existingIds, topK, minScore);
+    }
+  } else {
+    // 纯本地模式:标签结果不足时直接文本回退
     vectorResults = textFallbackSearch(db, options, existingIds, topK, minScore);
   }
 
@@ -369,6 +374,10 @@ export async function searchFacts(
   const topK = options.topK ?? 10;
   const minConfidence = options.minConfidence ?? 0.3;
   const proj = normalizeProject(options.project);
+
+  if (!isEmbedEnabled()) {
+    return []; // 纯本地模式:facts 无向量可查
+  }
 
   const queryVector = await embed(query);
   const floatQuery = new Float32Array(queryVector);
