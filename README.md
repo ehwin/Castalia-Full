@@ -131,6 +131,7 @@ All read tools return a standard envelope (aligned with Mem0 / Hermes convention
 | `EMBEDDING_MODEL` | `yuan-embedding-2.0-zh` | Embedding model name; must output **1024-dim** |
 | `MEMORY_DB_PATH` | `./memory.sqlite` | SQLite database path (auto-created on first run) |
 | `CHAR_ID` | `default` | Instance/partition ID. Multiple instances can share one DB without cross-talk |
+| `CASTALIA_PROJECT` | `default` | **v1.5** Default project namespace. Memories are scoped per project; every tool accepts an optional `project` arg to switch |
 | `MCP_SERVER_NAME` | `castalia` | MCP server display name |
 | `SEARCH_MIN_SCORE` | `0.15` | Min score threshold for vector search results |
 | `WEIGHT_CONSISTENCY` | `0.65` | Scoring: semantic/tag consistency weight |
@@ -142,7 +143,7 @@ All read tools return a standard envelope (aligned with Mem0 / Hermes convention
 | `REFLECT_INTERVAL_HOURS` | `0` | Auto-reflect interval in hours; `0` = manual only |
 | `MCP_TOOLS` | `agent` | Tool visibility: `agent` (read-only, default) / `harness` / `admin` / `all` / comma list |
 
-## Tools (23, profile-gated)
+## Tools (24, profile-gated)
 
 Tool visibility is controlled by `MCP_TOOLS` (default `agent` — read-only for the main agent):
 
@@ -150,9 +151,22 @@ Tool visibility is controlled by `MCP_TOOLS` (default `agent` — read-only for 
 |---------|-------|---------|
 | **agent** (5) | `memory_search` / `fact_search` / `memory_get` / `memory_recent` / `memory_graph` | Read-only recall for the LLM |
 | **harness** (10) | `memory_save` / `update` / `delete` / `memory_log` / `auto_process` / `conversation_save` / `digest_run` / `reflect_auto` / `reflect_deep` / `reflect_batch_embed` | Writes + pipeline, called by harness/system |
-| **admin** (8) | `memory_list` / `stats_get` / `recent_conversations` / `daily_summary_data` / `reflect_analyze` / `reflect_apply` / `memory_context` / `context_get` | Management, Web Console |
+| **admin** (9) | `memory_list` / `stats_get` / `recent_conversations` / `daily_summary_data` / `reflect_analyze` / `reflect_apply` / `memory_context` / `context_get` / `project_list` | Management, Web Console |
 
 `MCP_TOOLS=all` registers everything (backward compatible).
+
+### Project-scoped memories (v1.5)
+
+Each memory/fact belongs to a **project namespace** (column `project`, default `'default'`). Every read/write tool accepts an optional `project` argument; omit it to use the `CASTALIA_PROJECT` env (or `'default'`).
+
+```json
+{ "text": "前端重构计划", "project": "alpha" }        // write into alpha
+{ "query": "重构", "project": "alpha" }              // search only alpha
+```
+
+- **Isolation**: dedup (exact + vector) is per-project — the same text can exist in different projects. Vector KNN is filtered by project, so project A queries never see project B memories.
+- **Discover**: `project_list` shows all namespaces with counts.
+- **Backward compatible**: existing memories stay in `'default'`; calls without `project` behave exactly as before.
 
 **Search**
 - `memory_search` — tag-first, vector KNN fallback, neutral scoring

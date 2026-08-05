@@ -19,7 +19,7 @@ import { runDigest, getRecentConversations, maybeDigest } from './digest.js';
 import { reflect, getAllMemories, getMemoryGraph, REFLECT_SYSTEM_PROMPT, getUnanalyzedConversations } from './reflect.js';
 import { autoProcess } from './autoProcessor.js';
 import { runAutoReflect, runDeepReflect } from './reflectDriver.js';
-import { CHAR_ID, SERVER_NAME, SERVER_VERSION } from './env.js';
+import { CHAR_ID, PROJECT_ID, SERVER_NAME, SERVER_VERSION } from './env.js';
 console.log = console.error;
 const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 function ok(data) {
@@ -39,7 +39,7 @@ function err(msg, code = 'ERROR') {
 const TOOL_GROUPS = {
     agent: ['memory_search', 'memory_get', 'memory_recent', 'fact_search', 'memory_graph'],
     harness: ['auto_process', 'conversation_save', 'digest_run', 'reflect_auto', 'reflect_deep', 'reflect_batch_embed', 'memory_save', 'memory_update', 'memory_delete', 'memory_log'],
-    admin: ['memory_list', 'stats_get', 'recent_conversations', 'daily_summary_data', 'reflect_analyze', 'reflect_apply', 'memory_context', 'context_get'],
+    admin: ['memory_list', 'stats_get', 'recent_conversations', 'daily_summary_data', 'reflect_analyze', 'reflect_apply', 'memory_context', 'context_get', 'project_list'],
 };
 function resolveTools(input) {
     if (!input || input === 'all')
@@ -84,9 +84,10 @@ register('memory_search', 'agent', 'Search past memories using tag-first then ve
     query: z.string().describe('What to search for'),
     topK: z.number().optional().describe('Max results (default 5)'),
     category: z.string().optional().describe('Filter by category'),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
 }, async (args) => {
     try {
-        const r = await searchMemory({ query: args.query, topK: args.topK ?? 5, profile: 'balanced', category: args.category, characterId: CHAR_ID });
+        const r = await searchMemory({ query: args.query, topK: args.topK ?? 5, profile: 'balanced', category: args.category, characterId: CHAR_ID, project: args.project });
         return ok({
             op: 'search',
             query: args.query,
@@ -112,9 +113,10 @@ register('fact_search', 'agent', 'Search structured facts (subject-predicate-obj
     query: z.string().describe('Query text'),
     subject: z.enum(['user', 'agent', 'environment']).optional(),
     topK: z.number().optional().describe('Max results (default 5)'),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
 }, async (args) => {
     try {
-        const r = await searchFacts(args.query, { subject: args.subject, topK: args.topK ?? 5, minConfidence: 0.3 });
+        const r = await searchFacts(args.query, { subject: args.subject, topK: args.topK ?? 5, minConfidence: 0.3, project: args.project });
         return ok({
             op: 'fact_search',
             query: args.query,
@@ -146,9 +148,10 @@ register('memory_save', 'harness', 'Store a new memory or update existing one by
     source: z.string().optional(),
     subject: z.enum(['user', 'self', 'environment']).optional().default('user'),
     skipEmbed: z.boolean().optional().default(false),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
 }, async (args) => {
     try {
-        const r = await saveMemory({ text: args.text, type: args.type, category: args.category, tags: args.tags, importance: args.importance, tier: args.tier, source: args.source, subject: args.subject, characterId: CHAR_ID, skipEmbed: args.skipEmbed });
+        const r = await saveMemory({ text: args.text, project: args.project, type: args.type, category: args.category, tags: args.tags, importance: args.importance, tier: args.tier, source: args.source, subject: args.subject, characterId: CHAR_ID, skipEmbed: args.skipEmbed });
         return ok({ id: r.id, text: r.text.substring(0, 100), type: r.type, category: r.category });
     }
     catch (e) {
@@ -184,6 +187,7 @@ register('memory_log', 'harness', 'Log a cognitive entry (decision/pattern/mista
     kind: z.enum(['decision', 'pattern', 'mistake']).describe('Kind of cognitive entry'),
     text: z.string().max(2000).describe('The content: decision rationale / pattern insight / mistake lesson'),
     tags: z.array(z.string()).optional().describe('Optional tags'),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
 }, async (args) => {
     try {
         const kind = args.kind;
@@ -194,7 +198,7 @@ register('memory_log', 'harness', 'Log a cognitive entry (decision/pattern/mista
         };
         const conf = map[kind];
         const r = await saveMemory({
-            text: args.text, type: conf.type, category: conf.category,
+            text: args.text, project: args.project, type: conf.type, category: conf.category,
             tags: conf.tags, importance: conf.importance, tier: conf.tier,
             source: 'agent_log', characterId: CHAR_ID,
         });
@@ -212,9 +216,10 @@ register('auto_process', 'harness', '[Internal] Process a conversation turn: sav
     assistantMessage: z.string(),
     moodValue: z.number().optional(),
     moodReason: z.string().optional(),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
 }, async (args) => {
     try {
-        const r = await autoProcess({ userMessage: args.userMessage, assistantMessage: args.assistantMessage, characterId: CHAR_ID, moodValue: args.moodValue, moodReason: args.moodReason });
+        const r = await autoProcess({ userMessage: args.userMessage, assistantMessage: args.assistantMessage, characterId: CHAR_ID, moodValue: args.moodValue, moodReason: args.moodReason, project: args.project });
         // Trigger event-driven digest
         maybeDigest(CHAR_ID)?.catch(() => { });
         return ok(r);
@@ -237,9 +242,10 @@ register('conversation_save', 'harness', '[Internal] Save a raw conversation tur
     assistantMessage: z.string(),
     moodValue: z.number().optional(),
     moodReason: z.string().optional(),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
 }, async (args) => {
     try {
-        const r = await saveConversationTurn(args.userMessage, args.assistantMessage, CHAR_ID, args.moodValue, args.moodReason);
+        const r = await saveConversationTurn(args.userMessage, args.assistantMessage, CHAR_ID, args.moodValue, args.moodReason, args.project);
         return ok(r);
     }
     catch (e) {
@@ -249,11 +255,11 @@ register('conversation_save', 'harness', '[Internal] Save a raw conversation tur
 // ═══════════════════════════════════════════════════════════════════
 // 上下文/状态工具
 // ═══════════════════════════════════════════════════════════════════
-register('context_get', 'admin', 'Get memory context summary: recent memories + stats, for prompt injection.', {}, async () => {
+register('context_get', 'admin', 'Get memory context summary: recent memories + stats, for prompt injection.', { project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")') }, async (args) => {
     try {
         const db = DatabaseManager.getInstance();
-        const recent = getRecentMemories(CHAR_ID, 5, 24);
-        const stats = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1').get();
+        const recent = getRecentMemories(CHAR_ID, 5, 24, args.project);
+        const stats = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1 AND project=?').get(args.project || PROJECT_ID);
         return ok({
             recentMemories: recent.map(m => ({ text: m.text, category: m.category, importance: m.importance, createdAt: m.createdAt })),
             stats: { total: stats.c },
@@ -273,35 +279,37 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
     recentLimit: z.number().optional().describe('Max recent memories (default 5)'),
     relatedLimit: z.number().optional().describe('Max related memories (default 5)'),
     asText: z.boolean().optional().describe('Return ready-to-inject prompt text (default true)'),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
 }, async (args) => {
     try {
         const db = DatabaseManager.getInstance();
         const hoursBack = args.hoursBack ?? 48;
         const recentLimit = args.recentLimit ?? 5;
         const relatedLimit = args.relatedLimit ?? 5;
+        const proj = args.project || PROJECT_ID;
         // 1. 近期重要记忆
-        const recent = getRecentMemories(CHAR_ID, recentLimit, hoursBack);
+        const recent = getRecentMemories(CHAR_ID, recentLimit, hoursBack, proj);
         // 2. 与当前任务相关的记忆(向量搜索)
         let related = [];
         if (args.query) {
-            const r = await searchMemory({ query: args.query, topK: relatedLimit, profile: 'balanced', characterId: CHAR_ID });
+            const r = await searchMemory({ query: args.query, topK: relatedLimit, profile: 'balanced', characterId: CHAR_ID, project: proj });
             related = r.map(m => ({ text: m.text, category: m.category, importance: m.importance, score: m.score, createdAt: m.createdAt }));
         }
         // 3. 认知记录(决策/错误/模式)
         const cognitiveCats = ['decision', 'mistake'];
         const cognitives = db.prepare(`
         SELECT text, category, importance, created_at FROM memory
-        WHERE is_active = 1 AND character_id = ?
+        WHERE is_active = 1 AND character_id = ? AND project = ?
           AND (category IN ('decision','mistake') OR tags LIKE '%pattern%')
         ORDER BY created_at DESC LIMIT 9
-      `).all(CHAR_ID);
+      `).all(CHAR_ID, proj);
         // 4. 关键事实(高置信度)
         const facts = db.prepare(`
         SELECT subject, predicate, object, confidence FROM facts
-        WHERE is_active = 1 AND confidence >= 0.7
+        WHERE is_active = 1 AND project = ? AND confidence >= 0.7
         ORDER BY confidence DESC, created_at DESC LIMIT 5
-      `).all();
-        const stats = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1').get();
+      `).all(proj);
+        const stats = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1 AND project=?').get(proj);
         // 5. Ground Truth 提示词组装
         const sections = [];
         sections.push(`【当前记忆上下文】总记忆 ${stats.c} 条。请优先参考以下记忆,它们是之前会话沉淀的事实与经验:`);
@@ -346,16 +354,18 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
         return err(e.message);
     }
 });
-register('stats_get', 'admin', 'Get memory system statistics: total count, by category, by source.', {}, async () => {
+register('stats_get', 'admin', 'Get memory system statistics: total count, by category, by source.', { project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")') }, async (args) => {
     try {
         const db = DatabaseManager.getInstance();
-        const total = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=?').get(CHAR_ID);
+        const proj = args.project || PROJECT_ID;
+        const total = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? AND project=?').get(CHAR_ID, proj);
         return ok({
             op: 'stats',
             total: total.c,
-            byCategory: db.prepare('SELECT category,COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? GROUP BY category').all(CHAR_ID),
-            bySource: db.prepare('SELECT source,COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? GROUP BY source').all(CHAR_ID),
+            byCategory: db.prepare('SELECT category,COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? AND project=? GROUP BY category').all(CHAR_ID, proj),
+            bySource: db.prepare('SELECT source,COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? AND project=? GROUP BY source').all(CHAR_ID, proj),
             characterId: CHAR_ID,
+            project: proj,
         });
     }
     catch (e) {
@@ -369,9 +379,10 @@ register('memory_list', 'admin', 'List active memories, optionally filtered. Adm
     limit: z.number().max(50).optional().default(50).describe('Max results (hard cap 50)'),
     category: z.string().optional(),
     source: z.string().optional(),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
 }, async (args) => {
     try {
-        const memories = getAllMemories(CHAR_ID, args.limit);
+        const memories = getAllMemories(CHAR_ID, args.limit, args.project);
         let filtered = memories;
         if (args.category)
             filtered = filtered.filter((m) => m.category === args.category);
@@ -432,9 +443,10 @@ register('memory_get', 'agent', 'Get one memory by ID with full text. Use to exp
         return err(e.message, 'GET_FAILED');
     }
 });
-register('memory_graph', 'agent', 'Get the memory relationship graph. Neighborhood only: nodes capped by limit (default 50), edges kept only between returned nodes.', { limit: z.number().max(200).optional().default(50).describe('Max nodes (default 50)') }, async (args) => {
+register('memory_graph', 'agent', 'Get the memory relationship graph. Neighborhood only: nodes capped by limit (default 50), edges kept only between returned nodes.', { limit: z.number().max(200).optional().default(50).describe('Max nodes (default 50)'),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")') }, async (args) => {
     try {
-        const g = getMemoryGraph(CHAR_ID);
+        const g = getMemoryGraph(CHAR_ID, args.project);
         const limit = args.limit ?? 50;
         const nodes = g.nodes.slice(0, limit);
         const nodeIds = new Set(nodes.map((n) => n.id));
@@ -455,9 +467,10 @@ register('memory_graph', 'agent', 'Get the memory relationship graph. Neighborho
 register('memory_recent', 'agent', 'Get recent important memories (no vector search, just time+importance).', {
     limit: z.number().optional().default(5),
     hoursBack: z.number().optional().default(24),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
 }, async (args) => {
     try {
-        const r = getRecentMemories(CHAR_ID, args.limit, args.hoursBack);
+        const r = getRecentMemories(CHAR_ID, args.limit, args.hoursBack, args.project);
         return ok({
             op: 'recent',
             count: r.length,
@@ -479,9 +492,10 @@ register('memory_recent', 'agent', 'Get recent important memories (no vector sea
 register('recent_conversations', 'admin', 'Get recent conversation log entries.', {
     hoursBack: z.number().optional().default(24),
     limit: z.number().optional().default(50),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
 }, async (args) => {
     try {
-        const r = getRecentConversations(CHAR_ID, args.hoursBack, args.limit);
+        const r = getRecentConversations(CHAR_ID, args.hoursBack, args.limit, args.project);
         return ok({ count: r.length, results: r });
     }
     catch (e) {
@@ -491,9 +505,10 @@ register('recent_conversations', 'admin', 'Get recent conversation log entries.'
 // ═══════════════════════════════════════════════════════════════════
 // 反思工具
 // ═══════════════════════════════════════════════════════════════════
-register('reflect_analyze', 'admin', 'Get unanalyzed conversations bundled with system prompt for a big LLM to perform reflection.', { limit: z.number().optional().default(30) }, async (args) => {
+register('reflect_analyze', 'admin', 'Get unanalyzed conversations bundled with system prompt for a big LLM to perform reflection.', { limit: z.number().optional().default(30),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")') }, async (args) => {
     try {
-        const conversations = getUnanalyzedConversations(CHAR_ID, undefined, args.limit ?? 30);
+        const conversations = getUnanalyzedConversations(CHAR_ID, undefined, args.limit ?? 30, args.project);
         const prompt = conversations.map((c) => c.text).join('\n---\n');
         return ok({
             conversationCount: conversations.length,
@@ -509,6 +524,7 @@ register('reflect_analyze', 'admin', 'Get unanalyzed conversations bundled with 
 register('reflect_apply', 'admin', 'Apply reflection results (merge, extract, reclassify, delete actions).', {
     action: z.enum(['apply', 'preview']).optional().default('apply'),
     actions: z.string().describe('JSON array of reflection actions'),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
 }, async (args) => {
     try {
         let parsed;
@@ -519,7 +535,7 @@ register('reflect_apply', 'admin', 'Apply reflection results (merge, extract, re
             const m = args.actions.match(/```(?:json)?\s*([\s\S]*?)```/);
             parsed = m ? JSON.parse(m[1]) : JSON.parse(args.actions);
         }
-        const r = await reflect(args.action, { actions: parsed });
+        const r = await reflect(args.action, { actions: parsed, project: args.project });
         return ok(r);
     }
     catch (e) {
@@ -529,20 +545,22 @@ register('reflect_apply', 'admin', 'Apply reflection results (merge, extract, re
 register('reflect_auto', 'harness', 'Run automatic reflection: feed unanalyzed conversations (or ALL memories when mode=deep) to the configured LLM, apply extracted actions. Requires REFLECT_LLM_API_KEY.', {
     limit: z.number().optional().default(30),
     mode: z.enum(['daily', 'deep']).optional().default('daily').describe('daily=unanalyzed conversations; deep=full calibration'),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
 }, async (args) => {
     try {
         const r = args.mode === 'deep'
-            ? await runDeepReflect(CHAR_ID, args.limit ?? 500)
-            : await runAutoReflect(CHAR_ID, args.limit ?? 30);
+            ? await runDeepReflect(CHAR_ID, args.limit ?? 500, args.project)
+            : await runAutoReflect(CHAR_ID, args.limit ?? 30, args.project);
         return ok({ op: args.mode === 'deep' ? 'reflect_deep' : 'reflect_auto', ...r });
     }
     catch (e) {
         return err(e.message, 'REFLECT_FAILED');
     }
 });
-register('reflect_deep', 'harness', '[Legacy] Deep calibration. Use reflect_auto(mode="deep") instead.', { limit: z.number().optional().default(500) }, async (args) => {
+register('reflect_deep', 'harness', '[Legacy] Deep calibration. Use reflect_auto(mode="deep") instead.', { limit: z.number().optional().default(500),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")') }, async (args) => {
     try {
-        const r = await runDeepReflect(CHAR_ID, args.limit ?? 500);
+        const r = await runDeepReflect(CHAR_ID, args.limit ?? 500, args.project);
         return ok({ op: 'reflect_deep', ...r });
     }
     catch (e) {
@@ -561,16 +579,51 @@ register('reflect_batch_embed', 'harness', '[Internal] Batch embed all pending (
 // ═══════════════════════════════════════════════════════════════════
 // 每日摘要工具
 // ═══════════════════════════════════════════════════════════════════
-register('daily_summary_data', 'admin', 'Get conversation and auto-process data for the past N hours.', { hoursBack: z.number().optional().default(24) }, async (args) => {
+register('daily_summary_data', 'admin', 'Get conversation and auto-process data for the past N hours.', { hoursBack: z.number().optional().default(24),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")') }, async (args) => {
     try {
         const db = DatabaseManager.getInstance();
         const since = new Date(Date.now() - (args.hoursBack || 24) * 3600000).toISOString();
-        const convs = db.prepare("SELECT text FROM memory WHERE is_active=1 AND source='conversation_log' AND created_at>? ORDER BY created_at ASC LIMIT 100").all(since).map((r) => r.text);
-        const aps = db.prepare("SELECT text FROM memory WHERE is_active=1 AND source='auto_process' AND created_at>? ORDER BY created_at ASC LIMIT 50").all(since).map((r) => r.text);
+        const proj = args.project || PROJECT_ID;
+        const convs = db.prepare("SELECT text FROM memory WHERE is_active=1 AND source='conversation_log' AND project=? AND created_at>? ORDER BY created_at ASC LIMIT 100").all(proj, since).map((r) => r.text);
+        const aps = db.prepare("SELECT text FROM memory WHERE is_active=1 AND source='auto_process' AND project=? AND created_at>? ORDER BY created_at ASC LIMIT 50").all(proj, since).map((r) => r.text);
         return ok({ conversations: [...convs, ...aps] });
     }
     catch (e) {
         return err(e.message);
+    }
+});
+register('project_list', 'admin', 'List all project namespaces and their memory/fact counts. Use to discover which projects have memories (e.g. after switching working directories).', {}, async () => {
+    try {
+        const db = DatabaseManager.getInstance();
+        const mem = db.prepare(`
+        SELECT project, COUNT(*) as c FROM memory
+        WHERE is_active = 1 GROUP BY project ORDER BY c DESC
+      `).all();
+        const facts = db.prepare(`
+        SELECT project, COUNT(*) as c FROM facts
+        WHERE is_active = 1 GROUP BY project ORDER BY c DESC
+      `).all();
+        const byId = {};
+        for (const r of mem)
+            byId[r.project || 'default'] = { project: r.project || 'default', memories: r.c, facts: 0 };
+        for (const r of facts) {
+            const key = r.project || 'default';
+            if (!byId[key])
+                byId[key] = { project: key, memories: 0, facts: 0 };
+            byId[key].facts = r.c;
+        }
+        const projects = Object.values(byId).sort((a, b) => (b.memories + b.facts) - (a.memories + a.facts));
+        return ok({
+            op: 'project_list',
+            count: projects.length,
+            current: PROJECT_ID,
+            projects,
+            hint: '读写工具传 project 参数即切换到该项目的记忆空间;不传则用当前项目(' + PROJECT_ID + ')',
+        });
+    }
+    catch (e) {
+        return err(e.message, 'PROJECT_LIST_FAILED');
     }
 });
 // ═══════════════════════════════════════════════════════════════════

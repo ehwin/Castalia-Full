@@ -6,6 +6,8 @@
  */
 /** 角色/实例 ID:用于数据分区。默认 'default'(通用场景) */
 export const CHAR_ID = process.env.CHAR_ID || 'default';
+/** 当前项目 ID(对齐 Hermes Project 概念):记忆按项目隔离。默认 'default' 保持向后兼容 */
+export const PROJECT_ID = process.env.CASTALIA_PROJECT || 'default';
 /** MCP server 自描述名称 */
 export const SERVER_NAME = process.env.MCP_SERVER_NAME || 'castalia';
 /** 服务器版本号 */

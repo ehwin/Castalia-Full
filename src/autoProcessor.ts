@@ -7,6 +7,7 @@
 
 import { saveConversationTurn } from './store.js';
 import { maybeDigest } from './digest.js';
+import { PROJECT_ID } from './env.js';
 
 export async function autoProcess(args: {
   userMessage: string;
@@ -14,8 +15,10 @@ export async function autoProcess(args: {
   moodValue?: number;
   moodReason?: string;
   characterId?: string;
+  project?: string;
 }): Promise<any> {
   const cid = args.characterId || 'default';
+  const proj = args.project || PROJECT_ID;
   const results: any = {
     success: true,
     conversationSaved: false,
@@ -23,7 +26,7 @@ export async function autoProcess(args: {
   };
 
   try {
-    await saveConversationTurn(args.userMessage, args.assistantMessage, cid, args.moodValue, args.moodReason);
+    await saveConversationTurn(args.userMessage, args.assistantMessage, cid, args.moodValue, args.moodReason, proj);
     results.conversationSaved = true;
     results.details.push('conversation saved');
   } catch (e: any) {

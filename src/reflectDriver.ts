@@ -179,13 +179,13 @@ export interface ReflectRunResult {
 }
 
 /** 日常反思:未分析对话 → 日记浓缩/提取 */
-export async function runAutoReflect(charId: string, limit = 30): Promise<ReflectRunResult> {
+export async function runAutoReflect(charId: string, limit = 30, project?: string): Promise<ReflectRunResult> {
   const base: ReflectRunResult = { ok: false, mode: 'auto', actions: 0, applied: 0, errors: [] };
   if (!isReflectConfigured()) {
     return { ...base, skipped: true, errors: ['REFLECT_LLM_API_KEY 未配置,跳过反思'] };
   }
   try {
-    const conversations = getUnanalyzedConversations(charId, undefined, limit);
+    const conversations = getUnanalyzedConversations(charId, undefined, limit, project);
     if (conversations.length === 0) {
       return { ...base, ok: true, conversationCount: 0, skipped: true, errors: ['无未分析对话'] };
     }
@@ -194,7 +194,7 @@ export async function runAutoReflect(charId: string, limit = 30): Promise<Reflec
     if (!llm) return { ...base, errors: ['LLM 调用失败'] };
     const actions = parseJsonRobust(llm.content || llm.reasoning);
     if (!actions) return { ...base, errors: ['未找到有效 JSON 动作'] };
-    const r = await applyReflectResult({ actions } as any, charId);
+    const r = await applyReflectResult({ actions } as any, charId, project);
     return {
       ok: true, mode: 'auto', conversationCount: conversations.length,
       actions: actions.length, applied: r.actionsApplied, errors: r.errors,
@@ -206,13 +206,13 @@ export async function runAutoReflect(charId: string, limit = 30): Promise<Reflec
 }
 
 /** 深度校准:全量记忆 → 去重/画像/图谱 */
-export async function runDeepReflect(charId: string, limit = 500): Promise<ReflectRunResult> {
+export async function runDeepReflect(charId: string, limit = 500, project?: string): Promise<ReflectRunResult> {
   const base: ReflectRunResult = { ok: false, mode: 'deep', actions: 0, applied: 0, errors: [] };
   if (!isReflectConfigured()) {
     return { ...base, skipped: true, errors: ['REFLECT_LLM_API_KEY 未配置,跳过反思'] };
   }
   try {
-    const memories = listAllMemories(charId, limit) as any[];
+    const memories = listAllMemories(charId, limit, project) as any[];
     if (memories.length === 0) {
       return { ...base, ok: true, memoryCount: 0, skipped: true, errors: ['库为空'] };
     }
@@ -230,7 +230,7 @@ export async function runDeepReflect(charId: string, limit = 500): Promise<Refle
     if (!llm) return { ...base, errors: ['LLM 调用失败'] };
     const actions = parseJsonRobust(llm.content || llm.reasoning);
     if (!actions) return { ...base, errors: ['未找到有效 JSON 动作'] };
-    const r = await applyReflectResult({ actions } as any, charId);
+    const r = await applyReflectResult({ actions } as any, charId, project);
     return {
       ok: true, mode: 'deep', memoryCount: memories.length,
       actions: actions.length, applied: r.actionsApplied, errors: r.errors,

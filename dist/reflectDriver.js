@@ -161,13 +161,13 @@ async function callLlm(systemPrompt, userPrompt) {
     }
 }
 /** 日常反思:未分析对话 → 日记浓缩/提取 */
-export async function runAutoReflect(charId, limit = 30) {
+export async function runAutoReflect(charId, limit = 30, project) {
     const base = { ok: false, mode: 'auto', actions: 0, applied: 0, errors: [] };
     if (!isReflectConfigured()) {
         return { ...base, skipped: true, errors: ['REFLECT_LLM_API_KEY 未配置,跳过反思'] };
     }
     try {
-        const conversations = getUnanalyzedConversations(charId, undefined, limit);
+        const conversations = getUnanalyzedConversations(charId, undefined, limit, project);
         if (conversations.length === 0) {
             return { ...base, ok: true, conversationCount: 0, skipped: true, errors: ['无未分析对话'] };
         }
@@ -178,7 +178,7 @@ export async function runAutoReflect(charId, limit = 30) {
         const actions = parseJsonRobust(llm.content || llm.reasoning);
         if (!actions)
             return { ...base, errors: ['未找到有效 JSON 动作'] };
-        const r = await applyReflectResult({ actions }, charId);
+        const r = await applyReflectResult({ actions }, charId, project);
         return {
             ok: true, mode: 'auto', conversationCount: conversations.length,
             actions: actions.length, applied: r.actionsApplied, errors: r.errors,
@@ -190,13 +190,13 @@ export async function runAutoReflect(charId, limit = 30) {
     }
 }
 /** 深度校准:全量记忆 → 去重/画像/图谱 */
-export async function runDeepReflect(charId, limit = 500) {
+export async function runDeepReflect(charId, limit = 500, project) {
     const base = { ok: false, mode: 'deep', actions: 0, applied: 0, errors: [] };
     if (!isReflectConfigured()) {
         return { ...base, skipped: true, errors: ['REFLECT_LLM_API_KEY 未配置,跳过反思'] };
     }
     try {
-        const memories = listAllMemories(charId, limit);
+        const memories = listAllMemories(charId, limit, project);
         if (memories.length === 0) {
             return { ...base, ok: true, memoryCount: 0, skipped: true, errors: ['库为空'] };
         }
@@ -216,7 +216,7 @@ export async function runDeepReflect(charId, limit = 500) {
         const actions = parseJsonRobust(llm.content || llm.reasoning);
         if (!actions)
             return { ...base, errors: ['未找到有效 JSON 动作'] };
-        const r = await applyReflectResult({ actions }, charId);
+        const r = await applyReflectResult({ actions }, charId, project);
         return {
             ok: true, mode: 'deep', memoryCount: memories.length,
             actions: actions.length, applied: r.actionsApplied, errors: r.errors,

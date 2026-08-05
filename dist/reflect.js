@@ -14,21 +14,23 @@
  */
 import { DatabaseManager } from './db.js';
 import { saveFacts, saveMemory, batchEmbedPending } from './store.js';
+import { PROJECT_ID } from './env.js';
 import fs from 'node:fs';
 import path from 'node:path';
 /**
  * 获取所有记忆（供大模型分析）
  */
-export function listAllMemories(characterId = 'airi', limit = 200) {
+export function listAllMemories(characterId = 'airi', limit = 200, project) {
     const db = DatabaseManager.getInstance();
+    const proj = project || PROJECT_ID;
     const rows = db.prepare(`
     SELECT id, text, type, category, tags, importance,
            subject, source, tier, expires_at, created_at, last_accessed_at, accessed_count, reference_count, locked
     FROM memory
-    WHERE is_active = 1 AND character_id = ?
+    WHERE is_active = 1 AND character_id = ? AND project = ?
     ORDER BY importance DESC, created_at DESC
     LIMIT ?
-  `).all(characterId, limit);
+  `).all(characterId, proj, limit);
     return rows.map(r => {
         let tags = [];
         try {
@@ -74,7 +76,7 @@ function safeTags(raw) {
     const filtered = raw.filter(t => typeof t === 'string' && t.length > 0 && t.length < 50);
     return filtered.length > 0 ? filtered : null;
 }
-export async function applyReflectActions(actions, characterId = 'airi') {
+export async function applyReflectActions(actions, characterId = 'airi', project) {
     const db = DatabaseManager.getInstance();
     const result = { applied: 0, errors: [], details: [], receipts: [] };
     for (const action of actions) {
@@ -124,6 +126,7 @@ export async function applyReflectActions(actions, characterId = 'airi') {
                         tags: action.newTags || [],
                         importance: action.newImportance || 0.7,
                         characterId,
+                        project,
                         source: 'reflect_merge',
                     });
                     if (receipt.status === 'failed') {
@@ -160,6 +163,7 @@ export async function applyReflectActions(actions, characterId = 'airi') {
                             tags: frag.tags || [],
                             importance: frag.importance || 0.5,
                             characterId,
+                            project,
                             source: 'reflect_split',
                         });
                     }
@@ -271,6 +275,7 @@ export async function applyReflectActions(actions, characterId = 'airi') {
                         importance,
                         tier,
                         characterId,
+                        project,
                         source: 'reflect_extract',
                     });
                     // 给源记忆 +reference_count（v5.1: LIKE 匹配短ID）
@@ -371,20 +376,26 @@ export async function applyReflectActions(actions, characterId = 'airi') {
 // 导出别名 — 供 proxy.py / _memory_engine.mjs 调用
 // ═══════════════════════════════════════════════════════════
 /** 获取所有记忆（别名，供外部调用） */
-export function getAllMemories(characterId = 'airi', limit = 200) {
-    return listAllMemories(characterId, limit);
+export function getAllMemories(characterId = 'airi', limit = 200, project) {
+    return listAllMemories(characterId, limit, project);
 }
 /** 获取记忆关联图 */
-export function getMemoryGraph(characterId = 'airi') {
+export function getMemoryGraph(characterId = 'airi', project) {
     const db = DatabaseManager.getInstance();
-    const nodes = listAllMemories(characterId, 500);
-    const edgeRows = db.prepare(`
-    SELECT e.id, e.source_id, e.target_id, e.relation_type,
-           m1.text as source_text, m2.text as target_text
-    FROM edges e
-    LEFT JOIN memory m1 ON e.source_id = m1.id
-    LEFT JOIN memory m2 ON e.target_id = m2.id
-  `).all();
+    const proj = project || PROJECT_ID;
+    const nodes = listAllMemories(characterId, 500, proj);
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    let edgeRows = [];
+    if (nodeIds.size > 0) {
+        edgeRows = db.prepare(`
+      SELECT e.id, e.source_id, e.target_id, e.relation_type,
+             m1.text as source_text, m2.text as target_text
+      FROM edges e
+      LEFT JOIN memory m1 ON e.source_id = m1.id
+      LEFT JOIN memory m2 ON e.target_id = m2.id
+      WHERE e.source_id IN (${[...nodeIds].map(() => '?').join(',')})
+    `).all(...nodeIds);
+    }
     const edges = edgeRows.map(r => ({
         id: r.id,
         sourceId: r.source_id,
@@ -437,15 +448,16 @@ export const REFLECT_SYSTEM_PROMPT = `你是记忆反思引擎。你的任务是
  * 获取待反思的未分析对话
  */
 export function getUnanalyzedConversations(characterId = 'airi', since, // ISO datetime，不传则取上次 reflect 之后
-limit = 30) {
+limit = 30, project) {
     const db = DatabaseManager.getInstance();
+    const proj = project || PROJECT_ID;
     // 找到上次反思时间（最近一次 source='reflect_summary' 的创建时间）
     if (!since) {
         const lastReflect = db.prepare(`
       SELECT created_at FROM memory
-      WHERE source = 'reflect_summary' AND character_id = ?
+      WHERE source = 'reflect_summary' AND character_id = ? AND project = ?
       ORDER BY created_at DESC LIMIT 1
-    `).get(characterId);
+    `).get(characterId, proj);
         since = lastReflect?.created_at || new Date(0).toISOString();
     }
     return db.prepare(`
@@ -454,10 +466,11 @@ limit = 30) {
     WHERE is_active = 1
       AND source = 'conversation_log'
       AND character_id = ?
+      AND project = ?
       AND created_at > ?
     ORDER BY created_at ASC
     LIMIT ?
-  `).all(characterId, since, limit);
+  `).all(characterId, proj, since, limit);
 }
 /**
  * 应用大模型反思结果
@@ -468,7 +481,7 @@ limit = 30) {
  *   3. insights → 存入 memory（source='reflect_insight'）
  *   4. actions → 调用 applyReflectActions()
  */
-export async function applyReflectResult(result, characterId = 'airi') {
+export async function applyReflectResult(result, characterId = 'airi', project) {
     const out = {
         summaryId: null,
         factsInserted: 0,
@@ -489,6 +502,7 @@ export async function applyReflectResult(result, characterId = 'airi') {
                 tags: result.highlights || [],
                 importance: 0.7,
                 characterId,
+                project,
                 source: 'reflect_summary',
                 subject: 'user',
             });
@@ -501,7 +515,7 @@ export async function applyReflectResult(result, characterId = 'airi') {
     // 2. 存 facts（自动去重，confidence 取 MAX）
     if (result.facts && result.facts.length > 0) {
         try {
-            const fr = await saveFacts(result.facts, out.summaryId, characterId);
+            const fr = await saveFacts(result.facts, out.summaryId, characterId, project);
             out.factsInserted = fr.inserted;
             out.factsUpdated = fr.updated;
         }
@@ -519,6 +533,7 @@ export async function applyReflectResult(result, characterId = 'airi') {
                     category: 'knowledge',
                     importance: 0.6,
                     characterId,
+                    project,
                     source: 'reflect_insight',
                     subject: 'user',
                 });
@@ -532,7 +547,7 @@ export async function applyReflectResult(result, characterId = 'airi') {
     // 4. 应用记忆整理 actions + 逐动作回执落盘
     if (result.actions && result.actions.length > 0) {
         try {
-            const ar = await applyReflectActions(result.actions, characterId);
+            const ar = await applyReflectActions(result.actions, characterId, project);
             out.actionsApplied = ar.applied;
             out.errors.push(...ar.errors);
             out.receipts = ar.receipts;
@@ -566,10 +581,10 @@ export async function applyReflectResult(result, characterId = 'airi') {
 export async function reflect(action, params = {}) {
     switch (action) {
         case 'list':
-            return listAllMemories(params.characterId || 'airi', params.limit || 200);
+            return listAllMemories(params.characterId || 'airi', params.limit || 200, params.project);
         case 'unanalyzed': {
             // 获取待反思的未分析对话 + prompt
-            const conversations = getUnanalyzedConversations(params.characterId || 'airi', params.since, params.limit || 30);
+            const conversations = getUnanalyzedConversations(params.characterId || 'airi', params.since, params.limit || 30, params.project);
             const prompt = conversations.map(c => c.text).join('\n---\n');
             return {
                 conversationCount: conversations.length,
@@ -582,7 +597,7 @@ export async function reflect(action, params = {}) {
             if (!params.actions || params.actions.length === 0) {
                 return { applied: 0, errors: ['no actions to apply'] };
             }
-            return applyReflectResult(params, params.characterId || 'airi');
+            return applyReflectResult(params, params.characterId || 'airi', params.project);
         }
         case 'merge':
         case 'split':
@@ -591,12 +606,12 @@ export async function reflect(action, params = {}) {
         case 'delete':
         case 'boost':
         case 'decay':
-            return applyReflectActions([{ action, ...params }]);
+            return applyReflectActions([{ action, ...params }], params.characterId || 'airi', params.project);
         case 'batch':
             if (!Array.isArray(params.actions)) {
                 return { error: 'batch action requires "actions" array' };
             }
-            return applyReflectActions(params.actions);
+            return applyReflectActions(params.actions, params.characterId || 'airi', params.project);
         case 'auto': {
             const allMemories = listAllMemories(params.characterId || 'airi', params.limit || 200);
             const graph = getMemoryGraph(params.characterId || 'airi');

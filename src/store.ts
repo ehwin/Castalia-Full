@@ -6,12 +6,14 @@
  */
 import { DatabaseManager, generateId } from './db.js';
 import { embed, getEmbeddingCached } from './ollama.js';
+import { PROJECT_ID } from './env.js';
 
 let saveCount = 0;
 const CONSOLIDATE_INTERVAL = 50;
 
 export interface StoreParams {
   text: string;
+  project?: string;  // v1.5: 项目隔离 — 默认 PROJECT_ID(env CASTALIA_PROJECT)
   type?: 'episodic' | 'semantic' | 'entity' | 'preference';
   category?: string;
   subcategory?: string;
@@ -28,6 +30,7 @@ export interface StoreParams {
 export interface MemoryRecord {
   id: string;
   text: string;
+  project: string;
   type: string;
   category: string;
   subcategory: string | null;
@@ -49,18 +52,19 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
   const db = DatabaseManager.getInstance();
   const now = new Date().toISOString();
   const skipEmbed = params.skipEmbed === true;
+  const project = params.project || PROJECT_ID;
 
-  // ═══ 精确去重：完全相同的文本不重复存 ═══
+  // ═══ 精确去重：完全相同的文本不重复存(仅限同项目) ═══
   const exactDup = db.prepare(`
     SELECT id FROM memory
-    WHERE is_active = 1 AND LOWER(TRIM(text)) = LOWER(TRIM(?))
+    WHERE is_active = 1 AND project = ? AND LOWER(TRIM(text)) = LOWER(TRIM(?))
     LIMIT 1
-  `).get(params.text?.trim() || '') as any;
+  `).get(project, params.text?.trim() || '') as any;
 
   if (exactDup) {
     db.prepare('UPDATE memory SET reference_count = reference_count + 1 WHERE id = ?').run(exactDup.id);
     return {
-      id: exactDup.id, text: params.text,
+      id: exactDup.id, text: params.text, project,
       type: params.type ?? 'episodic', category: params.category ?? 'general',
       subcategory: params.subcategory ?? null, tags: params.tags ?? [],
       importance: params.importance ?? 0.5,
@@ -72,7 +76,7 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
     } as MemoryRecord;
     }
 
-    // ═══ 向量去重：仅当不跳过 embed 时执行 ═══
+    // ═══ 向量去重：仅当不跳过 embed 时执行(仅限同项目) ═══
   let vector: number[] | null = null;
   let isNearDup = false;
   let dupId: string | null = null;
@@ -83,12 +87,12 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
       const floatVec = new Float32Array(vector);
       const knn = db.prepare(`
         SELECT rowid, distance FROM vec_memory
-        WHERE embedding MATCH ?
-        ORDER BY distance LIMIT 1
+        WHERE embedding MATCH ? ORDER BY distance LIMIT 10
       `).all(floatVec) as any[];
 
       if (knn.length > 0 && knn[0].distance < 0.05) {
-        const dupRow = db.prepare('SELECT id FROM memory WHERE rowid = ?').get(Number(knn[0].rowid)) as any;
+        // v1.5: 项目隔离 — 仅当最近邻属于同项目才算重复
+        const dupRow = db.prepare('SELECT id FROM memory WHERE rowid = ? AND project = ?').get(Number(knn[0].rowid), project) as any;
         if (dupRow) {
           dupId = dupRow.id;
           isNearDup = true;
@@ -112,7 +116,7 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
   );
 
   const record: MemoryRecord = {
-    id, text: params.text,
+    id, text: params.text, project,
     type: params.type ?? 'episodic',
     category: params.category ?? 'general',
     subcategory: params.subcategory ?? null,
@@ -129,10 +133,10 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
 
   const storeTx = db.transaction(() => {
     db.prepare(`
-      INSERT INTO memory (id, text, type, category, subcategory, tags, importance, character_id, source, subject, tier, expires_at, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memory (id, text, project, type, category, subcategory, tags, importance, character_id, source, subject, tier, expires_at, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      record.id, record.text, record.type, record.category, record.subcategory,
+      record.id, record.text, record.project, record.type, record.category, record.subcategory,
       JSON.stringify(record.tags), record.importance,
       record.characterId, record.source, record.subject,
       record.tier, record.expiresAt, 1,
@@ -216,10 +220,12 @@ export async function saveConversationTurn(
   characterId: string = 'airi',
   moodValue?: number,
   moodReason?: string,
+  project?: string,  // v1.5: 项目隔离
 ): Promise<any> {
   const db = DatabaseManager.getInstance();
   const now = new Date().toISOString();
   const id = generateId();
+  const proj = project || PROJECT_ID;
 
   let moodPrefix = '';
   if (moodValue !== undefined) {
@@ -231,9 +237,9 @@ export async function saveConversationTurn(
   const text = `${moodPrefix}用户: ${userMsg}\n助手: ${assistantMsg}`;
 
   db.prepare(`
-    INSERT INTO memory (id, text, type, category, tags, importance, character_id, source, subject, tier, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
-    VALUES (?, ?, 'episodic', 'conversation', '[]', 0.5, ?, 'conversation_log', 'user', 'standard', 1, ?, ?, ?, 0, 0)
-  `).run(id, text, characterId, now, now, now);
+    INSERT INTO memory (id, text, project, type, category, tags, importance, character_id, source, subject, tier, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
+    VALUES (?, ?, ?, 'episodic', 'conversation', '[]', 0.5, ?, 'conversation_log', 'user', 'standard', 1, ?, ?, ?, 0, 0)
+  `).run(id, text, proj, characterId, now, now, now);
 
   return { id, ok: true };
 }
@@ -350,18 +356,20 @@ export async function saveFacts(
   facts: { subject: string; predicate: string; object: string; confidence: number }[],
   sourceMemoryId: string | null = null,
   characterId: string = 'airi',
+  project?: string,  // v1.5: 项目隔离
 ): Promise<{ inserted: number; updated: number }> {
   if (!facts || facts.length === 0) return { inserted: 0, updated: 0 };
 
   const db = DatabaseManager.getInstance();
   const now = new Date().toISOString();
+  const proj = project || PROJECT_ID;
   let inserted = 0;
   let updated = 0;
 
   const upsert = db.prepare(`
-    INSERT INTO facts (id, subject, predicate, object, confidence, source_memory_id, character_id, is_active, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-    ON CONFLICT(subject, predicate, object) DO UPDATE SET
+    INSERT INTO facts (id, subject, predicate, object, project, confidence, source_memory_id, character_id, is_active, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+    ON CONFLICT(subject, predicate, object, project) DO UPDATE SET
       confidence = MAX(confidence, excluded.confidence),
       updated_at = excluded.updated_at,
       is_active = 1,
@@ -371,10 +379,10 @@ export async function saveFacts(
   for (const f of facts) {
     const id = generateId();
     const before = db.prepare(
-      'SELECT id, confidence FROM facts WHERE subject=? AND predicate=? AND object=?'
-    ).get(f.subject, f.predicate, f.object) as any;
+      'SELECT id, confidence FROM facts WHERE subject=? AND predicate=? AND object=? AND project=?'
+    ).get(f.subject, f.predicate, f.object, proj) as any;
 
-    upsert.run(id, f.subject, f.predicate, f.object, f.confidence, sourceMemoryId, characterId, now, now);
+    upsert.run(id, f.subject, f.predicate, f.object, proj, f.confidence, sourceMemoryId, characterId, now, now);
 
     if (before) {
       updated++;
@@ -409,10 +417,11 @@ export async function saveFacts(
 /**
  * 查询某个主体的所有活跃事实
  */
-export function getFactsBySubject(subject: string, characterId?: string): FactRecord[] {
+export function getFactsBySubject(subject: string, characterId?: string, project?: string): FactRecord[] {
   const db = DatabaseManager.getInstance();
-  let query = 'SELECT * FROM facts WHERE subject = ? AND is_active = 1';
-  const params: any[] = [subject];
+  const proj = project || PROJECT_ID;
+  let query = 'SELECT * FROM facts WHERE subject = ? AND is_active = 1 AND project = ?';
+  const params: any[] = [subject, proj];
   if (characterId) {
     query += ' AND character_id = ?';
     params.push(characterId);

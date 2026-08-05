@@ -9,6 +9,7 @@
  */
 import { DatabaseManager } from './db.js';
 import { embed } from './ollama.js';
+import { PROJECT_ID } from './env.js';
 // 中性评分权重(可配)
 const WEIGHT_CONSISTENCY = parseFloat(process.env.WEIGHT_CONSISTENCY || '0.65'); // 语义/标签匹配
 const WEIGHT_TIME = parseFloat(process.env.WEIGHT_TIME || '0.35'); // 时间衰减
@@ -99,12 +100,13 @@ function tagSearch(db, options) {
         return [];
     const profile = options.profile ? SEARCH_PROFILES[options.profile] : null;
     const topK = options.topK ?? profile?.topK ?? 10;
+    const project = options.project || PROJECT_ID;
     const tagCond = keywords.map(() => `m.tags LIKE ?`).join(' OR ');
     const tagParams = keywords.map(k => `%"${k}"%`);
     const looseCond = keywords.map(() => `m.tags LIKE ?`).join(' OR ');
     const looseParams = keywords.map(k => `%${k}%`);
-    const conditions = ['m.is_active = 1'];
-    const params = [];
+    const conditions = ['m.is_active = 1', 'm.project = ?'];
+    const params = [project];
     conditions.push(`((${tagCond}) OR (${looseCond}))`);
     params.push(...tagParams, ...looseParams);
     if (options.type) {
@@ -124,7 +126,7 @@ function tagSearch(db, options) {
         params.push(options.subject);
     }
     const rows = db.prepare(`
-    SELECT m.id, m.text, m.type, m.category, m.subcategory, m.tags,
+    SELECT m.id, m.text, m.project, m.type, m.category, m.subcategory, m.tags,
       m.importance, m.character_id, m.source,
       m.subject, m.tier,
       m.created_at, m.last_accessed_at, m.accessed_count
@@ -138,7 +140,7 @@ function tagSearch(db, options) {
         const matchedTags = keywords.filter(k => memTags.some((t) => t.toLowerCase().includes(k.toLowerCase()))).length;
         const tagScore = Math.min(1.0, matchedTags / Math.max(1, keywords.length));
         return {
-            id: row.id, text: row.text, type: row.type, category: row.category,
+            id: row.id, text: row.text, project: row.project || 'default', type: row.type, category: row.category,
             subcategory: row.subcategory, tags: memTags,
             importance: row.importance,
             characterId: row.character_id, source: row.source,
@@ -151,7 +153,10 @@ function tagSearch(db, options) {
 }
 /** 向量 KNN 搜索 */
 function vectorKnnSearch(db, options, floatQuery, excludeIds, topK, minScore) {
-    const knnLimit = Math.min(topK * 3, 30);
+    // v1.5: vec0 虚拟表禁止 JOIN(KNN 必须在 vec0 上 LIMIT),项目过滤放在第二段 memory 查询
+    // 候选集放大(全库 KNN)保证单项目召回;隔离语义由 memory 查询的 project=? 保证
+    const knnLimit = Math.min(topK * 8, 60);
+    const project = options.project || PROJECT_ID;
     let knnRows;
     try {
         knnRows = db.prepare(`
@@ -169,8 +174,8 @@ function vectorKnnSearch(db, options, floatQuery, excludeIds, topK, minScore) {
         rowidMap.set(Number(r.rowid), r.distance);
     const rowidPlaceholders = knnRows.map(() => '?').join(',');
     const rowidParams = knnRows.map(r => Number(r.rowid));
-    const conditions = [`m.rowid IN (${rowidPlaceholders})`, 'm.is_active = 1'];
-    const params = [...rowidParams];
+    const conditions = [`m.rowid IN (${rowidPlaceholders})`, 'm.is_active = 1', 'm.project = ?'];
+    const params = [...rowidParams, project];
     if (options.type) {
         conditions.push('m.type = ?');
         params.push(options.type);
@@ -184,7 +189,7 @@ function vectorKnnSearch(db, options, floatQuery, excludeIds, topK, minScore) {
         params.push(options.characterId);
     }
     const rows = db.prepare(`
-    SELECT m.id, m.text, m.type, m.category, m.subcategory, m.tags,
+    SELECT m.id, m.text, m.project, m.type, m.category, m.subcategory, m.tags,
       m.importance, m.character_id, m.source,
       m.subject, m.tier,
       m.created_at, m.last_accessed_at, m.accessed_count, m.rowid
@@ -199,7 +204,7 @@ function vectorKnnSearch(db, options, floatQuery, excludeIds, topK, minScore) {
         const score = computeScore(similarity, row);
         if (score >= minScore) {
             results.push({
-                id: row.id, text: row.text, type: row.type, category: row.category,
+                id: row.id, text: row.text, project: row.project || 'default', type: row.type, category: row.category,
                 subcategory: row.subcategory, tags: JSON.parse(row.tags || '[]'),
                 importance: row.importance,
                 characterId: row.character_id, source: row.source,
@@ -217,21 +222,22 @@ function textFallbackSearch(db, options, excludeIds, topK, minScore) {
     const terms = options.query.split(/\s+/).filter(t => t.length > 0);
     if (terms.length === 0)
         return [];
+    const project = options.project || PROJECT_ID;
     const likeConditions = terms.map(() => 'm.text LIKE ?').join(' OR ');
     const likeParams = terms.map(t => `%${t}%`);
     const rows = db.prepare(`
-    SELECT m.id, m.text, m.type, m.category, m.subcategory, m.tags,
+    SELECT m.id, m.text, m.project, m.type, m.category, m.subcategory, m.tags,
       m.importance, m.character_id, m.source,
       m.subject, m.tier,
       m.created_at, m.last_accessed_at, m.accessed_count
     FROM memory m
-    WHERE m.is_active = 1 AND (${likeConditions})
+    WHERE m.is_active = 1 AND m.project = ? AND (${likeConditions})
     ORDER BY m.created_at DESC LIMIT ?
-  `).all(...likeParams, topK * 2);
+  `).all(project, ...likeParams, topK * 2);
     return rows
         .filter(row => !excludeIds.has(row.id))
         .map(row => ({
-        id: row.id, text: row.text, type: row.type, category: row.category,
+        id: row.id, text: row.text, project: row.project || 'default', type: row.type, category: row.category,
         subcategory: row.subcategory, tags: JSON.parse(row.tags || '[]'),
         importance: row.importance,
         characterId: row.character_id, source: row.source,
@@ -258,20 +264,21 @@ function updateAccessed(db, results) {
  * 快速获取近期重要记忆(用于请求前注入，<5ms)
  * 不做向量搜索，直接按时间+importance 捞
  */
-export function getRecentMemories(characterId, limit = 5, hoursBack = 24) {
+export function getRecentMemories(characterId, limit = 5, hoursBack = 24, project) {
     const db = DatabaseManager.getInstance();
     const since = new Date(Date.now() - hoursBack * 3600000).toISOString();
+    const proj = project || PROJECT_ID;
     const rows = db.prepare(`
-    SELECT id, text, type, category, subcategory, tags,
+    SELECT id, text, project, type, category, subcategory, tags,
            importance, character_id, source, subject, tier,
            created_at, last_accessed_at, accessed_count
     FROM memory
-    WHERE is_active = 1 AND character_id = ? AND created_at > ?
+    WHERE is_active = 1 AND character_id = ? AND project = ? AND created_at > ?
     ORDER BY importance DESC, created_at DESC
     LIMIT ?
-  `).all(characterId, since, limit);
+  `).all(characterId, proj, since, limit);
     return rows.map(row => ({
-        id: row.id, text: row.text, type: row.type, category: row.category,
+        id: row.id, text: row.text, project: row.project || 'default', type: row.type, category: row.category,
         subcategory: row.subcategory, tags: JSON.parse(row.tags || '[]'),
         importance: row.importance,
         characterId: row.character_id, source: row.source, subject: row.subject || 'user',
@@ -289,9 +296,10 @@ export async function searchFacts(query, options = {}) {
     const db = DatabaseManager.getInstance();
     const topK = options.topK ?? 10;
     const minConfidence = options.minConfidence ?? 0.3;
+    const proj = options.project || PROJECT_ID;
     const queryVector = await embed(query);
     const floatQuery = new Float32Array(queryVector);
-    const knnLimit = Math.min(topK * 3, 50);
+    const knnLimit = Math.min(topK * 8, 60);
     let knnRows;
     try {
         knnRows = db.prepare(`

@@ -13,6 +13,7 @@
  */
 import { DatabaseManager } from './db.js';
 import { cleanupExpiredMemories } from './store.js';
+import { PROJECT_ID } from './env.js';
 const MIN_DIGEST_GAP_MS = 60 * 1000;
 let lastDigestTime = 0;
 export async function runDigest(characterId = 'default') {
@@ -53,14 +54,15 @@ export function maybeDigest(characterId = 'default') {
     lastDigestTime = now;
     return runDigest(characterId);
 }
-export function getRecentConversations(characterId, hoursBack = 24, limit = 50) {
+export function getRecentConversations(characterId, hoursBack = 24, limit = 50, project) {
     const db = DatabaseManager.getInstance();
     const since = new Date(Date.now() - hoursBack * 3600000).toISOString();
+    const proj = project || PROJECT_ID;
     return db.prepare(`
     SELECT id, text, created_at, importance
     FROM memory WHERE is_active = 1
-      AND source = 'conversation_log' AND character_id = ?
+      AND source = 'conversation_log' AND character_id = ? AND project = ?
       AND created_at > ?
     ORDER BY created_at DESC LIMIT ?
-  `).all(characterId, since, limit);
+  `).all(characterId, proj, since, limit);
 }

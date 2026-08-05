@@ -9,6 +9,7 @@
  */
 import { DatabaseManager } from './db.js';
 import { embed } from './ollama.js';
+import { PROJECT_ID } from './env.js';
 
 // 中性评分权重(可配)
 const WEIGHT_CONSISTENCY = parseFloat(process.env.WEIGHT_CONSISTENCY || '0.65');  // 语义/标签匹配
@@ -19,6 +20,7 @@ const HALF_LIFE_HOURS = parseFloat(process.env.HALF_LIFE_HOURS || (30 * 24).toSt
 
 export interface SearchOptions {
   query: string;
+  project?: string;  // v1.5: 项目隔离 — 默认 PROJECT_ID
   type?: string;
   category?: string;
   tags?: string[];
@@ -39,6 +41,7 @@ const SEARCH_PROFILES: Record<string, { topK: number; minScore: number }> = {
 export interface SearchResult {
   id: string;
   text: string;
+  project: string;
   type: string;
   category: string;
   subcategory: string | null;
@@ -142,14 +145,15 @@ function tagSearch(db: any, options: SearchOptions): SearchResult[] {
 
   const profile = options.profile ? SEARCH_PROFILES[options.profile] : null;
   const topK = options.topK ?? profile?.topK ?? 10;
+  const project = options.project || PROJECT_ID;
 
   const tagCond = keywords.map(() => `m.tags LIKE ?`).join(' OR ');
   const tagParams = keywords.map(k => `%"${k}"%`);
   const looseCond = keywords.map(() => `m.tags LIKE ?`).join(' OR ');
   const looseParams = keywords.map(k => `%${k}%`);
 
-  const conditions: string[] = ['m.is_active = 1'];
-  const params: any[] = [];
+  const conditions: string[] = ['m.is_active = 1', 'm.project = ?'];
+  const params: any[] = [project];
 
   conditions.push(`((${tagCond}) OR (${looseCond}))`);
   params.push(...tagParams, ...looseParams);
@@ -160,7 +164,7 @@ function tagSearch(db: any, options: SearchOptions): SearchResult[] {
   if (options.subject) { conditions.push('m.subject = ?'); params.push(options.subject); }
 
   const rows = db.prepare(`
-    SELECT m.id, m.text, m.type, m.category, m.subcategory, m.tags,
+    SELECT m.id, m.text, m.project, m.type, m.category, m.subcategory, m.tags,
       m.importance, m.character_id, m.source,
       m.subject, m.tier,
       m.created_at, m.last_accessed_at, m.accessed_count
@@ -178,7 +182,7 @@ function tagSearch(db: any, options: SearchOptions): SearchResult[] {
     const tagScore = Math.min(1.0, matchedTags / Math.max(1, keywords.length));
 
     return {
-      id: row.id, text: row.text, type: row.type, category: row.category,
+      id: row.id, text: row.text, project: row.project || 'default', type: row.type, category: row.category,
       subcategory: row.subcategory, tags: memTags,
       importance: row.importance,
       characterId: row.character_id, source: row.source,
@@ -195,7 +199,10 @@ function vectorKnnSearch(
   db: any, options: SearchOptions, floatQuery: Float32Array,
   excludeIds: Set<string>, topK: number, minScore: number
 ): SearchResult[] {
-  const knnLimit = Math.min(topK * 3, 30);
+  // v1.5: vec0 虚拟表禁止 JOIN(KNN 必须在 vec0 上 LIMIT),项目过滤放在第二段 memory 查询
+  // 候选集放大(全库 KNN)保证单项目召回;隔离语义由 memory 查询的 project=? 保证
+  const knnLimit = Math.min(topK * 8, 60);
+  const project = options.project || PROJECT_ID;
   let knnRows: any[];
 
   try {
@@ -214,15 +221,15 @@ function vectorKnnSearch(
 
   const rowidPlaceholders = knnRows.map(() => '?').join(',');
   const rowidParams = knnRows.map(r => Number(r.rowid));
-  const conditions: string[] = [`m.rowid IN (${rowidPlaceholders})`, 'm.is_active = 1'];
-  const params: any[] = [...rowidParams];
+  const conditions: string[] = [`m.rowid IN (${rowidPlaceholders})`, 'm.is_active = 1', 'm.project = ?'];
+  const params: any[] = [...rowidParams, project];
 
   if (options.type) { conditions.push('m.type = ?'); params.push(options.type); }
   if (options.category) { conditions.push('m.category = ?'); params.push(options.category); }
   if (options.characterId) { conditions.push('m.character_id = ?'); params.push(options.characterId); }
 
   const rows = db.prepare(`
-    SELECT m.id, m.text, m.type, m.category, m.subcategory, m.tags,
+    SELECT m.id, m.text, m.project, m.type, m.category, m.subcategory, m.tags,
       m.importance, m.character_id, m.source,
       m.subject, m.tier,
       m.created_at, m.last_accessed_at, m.accessed_count, m.rowid
@@ -237,7 +244,7 @@ function vectorKnnSearch(
     const score = computeScore(similarity, row);
     if (score >= minScore) {
       results.push({
-        id: row.id, text: row.text, type: row.type, category: row.category,
+        id: row.id, text: row.text, project: row.project || 'default', type: row.type, category: row.category,
         subcategory: row.subcategory, tags: JSON.parse(row.tags || '[]'),
         importance: row.importance,
         characterId: row.character_id, source: row.source,
@@ -258,24 +265,25 @@ function textFallbackSearch(
 ): SearchResult[] {
   const terms = options.query.split(/\s+/).filter(t => t.length > 0);
   if (terms.length === 0) return [];
+  const project = options.project || PROJECT_ID;
 
   const likeConditions = terms.map(() => 'm.text LIKE ?').join(' OR ');
   const likeParams = terms.map(t => `%${t}%`);
 
   const rows = db.prepare(`
-    SELECT m.id, m.text, m.type, m.category, m.subcategory, m.tags,
+    SELECT m.id, m.text, m.project, m.type, m.category, m.subcategory, m.tags,
       m.importance, m.character_id, m.source,
       m.subject, m.tier,
       m.created_at, m.last_accessed_at, m.accessed_count
     FROM memory m
-    WHERE m.is_active = 1 AND (${likeConditions})
+    WHERE m.is_active = 1 AND m.project = ? AND (${likeConditions})
     ORDER BY m.created_at DESC LIMIT ?
-  `).all(...likeParams, topK * 2) as any[];
+  `).all(project, ...likeParams, topK * 2) as any[];
 
   return rows
     .filter(row => !excludeIds.has(row.id))
     .map(row => ({
-      id: row.id, text: row.text, type: row.type, category: row.category,
+      id: row.id, text: row.text, project: row.project || 'default', type: row.type, category: row.category,
       subcategory: row.subcategory, tags: JSON.parse(row.tags || '[]'),
       importance: row.importance,
       characterId: row.character_id, source: row.source,
@@ -301,22 +309,23 @@ function updateAccessed(db: any, results: SearchResult[]) {
  * 快速获取近期重要记忆(用于请求前注入，<5ms)
  * 不做向量搜索，直接按时间+importance 捞
  */
-export function getRecentMemories(characterId: string, limit: number = 5, hoursBack: number = 24): SearchResult[] {
+export function getRecentMemories(characterId: string, limit: number = 5, hoursBack: number = 24, project?: string): SearchResult[] {
   const db = DatabaseManager.getInstance();
   const since = new Date(Date.now() - hoursBack * 3600000).toISOString();
+  const proj = project || PROJECT_ID;
 
   const rows = db.prepare(`
-    SELECT id, text, type, category, subcategory, tags,
+    SELECT id, text, project, type, category, subcategory, tags,
            importance, character_id, source, subject, tier,
            created_at, last_accessed_at, accessed_count
     FROM memory
-    WHERE is_active = 1 AND character_id = ? AND created_at > ?
+    WHERE is_active = 1 AND character_id = ? AND project = ? AND created_at > ?
     ORDER BY importance DESC, created_at DESC
     LIMIT ?
-  `).all(characterId, since, limit) as any[];
+  `).all(characterId, proj, since, limit) as any[];
 
   return rows.map(row => ({
-    id: row.id, text: row.text, type: row.type, category: row.category,
+    id: row.id, text: row.text, project: row.project || 'default', type: row.type, category: row.category,
     subcategory: row.subcategory, tags: JSON.parse(row.tags || '[]'),
     importance: row.importance,
     characterId: row.character_id, source: row.source, subject: row.subject || 'user',
@@ -350,6 +359,7 @@ export interface FactSearchResult {
 export async function searchFacts(
   query: string,
   options: {
+    project?: string;
     subject?: string;
     topK?: number;
     minConfidence?: number;
@@ -358,11 +368,12 @@ export async function searchFacts(
   const db = DatabaseManager.getInstance();
   const topK = options.topK ?? 10;
   const minConfidence = options.minConfidence ?? 0.3;
+  const proj = options.project || PROJECT_ID;
 
   const queryVector = await embed(query);
   const floatQuery = new Float32Array(queryVector);
 
-  const knnLimit = Math.min(topK * 3, 50);
+  const knnLimit = Math.min(topK * 8, 60);
 
   let knnRows: any[];
   try {

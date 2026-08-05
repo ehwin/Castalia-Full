@@ -31,6 +31,7 @@ export class DatabaseManager {
       CREATE TABLE IF NOT EXISTS memory (
         id TEXT PRIMARY KEY,
         text TEXT NOT NULL,
+        project TEXT DEFAULT 'default',
         type TEXT DEFAULT 'episodic',
         category TEXT DEFAULT 'general',
         subcategory TEXT,
@@ -81,6 +82,7 @@ export class DatabaseManager {
         subject TEXT NOT NULL,
         predicate TEXT NOT NULL,
         object TEXT NOT NULL,
+        project TEXT DEFAULT 'default',
         confidence REAL DEFAULT 0.5,
         source_memory_id TEXT,
         character_id TEXT,
@@ -111,9 +113,30 @@ export class DatabaseManager {
             db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_tier ON memory(tier, is_active)`);
         }
         catch (_e) { }
-        // Unique index for fact dedup
+        // v1.5: project column for per-project memory isolation
         try {
-            db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_spo ON facts(subject, predicate, object)`);
+            db.exec(`ALTER TABLE memory ADD COLUMN project TEXT DEFAULT 'default'`);
+        }
+        catch (_e) { /* already exists */ }
+        try {
+            db.exec(`ALTER TABLE facts ADD COLUMN project TEXT DEFAULT 'default'`);
+        }
+        catch (_e) { /* already exists */ }
+        try {
+            db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_project ON memory(project, is_active)`);
+        }
+        catch (_e) { }
+        try {
+            db.exec(`CREATE INDEX IF NOT EXISTS idx_facts_project ON facts(project, is_active)`);
+        }
+        catch (_e) { }
+        // Unique index for fact dedup (per-project: same SPO allowed across projects)
+        try {
+            db.exec(`DROP INDEX IF EXISTS idx_facts_spo`);
+        }
+        catch (_e) { }
+        try {
+            db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_spo ON facts(subject, predicate, object, project)`);
         }
         catch (_e) { }
         try {

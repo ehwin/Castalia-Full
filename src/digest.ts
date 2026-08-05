@@ -14,6 +14,7 @@
 
 import { DatabaseManager } from './db.js';
 import { cleanupExpiredMemories } from './store.js';
+import { PROJECT_ID } from './env.js';
 
 const MIN_DIGEST_GAP_MS = 60 * 1000;
 let lastDigestTime = 0;
@@ -69,14 +70,15 @@ export function maybeDigest(characterId: string = 'default'): Promise<DigestResu
   return runDigest(characterId);
 }
 
-export function getRecentConversations(characterId: string, hoursBack: number = 24, limit: number = 50): any[] {
+export function getRecentConversations(characterId: string, hoursBack: number = 24, limit: number = 50, project?: string): any[] {
   const db = DatabaseManager.getInstance();
   const since = new Date(Date.now() - hoursBack * 3600000).toISOString();
+  const proj = project || PROJECT_ID;
   return db.prepare(`
     SELECT id, text, created_at, importance
     FROM memory WHERE is_active = 1
-      AND source = 'conversation_log' AND character_id = ?
+      AND source = 'conversation_log' AND character_id = ? AND project = ?
       AND created_at > ?
     ORDER BY created_at DESC LIMIT ?
-  `).all(characterId, since, limit) as any[];
+  `).all(characterId, proj, since, limit) as any[];
 }

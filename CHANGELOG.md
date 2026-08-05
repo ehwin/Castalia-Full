@@ -3,6 +3,24 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.5] — 2026-08-05 项目隔离(Project Namespace)
+
+> 对齐 Hermes Project 概念:记忆按项目分区,不同项目调用各自的记忆空间,互不串扰。默认 `default` 项目完全向后兼容(老数据/老调用不受影响)。
+
+### Added
+- **`project` 维度**:`memory` / `facts` 表新增 `project` 列(默认 `'default'`),索引 `idx_memory_project` / `idx_facts_project`;facts 唯一去重索引改为 `(subject, predicate, object, project)` — 同一事实允许在不同项目各自存在
+- **`project_list` 工具**(admin):列出所有项目 + 各项目记忆数/事实数 + 当前项目(`CASTALIA_PROJECT` env)
+- **环境变量 `CASTALIA_PROJECT`**:全局默认项目,工具不传 `project` 参数时使用(默认 `'default'`)
+- **所有 23 个现有工具新增可选 `project` 参数**(search/save/list/recent/get/stats/context/graph/reflect/auto_process/conversation_save/daily_summary 等),传参即切换到该项目的记忆空间
+
+### Changed
+- **去重按项目隔离**:精确去重与向量近重复判定都限定同项目 — 同一文本在不同项目各自落库(不误判重复)
+- **向量检索按项目过滤**:vec0 KNN 保持全库候选(候选集放大 topK×8/60 保证单项目召回),在 memory/facts 查询层用 `project=?` 过滤 — 项目 A 的语义查询永远看不到项目 B 的记忆
+- **全链路透传**:store / search / reflect(applyReflectActions / applyReflectResult / getUnanalyzedConversations / listAllMemories / getMemoryGraph)/ digest / autoProcessor / reflectDriver 均支持 project 参数
+
+### Fixed
+- vec0 虚拟表 KNN 查询不能 JOIN(silent 失败被 catch 吞掉 → 向量搜索返回空);改为 KNN 后按 project 过滤
+
 ## [2026-08-05] 全库改名 + Hermes 接入支持
 
 ### Changed
