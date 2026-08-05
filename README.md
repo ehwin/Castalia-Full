@@ -164,7 +164,7 @@ Independent evolution of a memory system; storage-layer design inspired by / der
 - **AIRI Alaya scoring design** — emotional-weight / time-decay scoring ideas (design reference only)
 - **SynaBun** — hierarchical categories & relevance weighting ideas (design reference only)
 
-License: Apache-2.0, see `LICENSE`.
+License: MIT, see `LICENSE`. Upstream acknowledgements retained above.
 
 ## Troubleshooting
 

@@ -1,7 +1,14 @@
-# Changelog — ai-memory(公共版)
+# Changelog — Castalia(公共版)
 
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
+
+## [2026-08-04] 协议统一 + 上 GitHub
+
+### Changed
+- **License: Apache-2.0 → MIT**(统一协议;JPlag 已验证无代码级复制,上游致谢保留在 README Credits)
+- 仓库改名 **Castalia**,推至 `github.com/ehwin/Castalia`(Private),默认分支 main
+- AIRI 版仓库名规划:**Castalia Anima**(情感线,自用版暂不上传,改完吸收进主项目后转通用情感支线)
 
 ## [v1.3] — 2026-08-04 热度升格 + reflect 回执
 
