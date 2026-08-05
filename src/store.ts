@@ -107,7 +107,7 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
   // ═══ 存入新记忆（不管是否近重复，都存） ═══
   const id = generateId();
 
-  // tier + expires_at 计算
+  // tier + expires_at 计算:显式 expiresAt 优先;否则 temporary 默认 3 天 TTL,standard/critical 永不过期
   const tier = params.tier || 'standard';
   const expiresAt = params.expiresAt || (
     tier === 'temporary'

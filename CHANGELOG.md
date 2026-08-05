@@ -3,6 +3,12 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.5.2] — 2026-08-05 memory_save 支持自定义过期时间
+
+### Added
+- `memory_save` 新增可选 `expiresAt` 参数(ISO datetime):temporary 记忆可覆盖默认 3 天 TTL;standard/critical 显式传入时也生效(语义更灵活)
+- 底层 `saveMemory` 原本已支持 `expiresAt`(SQL 列 + 清理逻辑都在),仅工具 schema 未暴露 — 已实测:自定义过期时间正确落库
+
 ## [v1.5.1] — 2026-08-05 项目隔离边界修复(opencode 全项目测试发现)
 
 ### Fixed
