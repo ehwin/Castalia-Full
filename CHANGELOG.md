@@ -3,6 +3,19 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.11.5] — 2026-08-05 web 管理界面青绿主题改版
+
+> 用户指定配色系统(logo 青绿系):Primary #00A89A / Deep Teal #008880 / Mid Teal #45B9AC / Light Mint #7AE8D8 / Highlight #A0F8E8 / Dark BG #15161B / Surface #1F2229-2A2E38。
+
+### Changed
+- CSS 变量区换青绿主题:--bg #15161B、--panel/card #1F2229/#2A2E38、--accent #00A89A + deep/mid/light/hi 五档;--green 调为青绿 #57E6C4
+- 全部紫色(约 30 处 rgba(124,111,247)/#7c6ff7)替换为青绿对应;旧面板色 #0f1117/#1a1d27/#0a0c12/#2a2d3a 全部收敛到新变量
+- 按钮体系:btn-primary 深青 #008880;成功态薄荷系
+- CATEGORY_COLORS:conversation 紫→青绿 #26C6DA;decision/mistake/preference 保留暖色对比(语义可区分)
+
+### Verified(独立验证,非自报)
+- 页面 200 完整渲染;新主题 8 色全就位;紫色/旧色 0 残留;JS 逻辑未动
+
 ## [v1.11.4] — 2026-08-05 debug:web 控制台两个 bug(空库 500 + 旧列引用)
 
 > 用户检查管理界面(3345)时触发,实测复现。
