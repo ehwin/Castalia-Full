@@ -149,6 +149,58 @@ auto_process(userMessage, assistantMessage, sessionId?)
 
 ---
 
+## 4.5 MCP 上下文注入模型(三层注入定义)
+
+> 定义依据:Claude Code / 标准 Agent 架构的"工具驱动唤醒(Tool-Driven Injection)+ Prompt 规范引导"范式。本记忆体作为 MCP Server,对上下文的注入遵循三层模型:
+
+### 层 1 — 启动/系统级(Static Warm-up)
+
+**职责**:告知 LLM"存在一个项目级 SQLite 记忆库,格式为 Markdown,有哪些工具、何时该调用"。
+
+**Castalia 实现**:每个工具的 description 字段(如 `memory_context` 描述"Assemble an injection-ready context bundle...")即层 1 素材;最终拼装进 System Prompt 的动作在 **harness 侧**(MCP 协议只提供工具 schema 与描述)。
+
+```typescript
+// harness 侧示例(定义文档用,非 Castalia 代码)
+<mcp_memory_guidelines>
+- memory_context: 任务开始时调用,获取用户偏好/项目约定/任务相关记忆
+- memory_save: 用户表达明确偏好/行为纠正/项目约束时调用
+- 高优先级记忆必须尊重,避免询问已在记忆中回答的问题
+</mcp_memory_guidelines>
+```
+
+### 层 2 — 主动按需召回(Dynamic Active Retrieval)—— MCP 核心机制 ✅ 已实现
+
+**职责**:用户发消息 → LLM 识别需要记忆 → 主动 Tool Call `memory_context(query, project?, sessionId?)` → MCP Server 检索 SQLite 物理分库 → 返回带 Snapshot Warning 的 Markdown 分节 → 注入上下文窗口。
+
+**Castalia 实现**(完整支持):
+- `memory_context` 工具:三层指令 + 会话滚动状态 + 近期/相关记忆 + 经验沉淀 + 已知事实 + 记忆索引,`asText` 选项
+- **Snapshot Warning**:旧记忆(≥1 天)注入时自动追加 `> ⚠️ [Memory Snapshot Warning] ...` 防止把历史快照当当前事实
+- **物理分库检索**:按 `project` 路由到对应 `project-<name>.sqlite`,向量 KNN 不跨项目
+
+### 层 3 — 被动只读挂载(Passive Read-Only Injection)—— 需 harness 配合
+
+**职责**:不依赖 LLM 主动调用,harness 在每轮请求末尾自动拼接 `<system-reminder>` 记忆块(只读、防污染)。
+
+**Castalia 实现**:提供 `context_get`(轻量召回:近期记忆 + 统计)作为素材源;**挂载动作在 harness 侧**——harness 依据用户意图自动查 Top-K 记忆,以 `<system-reminder>` 标签拼在最后一个 User Message 底部。
+
+```typescript
+// harness 侧示例(定义文档用,非 Castalia 代码)
+const memoryBlock = `<system-reminder>
+# PROJECT LONG-TERM MEMORY (Auto-Injected)
+${topMemories.map(m => `- [${m.type.toUpperCase()}] ${m.title}: ${m.content}`).join('\n')}
+</system-reminder>`;
+```
+
+### 三层职责边界(重要澄清)
+
+| 层 | 动作发生在 | Castalia 角色 |
+|---|---|---|
+| 层 1 系统级 | harness(System Prompt 组装) | 提供工具描述(schema) |
+| 层 2 主动召回 | **MCP 协议**(LLM → tool call) | ✅ 完整实现(memory_context) |
+| 层 3 被动挂载 | harness(消息末尾拼接) | 提供素材(context_get) |
+
+> **官方定义文案**:本 MCP 记忆体采用"**主动 Tool 召回 + 被动 `<system-reminder>` 挂载**"的双轨上下文注入机制:主动模式由 Agent 通过 MCP 标准协议调用 `memory_context(query)`,Server 检索 SQLite 物理分库,返回结构化、带快照时间警告的 Markdown 文本片段;被动模式由 Harness 在请求发送前依用户意图自动提取 Top-K 记忆,以只读 `<system-reminder>` 标签挂载于 Prompt 末尾。**层 2 由本 Server 完整实现;层 1/层 3 的注入动作发生在 Harness 侧,本 Server 提供工具描述与轻量查询接口作为支撑。**
+
 ## 5. 读取管线(memory_context 注入包)
 
 组装顺序(指令在最前,约束递增):
