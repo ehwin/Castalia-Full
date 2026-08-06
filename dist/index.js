@@ -282,6 +282,7 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
     relatedLimit: z.number().optional().describe('Max related memories (default 5)'),
     asText: z.boolean().optional().describe('Return ready-to-inject prompt text (default true)'),
     project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
+    path: z.string().optional().describe('Current file path for glob-filtered instructions (e.g. src/components/Button.tsx). Instructions whose paths pattern does not match are skipped.'),
 }, async (args) => {
     try {
         const db = DatabaseManager.getInstance();
@@ -312,14 +313,16 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
         ORDER BY confidence DESC, created_at DESC LIMIT 5
       `).all(proj);
         // 0. 三层指令记忆(全局→用户→项目;拼接顺序 L1→L2→L3,L3 在 Prompt 末尾约束最高)
-        const instructions = getInstruction(proj);
+        //    path 可选:对带 paths 的指令做 glob 过滤
+        const instructions = getInstruction(proj, args.path);
         const stats = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1 AND project=?').get(proj);
         // 5. Ground Truth 提示词组装(指令分节在最前面)
         const sections = [];
         if (instructions.length > 0) {
             const lines = instructions.map(i => {
-                const tag = i.scope === 'global' ? '[全局]' : i.scope === 'user' ? '[用户]' : '[项目]';
-                return `${tag} ${i.content}`;
+                const base = i.scope === 'global' ? '[全局]' : i.scope === 'user' ? '[用户]' : '[项目]';
+                const pathTag = i.paths && i.paths.length ? ` ${i.paths.join(', ')}` : '';
+                return `${base}${pathTag} ${i.content}`;
             });
             sections.push(`【指令(全局→项目,项目约束最高)】\n${lines.join('\n')}`);
         }
@@ -643,24 +646,27 @@ register('project_list', 'admin', 'List all project namespaces and their memory/
 // L1 global:所有用户/项目通用规则(种子为全局规范)
 // L2 user:当前用户所有项目共享
 // L3 project:单项目专属规则,拼接在 Prompt 最末尾、约束最高,可覆盖 L1/L2 冲突
+// rule:规则组(scope=rule),供 include 引用复用;指令带 paths 时可做 glob 路径过滤
 // ═══════════════════════════════════════════════════════════════════
-register('instruction_save', 'harness', 'Save (upsert) an instruction rule into one of three layers: global (all users/projects, seeded with global rules), user (current user, all projects), project (this project only). Load order into prompt: global→user→project; project rules land at the very end and carry the highest constraint, overriding conflicting lower layers. Same scope+project overwrites the previous content.', {
-    scope: z.enum(['global', 'user', 'project']).describe('Layer: global=all users/projects, user=this user shared, project=this project only'),
-    project: z.string().optional().describe('Project name — REQUIRED when scope=project'),
-    content: z.string().describe('Instruction rule content'),
+register('instruction_save', 'harness', 'Save (upsert) an instruction rule into one of four layers: global (all users/projects, seeded with global rules), user (current user, all projects), project (this project only), or rule (a reusable rule group referenced via include lines like include: "rule:typescript-core" in any instruction). Load order into prompt: global→user→project; project rules land at the very end and carry the highest constraint. Same scope+project overwrites the previous content. Optional paths accepts glob patterns (JSON array of strings, e.g. ["src/**","!src/temp/**"]) — when memory_context is called with a path, instructions whose paths do not match are skipped.', {
+    scope: z.enum(['global', 'user', 'project', 'rule']).describe('Layer: global=all users/projects, user=this user shared, project=this project only, rule=reusable rule group (project = group name)'),
+    project: z.string().optional().describe('Project name (REQUIRED when scope=project) or rule group name (REQUIRED when scope=rule)'),
+    content: z.string().describe('Instruction rule content. May contain include lines: include: "rule:groupname" or include: ["rule:a","rule:b"]'),
+    paths: z.array(z.string()).optional().describe('Glob patterns (picomatch). NULL = applies to all paths; patterns with leading ! are negations (last match wins).'),
 }, async (args) => {
     try {
-        const proj = args.scope === 'project' ? normalizeProject(args.project) : null;
-        if (args.scope === 'project' && !proj)
-            return err('scope=project 时必须传 project 参数', 'INVALID_PROJECT');
-        const r = saveInstruction(args.scope, proj, args.content);
-        return ok({ saved: true, scope: args.scope, project: proj, created: r.created, id: r.id });
+        const needsProject = args.scope === 'project' || args.scope === 'rule';
+        if (needsProject && !(args.project ?? '').trim())
+            return err(args.scope === 'rule' ? 'scope=rule 时必须传 project 参数(规则组名)' : 'scope=project 时必须传 project 参数', 'INVALID_PROJECT');
+        const proj = needsProject ? normalizeProject(args.project) : null;
+        const r = saveInstruction(args.scope, proj, args.content, args.paths ?? null);
+        return ok({ saved: true, scope: args.scope, project: proj, paths: args.paths ?? null, created: r.created, id: r.id });
     }
     catch (e) {
         return err(e.message, 'INSTRUCTION_SAVE_FAILED');
     }
 });
-register('instruction_list', 'admin', 'List all instruction layers (global/user/project) with scope, project, content and updated_at. Admin tool: use instruction_save to add/update, instruction_delete to remove.', {}, async () => {
+register('instruction_list', 'admin', 'List all instruction layers (global/user/project/rule) with scope, project, content, paths and updated_at. Rule groups are scope=rule + project=group name. Admin tool: use instruction_save to add/update, instruction_delete to remove.', {}, async () => {
     try {
         const rows = listInstructions();
         return ok({ count: rows.length, instructions: rows });
@@ -669,14 +675,15 @@ register('instruction_list', 'admin', 'List all instruction layers (global/user/
         return err(e.message, 'INSTRUCTION_LIST_FAILED');
     }
 });
-register('instruction_delete', 'admin', 'Delete one instruction layer. scope=project requires the matching project name. Admin tool.', {
-    scope: z.enum(['global', 'user', 'project']).describe('Layer to delete'),
-    project: z.string().optional().describe('Project name — required when scope=project'),
+register('instruction_delete', 'admin', 'Delete one instruction layer. scope=project requires the matching project name; scope=rule requires the rule group name. Admin tool.', {
+    scope: z.enum(['global', 'user', 'project', 'rule']).describe('Layer to delete'),
+    project: z.string().optional().describe('Project name (required when scope=project) or rule group name (required when scope=rule)'),
 }, async (args) => {
     try {
-        const proj = args.scope === 'project' ? normalizeProject(args.project) : null;
-        if (args.scope === 'project' && !proj)
-            return err('scope=project 时必须传 project 参数', 'INVALID_PROJECT');
+        const needsProject = args.scope === 'project' || args.scope === 'rule';
+        if (needsProject && !(args.project ?? '').trim())
+            return err(args.scope === 'rule' ? 'scope=rule 时必须传 project 参数(规则组名)' : 'scope=project 时必须传 project 参数', 'INVALID_PROJECT');
+        const proj = needsProject ? normalizeProject(args.project) : null;
         const r = deleteInstruction(args.scope, proj);
         return ok({ deleted: r.deleted, scope: args.scope, project: proj });
     }

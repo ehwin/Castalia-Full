@@ -201,6 +201,40 @@ Each memory/fact belongs to a **project namespace** (column `project`, default `
 - `reflect_deep` — **deep calibration**: all memories → dedup/profile/graph → apply (needs `REFLECT_LLM_API_KEY`)
 - `reflect_batch_embed` — batch-vectorize pending memories
 
+## Instruction Routing (v5.5): `@include` recursion + glob filtering
+
+Instructions (three layers + rule groups) support two routing mechanisms to keep the injected prompt lean. A third mechanism — JIT tool loading — was deliberately *not* implemented (rationale below).
+
+### 1. `@include` rule-group recursion
+
+A **rule group** is an instruction saved with `scope=rule` (`project` = group name). It is only loaded when referenced — never injected standalone. Any instruction (L1/L2/L3 or another rule group) can reference groups via an `include:` line:
+
+```
+include: "rule:typescript-core"                        # one group
+include: ["rule:typescript-core", "rule:python"]       # several groups
+```
+
+At read time each `include:` line is replaced by `[规则组 <name>]\n<expanded group text>`, keeping the same header style as `[全局]` / `[用户]` / `[项目]`. Expansion is recursive:
+
+- depth capped at **5** — deeper includes are truncated and a `⚠️` warning line is emitted;
+- cycles (A→B→A) are detected via a seen-set on the current expansion chain and cut with a warning line.
+
+`instruction_list` shows the raw (unexpanded) content; `memory_context` returns fully-expanded text.
+
+### 2. Glob condition filtering
+
+Any instruction (or rule group) may carry `paths` — a JSON array of picomatch glob patterns (default `NULL` = applies to every path):
+
+```
+paths: ["src/components/**/*.tsx", "!src/temp/**"]
+```
+
+When `memory_context` is called with a `path`, only instructions whose `paths` is empty or matches that path are injected. Rule groups referenced via `include:` are filtered by their own `paths` too (empty → follows the referencer). Matching is picomatch with last-match-wins negation (a pattern starting with `!` excludes on hit); Windows backslashes are normalized to `/`. Matchers are compiled once and cached. Injected instructions are tagged with their patterns, e.g. `[全局 src/components/**/*.tsx]`.
+
+### 3. JIT tool loading — deliberately not implemented
+
+We did **not** implement just-in-time / path-aware MCP tool registration. Reasons: MCP tool discovery is one-shot per connection (`tools/list` is cached by clients); the stdio transport has no re-registration channel; and dynamically hiding tools would break harness allowlists and admin tooling. Path-scoped control is instead achieved declaratively at the *data* layer (glob filtering above): the tool surface stays static and predictable, while the injected context adapts to the current file.
+
 ## Web Console (3D main + admin side)
 
 Bundled web UI: fullscreen 3D memory graph as the main view, admin drawer (reflection, embedding/LLM config, memory management, logs) as the side panel.

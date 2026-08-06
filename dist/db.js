@@ -147,21 +147,65 @@ export class DatabaseManager {
         // L1 global / L2 user / L3 project(类比 Claude Code CLAUDE.md 层级)
         // 唯一约束:global/user 每层一条(scope 唯一),project 按 (scope, project) 唯一
         // 用 partial unique index 规避 SQLite 对 NULL 不参与唯一性约束的行为(global/user 的 project 为 NULL)
+        // v5.5:scope 扩为 4 值(新增 'rule' 规则组),新增 paths TEXT 列(JSON 数组 = glob 过滤)
         try {
             db.exec(`
         CREATE TABLE IF NOT EXISTS instructions (
           id TEXT PRIMARY KEY,
-          scope TEXT NOT NULL CHECK(scope IN ('global','user','project')),
+          scope TEXT NOT NULL CHECK(scope IN ('global','user','project','rule')),
           project TEXT,
           content TEXT NOT NULL,
+          paths TEXT,
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_scope_unique ON instructions(scope) WHERE scope IN ('global','user');
         CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_project_unique ON instructions(scope, project) WHERE scope = 'project';
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_rule_unique ON instructions(project) WHERE scope = 'rule';
         CREATE INDEX IF NOT EXISTS idx_instructions_scope ON instructions(scope, project);
       `);
         }
         catch (_e) { /* already exists */ }
+        // v5.5 迁移:老表补 paths 列 + scope='rule'(规则组)。
+        // SQLite 无法 ALTER 修改 CHECK 约束,必须重建表;用事务保证原子性,不破坏已有数据。
+        // 幂等:每次启动检查 table_info + sqlite_master.sql,缺任一特性才重建。
+        try {
+            const instCols = db.prepare(`PRAGMA table_info(instructions)`).all();
+            const hasPaths = instCols.some(c => c.name === 'paths');
+            const instSql = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='instructions'`).get()?.sql || '';
+            const hasRuleScope = /'rule'/.test(instSql);
+            if (!hasPaths || !hasRuleScope) {
+                console.log('[db] migrating instructions → v5.5 (paths column + scope=rule)');
+                db.transaction(() => {
+                    db.exec(`ALTER TABLE instructions RENAME TO instructions_v55_old`);
+                    db.exec(`
+            CREATE TABLE instructions (
+              id TEXT PRIMARY KEY,
+              scope TEXT NOT NULL CHECK(scope IN ('global','user','project','rule')),
+              project TEXT,
+              content TEXT NOT NULL,
+              paths TEXT,
+              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO instructions (id, scope, project, content, updated_at)
+              SELECT id, scope, project, content, updated_at FROM instructions_v55_old;
+            DROP TABLE instructions_v55_old;
+          `);
+                })();
+                db.exec(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_scope_unique ON instructions(scope) WHERE scope IN ('global','user');
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_project_unique ON instructions(scope, project) WHERE scope = 'project';
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_rule_unique ON instructions(project) WHERE scope = 'rule';
+          CREATE INDEX IF NOT EXISTS idx_instructions_scope ON instructions(scope, project);
+        `);
+            }
+            else {
+                try {
+                    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_rule_unique ON instructions(project) WHERE scope = 'rule'`);
+                }
+                catch (_e) { }
+            }
+        }
+        catch (_e) { /* instructions 表尚未创建时跳过 */ }
         // ═══ v5.0 迁移：4096-dim → 1024-dim (Yuan-EB) ═══
         const SCHEMA_VERSION = 5;
         try {

@@ -3,6 +3,26 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.6.1] — 2026-08-05 上下文路由:include 递归 + picomatch Glob 过滤
+
+> 对齐 Claude Code 上下文路由设计。JIT 工具加载**有意不做**(tools/list 每连接只发现一次、stdio 无重注册通道、动态隐藏工具会破坏 harness 白名单)——路径控制改在数据层实现。
+
+### Added
+- **`scope='rule'` 规则组**:可复用指令块(project=组名),仅被 include 引用时加载,不独立注入
+- **`@include` 递归展开**:任意指令 content 支持 `include: "rule:typescript-core"` / `include: ["rule:a","rule:b"]`;递归展开,深度上限 5(超限截断+⚠️),seenSet 环路检测(A→B→A 截断不挂死)
+- **Glob 条件过滤(picomatch)**:指令可带 `paths`(JSON 数组),`memory_context` 新增 `path` 参数——只注入 paths 为空或匹配的指令;`!` 前缀取反(last-match-wins);Windows 反斜杠归一化;matcher 编译缓存
+- 规则组自身 paths 过滤:被 include 的规则组也受调用方 path 过滤(为空则跟随引用方)
+
+### Changed
+- `instructions` 表加 `paths` 列 + CHECK 扩 4 值(事务重建迁移,幂等,旧数据保留)
+- `instruction_save` 支持 scope=rule + paths 参数;`memory_context` 加 path 参数,命中指令打标 `[全局 src/components/**/*.tsx]`
+- README 新增 Instruction Routing 章节(三种机制 + JIT 未做的原因)
+
+### Verified(独立复验,非自报)
+- include 展开/环路截断/深度上限/glob 命中与取反/规则组路径过滤,13 项全过
+- 迁移实测:旧表数据保留 + 新列/新索引生成,重启幂等
+- npm run build exit 0;smoke_test 全 PASS(工具数仍 27)
+
 ## [v1.6] — 2026-08-05 三层指令记忆(Instruction Memory)
 
 > 类比 Claude Code 的 CLAUDE.md 层级机制,DB 版实现。用户确认设计:查找从近到远 L3→L2→L1,拼接喂 LLM 从远到近 L1→L2→L3,L3 落 Prompt 末尾约束最高(近因效应 + 规则覆盖)。
