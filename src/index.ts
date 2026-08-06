@@ -19,7 +19,7 @@ import { getCategoryTree } from './category.js';
 import { runDigest, getRecentConversations, maybeDigest } from './digest.js';
 import { reflect, getAllMemories, getMemoryGraph, REFLECT_SYSTEM_PROMPT, getUnanalyzedConversations, applyReflectResult } from './reflect.js';
 import { autoProcess } from './autoProcessor.js';
-import { runAutoReflect, runDeepReflect, shouldAutoReflect } from './reflectDriver.js';
+import { runAutoReflect, runDeepReflect, shouldAutoReflect, runConsolidate, shouldAutoConsolidate } from './reflectDriver.js';
 import { ensureSeedInstructions, saveInstruction, getInstruction, listInstructions, deleteInstruction } from './instructions.js';
 import { CHAR_ID, PROJECT_ID, SERVER_NAME, SERVER_VERSION, normalizeProject } from './env.js';
 import { MEM_TYPES, MEM_TYPE_LABELS, summarizeForIndex } from './memType.js';
@@ -47,7 +47,7 @@ function err(msg: string, code = 'ERROR') {
 const TOOL_GROUPS: Record<string, string[]> = {
   agent: ['memory_search', 'memory_get', 'memory_recent', 'memory_index', 'fact_search', 'memory_graph'],
   harness: ['auto_process', 'conversation_save', 'digest_run', 'reflect_auto', 'reflect_deep', 'reflect_batch_embed', 'memory_save', 'memory_update', 'memory_delete', 'memory_log', 'instruction_save'],
-  admin: ['memory_list', 'stats_get', 'recent_conversations', 'daily_summary_data', 'reflect_analyze', 'reflect_apply', 'memory_context', 'context_get', 'project_list', 'instruction_list', 'instruction_delete'],
+  admin: ['memory_list', 'stats_get', 'recent_conversations', 'daily_summary_data', 'reflect_analyze', 'reflect_apply', 'memory_context', 'context_get', 'project_list', 'instruction_list', 'instruction_delete', 'consolidate_deep'],
 };
 
 function resolveTools(input: string | undefined): Set<string> | null {
@@ -763,6 +763,27 @@ register(
 );
 
 // ═══════════════════════════════════════════════════════════════════
+// 记忆整合工具(v1.10 Memory Consolidator)
+// 向量预筛相似对 → LLM 去重/矛盾消解/主题归并 → 原子应用
+// ═══════════════════════════════════════════════════════════════════
+
+register(
+  'consolidate_deep', 'admin',
+  'Run memory consolidation: vector pre-screen similar pairs (cos > threshold) → LLM dedup/merge/conflict-resolution (MEMORY_CONSOLIDATION_PROMPT) → atomic apply. Requires REFLECT_LLM_API_KEY. No candidates → returns empty without calling LLM. EMBED_MODE=none falls back to LLM full scan.',
+  {
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
+    threshold: z.number().optional().describe('Min cosine similarity for candidate pairs (default CONSOLIDATE_SIMILARITY=0.88)'),
+    limit: z.number().optional().describe('Max candidate pairs (default 50)'),
+  },
+  async (args) => {
+    try {
+      const r = await runConsolidate(CHAR_ID, args.project, args.threshold, args.limit);
+      return ok({ op: 'consolidate_deep', ...r });
+    } catch (e: any) { return err(e.message, 'CONSOLIDATE_FAILED'); }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════════
 // 每日摘要工具
 // ═══════════════════════════════════════════════════════════════════
 
@@ -983,6 +1004,31 @@ async function main() {
       }
     })();
   }, 0);
+
+  // ═══ v1.10: 启动时自动记忆整合 ═══
+  // 触发逻辑:记忆过多(active > CONSOLIDATE_MIN_MEMORIES,默认 15)时,下次启动异步执行一次
+  // consolidate_deep 流程(向量预筛 → LLM 去重/矛盾消解)。开关 CONSOLIDATE_AUTO_ON_START(默认 1;0=只手动)。
+  setTimeout(() => {
+    (async () => {
+      try {
+        if ((process.env.CONSOLIDATE_AUTO_ON_START ?? '1') === '0') {
+          console.error('[consolidate-startup] 跳过: CONSOLIDATE_AUTO_ON_START=0');
+          return;
+        }
+        const cond = shouldAutoConsolidate();
+        if (!cond.should) {
+          console.error(`[consolidate-startup] 跳过: 记忆 ${cond.count} 条未超阈值 ${cond.min}`);
+          return;
+        }
+        console.error(`[consolidate-startup] 记忆 ${cond.count} 条超阈值 ${cond.min},自动整合...`);
+        const r = await runConsolidate(CHAR_ID);
+        console.error(`[consolidate-startup] 完成: ok=${r.ok}, scanned=${r.scanned}, candidates=${r.candidates}, merged=${r.merged}, deleted=${r.deleted}, kept=${r.kept}, errors=${r.errors.length}${r.skipped ? ', skipped' : ''}`);
+        if (r.errors.length > 0) console.error(`[consolidate-startup] errors: ${r.errors.join('; ')}`);
+      } catch (e: any) {
+        console.error('[consolidate-startup] error:', e.message);
+      }
+    })();
+  }, 500);
 
   process.on('SIGINT', () => { DatabaseManager.close(); process.exit(0); });
   process.on('SIGTERM', () => { DatabaseManager.close(); process.exit(0); });

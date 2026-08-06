@@ -3,6 +3,21 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.10] — 2026-08-05 记忆整合子进程(Memory Consolidator)
+
+> 直接吸收 Claude Code 原厂 Consolidator 方案(用户确认,不自定义):重量级"去重+矛盾消解+主题归并",由独立 LLM 实例执行。
+
+### Added
+- **`findSimilarCandidates(project, threshold=0.88, limit)`**(consolidate.ts):向量预筛相似对——KNN 取候选 + 二段过滤同项目(规避 vec0 禁 JOIN),cosine 相似度 > 阈值,去重对 + 上限防爆炸;EMBED_MODE=none 返回空(LLM 全量扫兜底)
+- **`MEMORY_CONSOLIDATION_PROMPT`**(reflectDriver.ts):忠实还原原厂规则——矛盾消解(ALWAYS 偏最新用户决定,被取代规则 REMOVE)/ 去重归并(保持 4 种封闭类型)/ 剪枝压缩(删临时调试与误存代码,相对日期转绝对日期)/ **NEVER invent new facts** 铁律;输出 merge/delete/keep JSON 动作
+- **`consolidate_deep` 工具**(admin 组,28→29):向量预筛 → LLM 整合 → applyReflectActions 原子执行;无候选不调 LLM(省 token);无 API key 报错
+- **启动自动整合**:`shouldAutoConsolidate()`(active 记忆 > `CONSOLIDATE_MIN_MEMORIES` 默认 15)+ 启动异步检查(开关 `CONSOLIDATE_AUTO_ON_START` 默认 1)
+- config.json 支持 `consolidate.minMemories/similarity`(admin 留路)
+
+### Verified(独立复验,非自报)
+- 8 项独立 e2e 全过:29 工具注册、mock LLM 调用、prompt 含原厂规则、3 条相似 → 2 条(merge 原子落库)、合并文本 Markdown 格式、无 key 报错
+- npm run build exit 0;smoke_test 全 PASS(29 工具)
+
 ## [v1.9] — 2026-08-05 启动时自动反思(条件达成后下次启动执行)
 
 > 用户确认:不做计划任务/常驻 watcher,改为"双条件达成后,下次启动 MCP server 时自动执行一次反思"。

@@ -13,9 +13,12 @@
  *   REFLECT_MAX_FACTS     每轮最多提取 facts 条数 (default 15)
  *   REFLECT_INTERVAL_HOURS auto-reflect interval (hours), 0 = off, default 0
  */
-import { getUnanalyzedConversations, listAllMemories, applyReflectResult, ReflectReceipt, ReflectResult } from './reflect.js';
+import { getUnanalyzedConversations, listAllMemories, applyReflectResult, applyReflectActions, ReflectAction, ReflectReceipt, ReflectResult } from './reflect.js';
 import { DatabaseManager } from './db.js';
-import { normalizeProject } from './env.js';
+import { normalizeProject, isEmbedEnabled } from './env.js';
+import { isMemType } from './memType.js';
+import { findSimilarCandidates, SimilarCandidate, CONSOLIDATE_SIMILARITY, CONSOLIDATE_MAX_PAIRS } from './consolidate.js';
+import { getRecentConversations } from './digest.js';
 
 const LLM_URL = (process.env.REFLECT_LLM_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, '');
 const LLM_API_KEY = process.env.REFLECT_LLM_API_KEY || '';
@@ -26,6 +29,9 @@ const MAX_FACTS = parseInt(process.env.REFLECT_MAX_FACTS || '15', 10) || 15;
 // 启动自动反思触发阈值(条件达成后,下次启动 server 时自动执行一次)
 const MIN_GAP_HOURS = (() => { const v = parseFloat(process.env.REFLECT_MIN_GAP_HOURS || '24'); return Number.isFinite(v) && v > 0 ? v : 24; })();
 const MIN_UNANALYZED = (() => { const v = parseInt(process.env.REFLECT_MIN_UNANALYZED || '5', 10); return Number.isFinite(v) && v >= 0 ? v : 5; })();
+
+// v1.10: 启动自动整合触发阈值(active 记忆条数 > 该值 → 下次启动自动整合一次)
+const CONSOLIDATE_MIN_MEMORIES = (() => { const v = parseInt(process.env.CONSOLIDATE_MIN_MEMORIES || '15', 10); return Number.isFinite(v) && v >= 0 ? v : 15; })();
 
 export function isReflectConfigured(): boolean {
   return !!LLM_API_KEY;
@@ -86,6 +92,19 @@ export function shouldAutoReflect(charId: string = 'airi', project?: string): Re
   }
 
   return { should: true, reason: `距上次反思 ${gapLabel}h 且未分析对话 ${count} 条` };
+}
+
+/**
+ * v1.10: 启动自动整合条件检查 — active 记忆条数 > CONSOLIDATE_MIN_MEMORIES(默认 15)即达成。
+ * 注意:整合只需记忆足够多,不依赖 REFLECT_LLM_API_KEY(无 key 时 runConsolidate 会报错跳过)。
+ */
+export function shouldAutoConsolidate(project?: string): { should: boolean; count: number; min: number; reason: string } {
+  const db = DatabaseManager.getInstance(project);
+  const proj = normalizeProject(project);
+  const count = (db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active = 1 AND project = ?').get(proj) as any)?.c ?? 0;
+  const min = CONSOLIDATE_MIN_MEMORIES;
+  if (count > min) return { should: true, count, min, reason: `${count} > ${min}` };
+  return { should: false, count, min, reason: `${count} 未超 ${min}` };
 }
 
 /** facts 提取规则片段(拼进 prompt) */
@@ -406,4 +425,198 @@ export async function runDeepReflect(charId: string, limit = 500, project?: stri
   } catch (e: any) {
     return { ...base, errors: [e.message] };
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// v1.10: 记忆整合子进程(Memory Consolidator)
+// 忠实还原 Claude Code MEMORY_CONSOLIDATION_PROMPT 精神(用户确认,不自定义改动):
+//   - CONFLICT RESOLUTION:矛盾时 ALWAYS 偏最新用户决定;被撤销/取代的规则 REMOVE
+//   - DEDUPLICATION & MERGING:同主题碎片归并,输出严格保持 4 种封闭类型之一
+//   - PRUNING & COMPRESSION:删临时调试/错误日志/误存代码;相对日期转绝对日期
+//   - NEVER invent new facts(铁律):保持用户偏好原样
+// 执行:先读后写,原子完成。
+// ═══════════════════════════════════════════════════════════════════
+
+export function buildConsolidationPrompt(): string {
+  return `你是记忆整合引擎(Memory Consolidator)。输入:
+1. 候选记忆(带 id/memType/text/createdAt)
+2. 候选相似对(向量预筛结果,可能为空)
+3. 近期对话转录(捕捉最新用户决定)
+
+任务是全量"去重 + 矛盾消解 + 主题归并"。先读后写,原子完成。
+
+══════════════════════
+【CONFLICT RESOLUTION(矛盾消解)】
+- 记忆互相矛盾时,ALWAYS prefer the most recent user decision(以最近一次用户决定为准)。
+- 规则被撤销/取代 → REMOVE 过时记忆(用 delete)。
+- 用户偏好保持原样,不擅自改写。
+
+【DEDUPLICATION & MERGING(去重归并)】
+- 同主题碎片合并为一条整合后的 Markdown 文本(用 merge)。
+- merge 输出的 newMemType 必须严格是 4 种封闭类型之一:user / feedback / project / reference。
+- 不相关的主题不要合并。
+
+【PRUNING & COMPRESSION(剪枝压缩)】
+- 删除临时调试步骤/错误日志/误存的代码片段。
+- 相对日期转成绝对日期(如 "yesterday" → 今天日期,见输入顶部)。
+- 唯一无重复的记忆 → keep 保留。
+
+【NEVER invent new facts(铁律)】
+- 绝不虚构输入中不存在的事实;用户偏好原文保留,不添加不存在的细节。
+
+══════════════════════
+【输出】只返回严格 JSON 数组,不要代码围栏,不要任何其他文字:
+[
+  {"action":"merge","sourceIds":["a","b"],"newText":"整合后的 Markdown 文本","newMemType":"feedback"},
+  {"action":"delete","id":"c","reason":"被最新用户决定取代"},
+  {"action":"keep","id":"d","reason":"唯一无重复"}
+]
+- merge 的 newMemType 必须属于 4 种封闭类型;不需要操作时返回 []`;
+}
+
+export const MEMORY_CONSOLIDATION_PROMPT: string = buildConsolidationPrompt();
+
+/** 把整合 LLM 输出的动作规范化为 applyReflectActions 认识的 ReflectAction(keep 不落地,只计数) */
+function normalizeConsolidationActions(raw: any): { actions: ReflectAction[]; kept: number; errors: string[] } {
+  const list: any[] = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.actions) ? raw.actions : []);
+  const actions: ReflectAction[] = [];
+  let kept = 0;
+  const errors: string[] = [];
+  for (const a of list) {
+    const action = a?.action;
+    if (action === 'merge') {
+      const ids = Array.isArray(a.sourceIds) ? a.sourceIds.filter((x: any) => typeof x === 'string' && x.length > 0) : [];
+      if (ids.length >= 2 && typeof a.newText === 'string' && a.newText.trim().length > 0) {
+        actions.push({ action: 'merge', sourceIds: ids, newText: a.newText, newMemType: isMemType(a.newMemType) ? a.newMemType : undefined });
+      } else {
+        errors.push('merge: need sourceIds(≥2) and newText, skipped');
+      }
+    } else if (action === 'delete') {
+      if (typeof a.id === 'string' && a.id.length > 0) actions.push({ action: 'delete', targetId: a.id });
+      else errors.push('delete: need id, skipped');
+    } else if (action === 'keep') {
+      if (typeof a.id === 'string' && a.id.length > 0) kept++;
+      else errors.push('keep: need id, skipped');
+    } else {
+      errors.push(`unknown consolidation action: ${action || '(missing)'}, skipped`);
+    }
+  }
+  return { actions, kept, errors };
+}
+
+export interface ConsolidateRunResult {
+  ok: boolean;
+  scanned: number;      // 扫描的 active 记忆条数
+  candidates: number;   // 向量预筛出的候选对数(EMBED_MODE=none 全量扫兜底时为 0)
+  merged: number;
+  deleted: number;
+  kept: number;
+  actions: number;
+  applied: number;
+  errors: string[];
+  skipped?: boolean;
+  receipts?: ReflectReceipt[];
+}
+
+/**
+ * v1.10: 记忆整合主流程 — 向量预筛 → LLM 整合 → applyReflectActions 原子执行。
+ * - EMBED_MODE=none:预筛返回空 → LLM 全量扫兜底
+ * - 有向量但无相似候选 → 直接返回空结果,不再调 LLM(省 token)
+ */
+export async function runConsolidate(
+  charId: string = 'default',
+  project?: string,
+  threshold?: number,
+  limit?: number,
+): Promise<ConsolidateRunResult> {
+  const base: ConsolidateRunResult = { ok: false, scanned: 0, candidates: 0, merged: 0, deleted: 0, kept: 0, actions: 0, applied: 0, errors: [] };
+  if (!isReflectConfigured()) {
+    return { ...base, skipped: true, errors: ['REFLECT_LLM_API_KEY 未配置,跳过整合'] };
+  }
+  const db = DatabaseManager.getInstance(project);
+  const proj = normalizeProject(project);
+
+  const mems = db.prepare(`
+    SELECT id, mem_type, text, created_at FROM memory
+    WHERE is_active = 1 AND project = ? AND (locked IS NULL OR locked = 0)
+    ORDER BY importance DESC, created_at DESC
+    LIMIT 500
+  `).all(proj) as any[];
+  const scanned = mems.length;
+  if (scanned < 2) {
+    return { ...base, ok: true, scanned, skipped: true, errors: ['active 记忆不足 2 条,无需整合'] };
+  }
+
+  // 1. 向量预筛(EMBED_MODE=none 返回空 → 全量扫兜底)
+  let candidates: SimilarCandidate[] = [];
+  if (isEmbedEnabled()) {
+    candidates = await findSimilarCandidates(proj, threshold ?? CONSOLIDATE_SIMILARITY, limit ?? CONSOLIDATE_MAX_PAIRS);
+    if (candidates.length === 0) {
+      // 有向量但确实无相似对 → 不再调 LLM,省 token
+      return { ...base, ok: true, scanned, skipped: true, errors: ['无相似候选,无需整合'] };
+    }
+  }
+
+  // 2. 组装 LLM 输入:向量模式 → 候选涉及的记忆;全量模式 → 全部记忆
+  const candidateIds = new Set<string>();
+  for (const p of candidates) { candidateIds.add(p.idA); candidateIds.add(p.idB); }
+  const inputMems = candidates.length > 0 ? mems.filter(m => candidateIds.has(m.id)) : mems;
+  const today = new Date().toISOString().slice(0, 10);
+  const itemsJson = JSON.stringify(inputMems.map(m => ({
+    id: m.id,
+    memType: m.mem_type || 'general',
+    text: (m.text || '').slice(0, 600),
+    createdAt: (m.created_at || '').slice(0, 10),
+  })), null, 1);
+  const pairsJson = JSON.stringify(candidates, null, 1);
+
+  // 3. 最近对话转录(conversation_log,捕捉最新用户修正)
+  let transcript = '';
+  try {
+    const convs = getRecentConversations(charId, 24 * 7, 20, proj);
+    transcript = convs.map(c => (c as any).text).join('\n---\n').substring(0, 8000);
+  } catch { transcript = ''; }
+
+  const userPrompt = `今天是 ${today}(相对日期转绝对日期时以此为准)。
+请整合以下候选记忆,输出整合 JSON 数组。
+
+【候选记忆】
+${itemsJson}
+
+【候选相似对】
+${pairsJson}
+
+【近期对话转录】
+${transcript || '无近期对话转录'}`;
+
+  const llm = await callLlm(buildConsolidationPrompt(), userPrompt);
+  if (!llm) return { ...base, scanned, candidates: candidates.length, errors: ['LLM 调用失败'] };
+  const parsed = parseJsonRobust(llm.content || llm.reasoning);
+  if (!parsed) return { ...base, scanned, candidates: candidates.length, errors: ['未找到有效 JSON 结果'] };
+
+  // 4. 规范化 + 原子执行(keep 不落地;merge/delete 复用 applyReflectActions)
+  const norm = normalizeConsolidationActions(parsed);
+  let r: { applied: number; errors: string[]; receipts: ReflectReceipt[] } = { applied: 0, errors: [], receipts: [] };
+  if (norm.actions.length > 0) {
+    try {
+      r = await applyReflectActions(norm.actions, charId, proj);
+    } catch (e: any) {
+      norm.errors.push(e.message);
+    }
+  }
+  const merged = r.receipts.filter(x => x.action === 'merge' && x.status === 'applied').length;
+  const deleted = r.receipts.filter(x => x.action === 'delete' && x.status === 'applied').length;
+
+  return {
+    ok: true,
+    scanned,
+    candidates: candidates.length,
+    merged,
+    deleted,
+    kept: norm.kept,
+    actions: norm.actions.length,
+    applied: r.applied,
+    errors: [...norm.errors, ...r.errors],
+    receipts: r.receipts,
+  };
 }

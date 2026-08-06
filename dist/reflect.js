@@ -125,6 +125,8 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                     await saveMemory({
                         text: action.newText,
                         type: (action.newType || 'semantic'),
+                        // v1.10: merge 支持 newMemType — 记忆整合输出保持 4 种封闭类型之一
+                        memType: isMemType(action.newMemType) ? action.newMemType : undefined,
                         category: action.newCategory || 'general',
                         tags: action.newTags || [],
                         importance: action.newImportance || 0.7,

@@ -44,7 +44,12 @@ try {
     if (ref.minGapHours != null) process.env.REFLECT_MIN_GAP_HOURS = String(ref.minGapHours);
     if (ref.minUnanalyzed != null) process.env.REFLECT_MIN_UNANALYZED = String(ref.minUnanalyzed);
 
-    console.error(`[config] loaded ${CONFIG_PATH} (embed=${emb.mode || 'ollama'}, reflect=${ref.model || 'unset'}, facts=${process.env.REFLECT_FACT_EXTRACTION || 'auto'})`);
+    // v1.10: 记忆整合配置(可选,给 admin 界面留路;没有则用 env/默认值)
+    const cons = cfg.consolidate || {};
+    if (cons.minMemories != null) process.env.CONSOLIDATE_MIN_MEMORIES = String(cons.minMemories);
+    if (cons.similarity != null) process.env.CONSOLIDATE_SIMILARITY = String(cons.similarity);
+
+    console.error(`[config] loaded ${CONFIG_PATH} (embed=${emb.mode || 'ollama'}, reflect=${ref.model || 'unset'}, facts=${process.env.REFLECT_FACT_EXTRACTION || 'auto'}, consolidate=${process.env.CONSOLIDATE_MIN_MEMORIES || '15'}/${process.env.CONSOLIDATE_SIMILARITY || '0.88'})`);
   }
 } catch (e: any) {
   console.error('[config] load failed:', e.message);
