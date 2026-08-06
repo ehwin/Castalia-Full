@@ -3,6 +3,11 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.11.2] — 2026-08-05 README 全面重写(v1.11 架构对齐)
+
+- 工具数 23→29、存储从 MEMORY_DB_PATH 单库 → MEMORY_DB_DIR 分库、三通道(triage/embedding/reflect)、记忆分层(项目级/会话级/4 封闭类型)、渐进式临时反思、整合子进程、Snapshot Warning 全部入文档
+- 清理旧版残留实例重建的根目录 memory.sqlite(旧代码与新架构冲突,已在 Troubleshooting 注明)
+
 ## [v1.11.1] — 2026-08-05 三通道架构 Part2:渐进式临时反思(缓冲+晋升+TTL)
 
 > 吸收 Claude Code session/progressiveMemory + reflectDriver + cleaner 原厂逻辑,接在 Part1 的 triage 通道上。

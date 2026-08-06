@@ -1,8 +1,51 @@
 # Castalia — Standalone MCP Memory Server for Agent Harnesses
 
-Standard MCP stdio server (23 tools, profile-gated). Local vector memory on SQLite + sqlite-vec — **zero API cost**, works offline once the embedding model is cached.
+**Standard MCP stdio server (29 tools, profile-gated).** Local memory on SQLite (per-project DB files) + sqlite-vec vectors — **zero API cost** for storage, works offline once the embedding model is cached.
 
 Forked from the AIRI memory system as an independent, neutral, general-purpose memory component. No personality layer, no vendor lock-in — bring your own LLM, bring your own embedding service (any Ollama-compatible `/api/embed`, 1024-dim).
+
+Designed after studying Claude Code's memory architecture (closed memory types, progressive session maintenance, consolidation) and engram / memory-os patterns.
+
+---
+
+## Architecture Overview (v1.11)
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ Three-channel pipeline                                              │
+│                                                                      │
+│  ① LLM1 (triage)  — 入站分拣 + 渐进式临时反思(轻量,快速)              │
+│     TRIAGE_LLM_URL / TRIAGE_LLM_API_KEY / TRIAGE_LLM_MODEL           │
+│     缺省回退 REFLECT_* 通道                                          │
+│  ② 向量模型        — 记忆库改动后嵌入(1024-dim)                       │
+│     OLLAMA_URL / EMBEDDING_MODEL(已有)                              │
+│  ③ LLM2 (reflect) — 每日反思 + 记忆整合(重量级)                      │
+│     REFLECT_LLM_URL / REFLECT_LLM_API_KEY / REFLECT_LLM_MODEL        │
+└──────────────────────────────────────────────────────────────────────┘
+
+对话进入 auto_process
+  → LLM1 入站分拣:文本 → user/feedback/project/reference(4 种封闭类型)
+  → SessionMemoryBuffer(每 5 轮)→ 后台异步增量反思
+       ├─ 长效干货 → 晋升项目级(session_id=NULL, Markdown 格式)
+       ├─ 会话状态 → 滚动覆盖(session_id 非空)
+       └─ 晋升即删 + TTL 7 天孤儿清理
+  → LLM2 每日反思(距上次 ≥24h 且未分析 >5 条,启动时自动)
+  → consolidate_deep(记忆 >15 条,向量预筛 + LLM 去重/矛盾消解)
+```
+
+### Storage layout — per-project DB files
+
+```
+memory/                          ← MEMORY_DB_DIR(一切记忆的物理载体)
+  global.sqlite                  ← 指令 L1/L2 + 规则组 + 项目注册表
+  project-<name>.sqlite          ← 每项目一库:记忆/向量/facts/指令L3(物理隔离)
+  config.json                    ← 记忆服务配置(embedding/triage/reflect)
+  receipts/                      ← 反思回执
+```
+
+**Per-project physical isolation**: project A's memories, vectors and facts live in their own `.sqlite` — backups, deletes and vector KNN never cross project boundaries.
+
+---
 
 ## Quick Start
 
@@ -21,21 +64,21 @@ scripts\start-embed.bat
 ```
 
 Listens on `http://127.0.0.1:11436` (Ollama-compatible `/api/embed`, 1024-dim, model `IEITYuan/Yuan-embedding-2.0-zh`, cached locally — no re-download).
-> Any Ollama-compatible embed service outputting **1024-dim** works: point `OLLAMA_URL` + `EMBEDDING_MODEL` at it and skip this step. E.g. with a local Ollama: `OLLAMA_URL=http://127.0.0.1:11434 EMBEDDING_MODEL=qwen3-embedding:0.6b`.
+> Any Ollama-compatible embed service outputting **1024-dim** works: point `OLLAMA_URL` + `EMBEDDING_MODEL` at it and skip this step.
 
-### 3. One-command agent setup (borrowed from engram's `engram setup`)
+### 3. Configure LLM channels (optional but recommended)
 
-```bash
-python scripts/setup.py claude     # Claude Code → .mcp.json
-python scripts/setup.py opencode   # OpenCode    → .opencode.json
-python scripts/setup.py cursor     # Cursor      → .cursor/mcp.json
-python scripts/setup.py vscode     # VS Code     → .vscode/mcp.json
-python scripts/setup.py codex      # Codex       → prints `codex mcp add` command
-python scripts/setup.py hermes     # Hermes Agent → prints `hermes config set` command
-python scripts/setup.py json       # print standard mcpServers JSON
+Copy `memory/config.json` from the template (or create it) to wire the two LLM channels:
+
+```json
+{
+  "triage":   { "llm_url": "https://api.deepseek.com/v1", "api_key": "sk-...", "model": "deepseek-chat" },
+  "reflect":  { "llm_url": "https://api.deepseek.com/v1", "api_key": "sk-...", "model": "deepseek-chat" },
+  "embedding": { "mode": "ollama", "ollama_url": "http://127.0.0.1:11436", "model": "yuan-embedding-2.0-zh" }
+}
 ```
 
-Or wire it manually:
+`triage` is optional — unset values fall back to `reflect`. Without any LLM key, the server still works fully as a read/write memory store; only reflection/triage are skipped.
 
 ### 4. Connect from your MCP client
 
@@ -48,12 +91,24 @@ Or wire it manually:
       "env": {
         "OLLAMA_URL": "http://127.0.0.1:11436",
         "EMBEDDING_MODEL": "yuan-embedding-2.0-zh",
-        "MEMORY_DB_PATH": "/absolute/path/to/castalia/memory.sqlite",
+        "MEMORY_DB_DIR": "/absolute/path/to/castalia/memory",
         "CHAR_ID": "default"
       }
     }
   }
 }
+```
+
+### 5. One-command agent setup (borrowed from engram's `engram setup`)
+
+```bash
+python scripts/setup.py claude     # Claude Code → .mcp.json
+python scripts/setup.py opencode   # OpenCode    → .opencode.json
+python scripts/setup.py cursor     # Cursor      → .cursor/mcp.json
+python scripts/setup.py vscode     # VS Code     → .vscode/mcp.json
+python scripts/setup.py codex      # Codex       → prints `codex mcp add` command
+python scripts/setup.py hermes     # Hermes Agent → prints `hermes config set` command
+python scripts/setup.py json       # print standard mcpServers JSON
 ```
 
 ## Hermes Agent
@@ -68,176 +123,120 @@ python scripts/setup.py hermes
 
 prints a ready-made `hermes mcp add` command — run it (answer `Y` to enable all tools), then **start a new session** (MCP servers are discovered at startup; no hot reload).
 
-Or add it manually with the built-in CLI — note `--args` **must be the last option**:
-
-```bash
-hermes mcp add castalia \
-  --command "C:\Program Files\nodejs\node.exe" \
-  --env "MEMORY_DB_PATH=C:\path\to\castalia\memory.sqlite" \
-        "CHAR_ID=hermes" \
-        "EMBEDDING_MODEL=qwen3-embedding:0.6b" \
-        "OLLAMA_URL=http://127.0.0.1:11434" \
-  --args "C:\path\to\castalia\dist\index.js"
-```
-
 > ⚠️ **Do NOT use `hermes config set mcp_servers '{...}'`** — it stores the JSON as a *string*, and the MCP client ignores non-dict values, so the server silently never loads. Always use `hermes mcp add` (writes a real dict under `mcp_servers`).
 >
-> **Windows note**: if `node` is not on the system `PATH` (git-bash often appends its own paths), use the absolute path to `node.exe` as `command`, e.g. `"C:\Program Files\nodejs\node.exe"`. Hermes passes only a filtered baseline environment to MCP subprocesses, so it won't inherit your shell's ad-hoc PATH additions.
-
-### Verify
-
-```bash
-hermes mcp list      # should show castalia with status ✓ enabled
-hermes mcp test castalia   # connects, expects "Tools discovered: 23"
-```
-
-After starting a new session, ask Hermes "what memory tools do you have?" or look for `mcp_castalia_*` in the tool list. Then:
-
-```
-"记住:我的项目叫 Castalia"
-→ mcp_castalia_memory_save
-"我之前说过什么?"
-→ mcp_castalia_memory_search
-```
+> **Windows note**: if `node` is not on the system `PATH`, use the absolute path to `node.exe` as `command`.
 
 ### Recommended env for Hermes
 
 | Var | Value | Why |
 |-----|-------|-----|
-| `MCP_TOOLS` | `harness` (default `agent`) | agent = read-only (5 tools); `harness` adds writes; `admin` adds management. See Tools section |
+| `MCP_TOOLS` | `harness` (default `agent`) | agent = read-only (6 tools); `harness` adds writes; `admin` adds management. See Tools section |
 | `CHAR_ID` | e.g. `hermes` | separate partition per agent/role, share one DB safely |
 | `EMBEDDING_MODEL` | your 1024-dim model | e.g. `qwen3-embedding:0.6b` on a local Ollama |
 
-## Unified Envelope (v1.1)
+---
 
-All read tools return a standard envelope (aligned with Mem0 / Hermes conventions):
+## Memory Layering (the core design)
 
-```json
-{ "ok": true, "op": "search", "query": "...", "count": 3,
-  "results": [{ "id": "...", "text": "short snippet…", "truncated": true,
-                "kind": "episode", "score": 0.81, "createdAt": "..." }],
-  "hint": "用 memory_get(id) 取完整内容" }
+Memories are **strictly layered** — nothing falls into an unclassified pile, even though vector search could catch it:
+
+```
+项目级(session_id = NULL)   ← 长效:LLM2 每日反思沉淀 + 临时反思晋升
+会话级(session_id = 'x')    ← 临时:渐进式滚动状态,TTL 7 天
+4 种封闭类型(mem_type)      ← 每层内部再分类:
+   user      用户画像(偏好/技术栈/风格)
+   feedback  行为纠正(正负双向)
+   project   项目上下文(约定/截止/环境)
+   reference 外部指针(URL/ID/文档)
 ```
 
-- Every result carries an `id`; call `memory_get(id)` to expand full text
-- `text` is truncated at 200 chars with `truncated: true`
-- Failures: `{ "ok": false, "error": { "code": "NOT_FOUND", "message": "..." } }`
+- **写入分层**: `auto_process` 每轮对话由 LLM1 分拣 mem_type;`memory_save` 可显式指定
+- **渐进式临时反思**(Claude Code progressive maintenance):每 5 轮对话后台异步提炼 → 长效干货**晋升**到项目级,会话状态滚动覆盖,晋升即删 + TTL 兜底
+- **每日反思**:距上次 ≥24h 且未分析对话 >5 条 → 下次启动自动执行(LLM2)
+- **记忆整合**(Memory Consolidator):记忆 >15 条时向量预筛相似对 → LLM 去重/矛盾消解/归并(原子事务)
+
+---
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `MEMORY_DB_DIR` | `./memory` | **v1.7** Memory directory: `global.sqlite` + `project-<name>.sqlite` (per-project DB files) |
+| `MEMORY_DB_PATH` | *(deprecated)* | Legacy single-DB path. If explicitly set, runs in single-DB compatibility mode with a warning |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | Embedding service address (bundled service runs on 11436) |
 | `EMBEDDING_MODEL` | `yuan-embedding-2.0-zh` | Embedding model name; must output **1024-dim** |
-| `MEMORY_DB_PATH` | `./memory.sqlite` | SQLite database path (auto-created on first run) |
+| `EMBED_MODE` | `ollama` | **v1.5.3** Embedding pipeline: `ollama` (local) / `api` (OpenAI-compatible, `EMBEDDING_API_KEY`) / `none` (pure local, no embed service at all) |
+| `EMBEDDING_API_KEY` | *(unset)* | Key for `EMBED_MODE=api` |
 | `CHAR_ID` | `default` | Instance/partition ID. Multiple instances can share one DB without cross-talk |
-| `CASTALIA_PROJECT` | `default` | **v1.5** Default project namespace. Memories are scoped per project; every tool accepts an optional `project` arg to switch |
-| `MCP_SERVER_NAME` | `castalia` | MCP server display name |
-| `SEARCH_MIN_SCORE` | `0.15` | Min score threshold for vector search results |
-| `WEIGHT_CONSISTENCY` | `0.65` | Scoring: semantic/tag consistency weight |
-| `WEIGHT_TIME` | `0.35` | Scoring: time-decay weight |
-| `HALF_LIFE_HOURS` | `720` | Time-decay half-life (hours, default 30 days) |
-| `REFLECT_LLM_URL` | `https://api.deepseek.com/v1` | OpenAI-compatible LLM endpoint for reflection |
-| `REFLECT_LLM_API_KEY` | *(unset)* | Reflection LLM key; reflection skipped when unset |
-| `REFLECT_LLM_MODEL` | `deepseek-chat` | Reflection LLM model |
-| `REFLECT_INTERVAL_HOURS` | `0` | Auto-reflect interval in hours; `0` = manual only |
-| `MCP_TOOLS` | `agent` | Tool visibility: `agent` (read-only, default) / `harness` / `admin` / `all` / comma list |
+| `CASTALIA_PROJECT` | `default` | **v1.5** Default project namespace |
+| `TRIAGE_LLM_URL` / `_API_KEY` / `_MODEL` | fallback REFLECT_* | **v1.11** LLM1 channel: inbound triage + incremental reflection |
+| `REFLECT_LLM_URL` / `_API_KEY` / `_MODEL` | deepseek / unset / deepseek-chat | **v1.5.4** LLM2 channel: daily reflection + consolidation |
+| `REFLECT_FACT_EXTRACTION` | `auto` | **v1.5.4** Extract SPO facts during reflection (`auto`/`off`) |
+| `REFLECT_MIN_GAP_HOURS` | `24` | **v1.9** Startup-reflection min gap since last reflection |
+| `REFLECT_MIN_UNANALYZED` | `5` | **v1.9** Startup-reflection min unanalyzed conversations |
+| `BUFFER_SIZE` | `5` | **v1.11** Session memory buffer threshold (turns per incremental reflection) |
+| `SESSION_MEMORY_TTL_DAYS` | `7` | **v1.11** Orphan session-memory TTL (swept at startup) |
+| `CONSOLIDATE_MIN_MEMORIES` | `15` | **v1.10** Auto-consolidation threshold at startup |
+| `CONSOLIDATE_SIMILARITY` | `0.88` | **v1.10** Vector similarity threshold for merge candidates |
+| `MCP_TOOLS` | `agent` | Tool visibility: `agent` / `harness` / `admin` / `all` / comma list |
 
-## Tools (24, profile-gated)
+---
 
-Tool visibility is controlled by `MCP_TOOLS` (default `agent` — read-only for the main agent):
+## Tools (29, profile-gated)
 
 | Profile | Tools | Purpose |
 |---------|-------|---------|
-| **agent** (5) | `memory_search` / `fact_search` / `memory_get` / `memory_recent` / `memory_graph` | Read-only recall for the LLM |
-| **harness** (10) | `memory_save` / `update` / `delete` / `memory_log` / `auto_process` / `conversation_save` / `digest_run` / `reflect_auto` / `reflect_deep` / `reflect_batch_embed` | Writes + pipeline, called by harness/system |
-| **admin** (9) | `memory_list` / `stats_get` / `recent_conversations` / `daily_summary_data` / `reflect_analyze` / `reflect_apply` / `memory_context` / `context_get` / `project_list` | Management, Web Console |
+| **agent** (6) | `memory_search` / `fact_search` / `memory_get` / `memory_recent` / `memory_index` / `memory_graph` | Read-only recall for the LLM |
+| **harness** (11) | `auto_process` / `conversation_save` / `digest_run` / `reflect_auto` / `reflect_deep` / `reflect_batch_embed` / `memory_save` / `memory_update` / `memory_delete` / `memory_log` / `instruction_save` | Writes + pipeline, called by harness/system |
+| **admin** (12) | `memory_list` / `stats_get` / `recent_conversations` / `daily_summary_data` / `reflect_analyze` / `reflect_apply` / `memory_context` / `context_get` / `project_list` / `instruction_list` / `instruction_delete` / `consolidate_deep` | Management, Web Console |
 
 `MCP_TOOLS=all` registers everything (backward compatible).
 
-### Project-scoped memories (v1.5)
+### Search & Recall
 
-Each memory/fact belongs to a **project namespace** (column `project`, default `'default'`). Every read/write tool accepts an optional `project` argument; omit it to use the `CASTALIA_PROJECT` env (or `'default'`).
-
-```json
-{ "text": "前端重构计划", "project": "alpha" }        // write into alpha
-{ "query": "重构", "project": "alpha" }              // search only alpha
-```
-
-- **Isolation**: dedup (exact + vector) is per-project — the same text can exist in different projects. Vector KNN is filtered by project, so project A queries never see project B memories.
-- **Discover**: `project_list` shows all namespaces with counts.
-- **Backward compatible**: existing memories stay in `'default'`; calls without `project` behave exactly as before.
-
-**Search**
-- `memory_search` — tag-first, vector KNN fallback, neutral scoring
+- `memory_search` — tag-first, vector KNN, text fallback (three-way, project-scoped)
 - `fact_search` — semantic search over fact triples (subject-predicate-object)
+- `memory_index` — **v1.8** lightweight index (150-char summaries, Claude Code MEMORY.md pattern): inject index first, expand details via `memory_get(id)` to save tokens
+- `memory_get` — expand one memory by ID (full text + metadata, incl. memType)
 
-**Memory CRUD**
-- `memory_save` — store a memory (`skipEmbed` to skip vectorization)
-- `memory_get` — expand one memory by ID (full text + metadata)
+### Memory CRUD
+
+- `memory_save` — store a memory. Optional `memType` (user/feedback/project/reference → auto Markdown-wrapped), `sessionId` (session-scoped), `expiresAt`, `skipEmbed`
 - `memory_update` / `memory_delete` — update fields / soft-delete
 - `memory_list` / `memory_recent` / `memory_graph` — enumerate / recent important / relation graph
 
-**Cognitive logging** (agent explicitly teaches the memory)
-- `memory_log_decision` — log a decision + rationale (category=decision)
-- `memory_log_pattern` — log a discovered pattern/insight (category=knowledge, tag=pattern)
-- `memory_log_mistake` — log a lesson learned (category=mistake, tier=critical, cleanup-protected)
+### Context & Injection
 
-**Conversation automation** (call per dialog turn)
-- `auto_process` — save the turn + trigger digest
-- `conversation_save` — save raw turn only
-- `digest_run` — run cleanup cycle (expired temporaries, critical restore)
-- `daily_summary_data` — conversations + processed data for the last N hours
-
-**Context / stats**
-- `memory_context` — **injection-ready context bundle**: recent + task-related (optional query) + cognitive logs + facts, with ground-truth instructions (borrowed from engram's `mem_context` / memory-os `fabric_brief`)
+- `memory_context` — **injection-ready bundle**: 三层指令(全局→用户→项目,约束递增) + 近期记忆 + 任务相关 + 经验沉淀 + 已知事实 + 记忆索引 + 会话滚动状态;旧记忆自动带 **Memory Snapshot Warning**
 - `context_get` — lightweight recent memories + stats
-- `stats_get` — memory statistics
+- `stats_get` — memory statistics (incl. byMemType)
 
-**Reflection** (LLM-driven, bundled in-server)
-- `reflect_analyze` — unanalyzed conversations + reflection system prompt
-- `reflect_apply` — apply reflection actions (merge/split/extract/reclassify/delete/relate)
-- `reflect_auto` — **one-shot auto-reflection**: unanalyzed conversations → configured LLM → apply (needs `REFLECT_LLM_API_KEY`)
-- `reflect_deep` — **deep calibration**: all memories → dedup/profile/graph → apply (needs `REFLECT_LLM_API_KEY`)
+### Instructions (three layers, v1.6)
+
+- `instruction_save` — upsert into `global` / `user` / `project` / `rule` layers
+- `instruction_list` / `instruction_delete` — admin view/remove
+- Load order into prompt: **global → user → project** (project lands last = highest constraint, recency bias). Supports `@include` rule-group recursion (depth 5, cycle-safe) and picomatch glob `paths` filtering
+
+### Reflection & Consolidation (LLM-driven, bundled in-server)
+
+- `reflect_auto` — one-shot auto-reflection (needs `REFLECT_LLM_API_KEY`)
+- `reflect_deep` — deep calibration: all memories → dedup/profile/graph → apply
+- `reflect_analyze` / `reflect_apply` — manual two-step reflection
+- `consolidate_deep` — **v1.10** Memory Consolidator: vector pre-screen → LLM dedup/merge/conflict-resolution → atomic apply (needs `REFLECT_LLM_API_KEY`)
 - `reflect_batch_embed` — batch-vectorize pending memories
 
-## Instruction Routing (v5.5): `@include` recursion + glob filtering
+### Conversation automation (call per dialog turn)
 
-Instructions (three layers + rule groups) support two routing mechanisms to keep the injected prompt lean. A third mechanism — JIT tool loading — was deliberately *not* implemented (rationale below).
+- `auto_process` — save turn + trigger digest + **inbound triage (LLM1) + session buffer** (pass `sessionId` to enable progressive reflection)
+- `conversation_save` — save raw turn only
+- `digest_run` — run cleanup cycle
 
-### 1. `@include` rule-group recursion
-
-A **rule group** is an instruction saved with `scope=rule` (`project` = group name). It is only loaded when referenced — never injected standalone. Any instruction (L1/L2/L3 or another rule group) can reference groups via an `include:` line:
-
-```
-include: "rule:typescript-core"                        # one group
-include: ["rule:typescript-core", "rule:python"]       # several groups
-```
-
-At read time each `include:` line is replaced by `[规则组 <name>]\n<expanded group text>`, keeping the same header style as `[全局]` / `[用户]` / `[项目]`. Expansion is recursive:
-
-- depth capped at **5** — deeper includes are truncated and a `⚠️` warning line is emitted;
-- cycles (A→B→A) are detected via a seen-set on the current expansion chain and cut with a warning line.
-
-`instruction_list` shows the raw (unexpanded) content; `memory_context` returns fully-expanded text.
-
-### 2. Glob condition filtering
-
-Any instruction (or rule group) may carry `paths` — a JSON array of picomatch glob patterns (default `NULL` = applies to every path):
-
-```
-paths: ["src/components/**/*.tsx", "!src/temp/**"]
-```
-
-When `memory_context` is called with a `path`, only instructions whose `paths` is empty or matches that path are injected. Rule groups referenced via `include:` are filtered by their own `paths` too (empty → follows the referencer). Matching is picomatch with last-match-wins negation (a pattern starting with `!` excludes on hit); Windows backslashes are normalized to `/`. Matchers are compiled once and cached. Injected instructions are tagged with their patterns, e.g. `[全局 src/components/**/*.tsx]`.
-
-### 3. JIT tool loading — deliberately not implemented
-
-We did **not** implement just-in-time / path-aware MCP tool registration. Reasons: MCP tool discovery is one-shot per connection (`tools/list` is cached by clients); the stdio transport has no re-registration channel; and dynamically hiding tools would break harness allowlists and admin tooling. Path-scoped control is instead achieved declaratively at the *data* layer (glob filtering above): the tool surface stays static and predictable, while the injected context adapts to the current file.
+---
 
 ## Web Console (3D main + admin side)
 
-Bundled web UI: fullscreen 3D memory graph as the main view, admin drawer (reflection, embedding/LLM config, memory management, logs) as the side panel.
+Bundled web UI: fullscreen 3D memory graph as the main view, admin drawer (reflection, embedding/triage/reflect LLM config, memory management, logs) as the side panel.
 
 ```bat
 cd web
@@ -245,37 +244,31 @@ npm install
 node server.mjs        # → http://127.0.0.1:3345
 ```
 
-- Config saved to `config.json` (embedding source + reflection LLM), applied on MCP server restart
-- Embedding source dropdown: **Ollama** (local URL + model) or **API** (cloud key, OpenAI-compatible `/embeddings`, e.g. SiliconFlow)
-- Reflection runs via a built-in MCP client calling `reflect_auto` / `reflect_deep`
+- Config saved to `memory/config.json` (embedding source + triage LLM + reflection LLM), applied on MCP server restart
+- Admin panel configures all **three channels** (embedding / triage / reflect)
 
-## Tests
-
-```bash
-python scripts/smoke_test.py   # core CRUD round-trip (no embedding service needed)
-python scripts/vec_test.py     # embed + vector semantic search (needs embed service on 11436)
-```
+---
 
 ## Storage
 
-- Schema auto-created on first run: memory / edges / categories / facts / embedding_cache / vec_memory / vec_facts
+- Per-project DB files under `memory/` (`global.sqlite` + `project-<name>.sqlite`); schema auto-created on first use, project DBs lazy-created
 - Fixed **1024-dim** vectors; swap embedding models only if same dim (or rebuild the DB)
-- WAL mode; auto-checkpoint every 30min; expired temporaries cleaned every 30min; consolidation every 24h
-- The DB file is fully portable (copy while stopped)
+- WAL mode; auto-checkpoint; expired temporaries cleaned periodically; consolidation on startup when >15 memories
+- DB files are fully portable (copy while stopped)
 
 ## Credits & Upstream
 
-Independent evolution of a memory system; storage-layer design inspired by / derived from:
+Independent evolution of a memory system; design informed by:
 
-- **cognitive-memory** (Apache-2.0) — SQLite + sqlite-vec local vector storage schema & vector KNN retrieval (concept-level; implementation rewritten)
-- **AIRI Alaya scoring design** — emotional-weight / time-decay scoring ideas (design reference only)
-- **SynaBun** — hierarchical categories & relevance weighting ideas (design reference only)
+- **Claude Code** (Anthropic) — closed memory types (user/feedback/project/reference), MEMORY.md index, progressive session maintenance, consolidation sub-agent, snapshot warnings (patterns re-implemented in SQLite)
+- **engram** — profile-gated tool exposure, setup script
+- **memory-os / cognitive-memory** — local vector storage patterns
 
-License: MIT, see `LICENSE`. Upstream acknowledgements retained above.
+License: MIT, see `LICENSE`.
 
 ## Troubleshooting
 
 - Embedding service down → `memory_save` reports embed failure; check `curl http://127.0.0.1:11436/health`
 - Empty search results → lower `SEARCH_MIN_SCORE`, or verify `CHAR_ID` matches the writer
-- Port conflict → change port in `scripts\start-embed.bat` + `OLLAMA_URL`
-- Hermes: tools not appearing → restart Hermes; verify `hermes config get mcp_servers`; on Windows ensure `command` is an absolute path to `node.exe` (Hermes filters the subprocess environment)
+- **Legacy `memory.sqlite` reappears in project root** → an old-code MCP instance is running; restart it with the new build (v1.7+ uses `memory/` dir)
+- Hermes: tools not appearing → restart Hermes; verify `hermes config get mcp_servers`; on Windows ensure `command` is an absolute path to `node.exe`
