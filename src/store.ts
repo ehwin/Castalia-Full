@@ -54,6 +54,7 @@ export interface MemoryRecord {
 }
 
 export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
+  if (!params.text || !params.text.trim()) throw new Error('memory text must not be empty');
   const db = DatabaseManager.getInstance(params.project);
   const now = new Date().toISOString();
   const skipEmbed = params.skipEmbed === true;

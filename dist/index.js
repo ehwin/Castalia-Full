@@ -156,7 +156,7 @@ register('fact_search', 'agent', 'Search structured facts (subject-predicate-obj
 // 存储类工具
 // ═══════════════════════════════════════════════════════════════════
 register('memory_save', 'harness', 'Store a new memory or update existing one by exact text match. When memType is one of user/feedback/project/reference, the text is auto-wrapped into Markdown structure (# heading + - list items).', {
-    text: z.string().describe('Memory content'),
+    text: z.string().min(1, 'text 不能为空').describe('Memory content'),
     type: z.enum(['episodic', 'semantic', 'entity', 'preference']).optional().default('episodic'),
     memType: z.enum(MEM_TYPES).optional().describe('Usage dimension: user (profile) / feedback (correction) / project (context) / reference (external pointer) / general (default). Non-general values force Markdown structure.'),
     category: z.string().optional().default('general'),

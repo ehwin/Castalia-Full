@@ -11,6 +11,8 @@ import { isClosedMemType, normalizeMarkdown, normalizeMemType } from './memType.
 let saveCount = 0;
 const CONSOLIDATE_INTERVAL = 50;
 export async function saveMemory(params) {
+    if (!params.text || !params.text.trim())
+        throw new Error('memory text must not be empty');
     const db = DatabaseManager.getInstance(params.project);
     const now = new Date().toISOString();
     const skipEmbed = params.skipEmbed === true;

@@ -3,6 +3,16 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.11.3] — 2026-08-05 debug:修复空文本记忆落库 + 边界测试
+
+### Fixed
+- **空文本记忆被接受**:`memory_save({text:""})` 之前返回 ok 并落库空记录(污染注入/搜索/统计)。schema 加 `z.string().min(1)` + saveMemory 入口防御校验(trim 空也拒);非法 memType 由 zod 拒绝(行为一致)
+- conversation_save/auto_process **不改**:对话原文拼装后不会是字面空文本,且 conversation_log 源已排除出向量/注入,保留原文日志用途
+
+### Verified(独立复验,非自报)
+- 边界 e2e:空文本/纯空白拒绝、非法 memType 拒绝、正常记忆成功、库内无空记录(5/5);路径逃逸 project 名安全化(../evil → project-.._evil.sqlite)、特殊字符/10万字符/并发 10 写、空白 project → 默认、空项目 memory_context 不崩
+- npm run build exit 0;smoke_test 全 PASS(29 工具)
+
 ## [v1.11.2] — 2026-08-05 README 全面重写(v1.11 架构对齐)
 
 - 工具数 23→29、存储从 MEMORY_DB_PATH 单库 → MEMORY_DB_DIR 分库、三通道(triage/embedding/reflect)、记忆分层(项目级/会话级/4 封闭类型)、渐进式临时反思、整合子进程、Snapshot Warning 全部入文档
