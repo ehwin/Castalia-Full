@@ -20,7 +20,7 @@
  *   memory_context 传 path 时,getInstruction 只返回 paths 为空或匹配该 path 的指令。
  *   取反规则:前缀 ! 的模式命中即排除(后出现者覆盖先出现者,类似 .gitignore last-match-wins)。
  */
-import { DatabaseManager, generateId } from './db.js';
+import { DatabaseManager, generateId, listProjectNames } from './db.js';
 import picomatch from 'picomatch';
 /** L1 全局种子:用户提供的全局规范全文 */
 export const INSTRUCTION_SEED_GLOBAL = `以下是全局规范
@@ -32,8 +32,19 @@ export const INSTRUCTION_SEED_GLOBAL = `以下是全局规范
  * 首次启动:表内无任何指令时写入 L1 全局种子。
  * 返回是否真的写入了种子 + 当前表内条数。
  */
+/**
+ * 指令存储路由:v6.0 起分库。
+ * L1(global)/L2(user)/rule(规则组) → global.sqlite(跨项目共享,rule 可被任何项目 include);
+ * L3(scope=project) → 对应项目库(project-<name>.sqlite)。
+ */
+function dbForScope(scope, project) {
+    if (scope === 'project') {
+        return project ? DatabaseManager.getInstance(project) : DatabaseManager.getInstance();
+    }
+    return DatabaseManager.getGlobal();
+}
 export function ensureSeedInstructions() {
-    const db = DatabaseManager.getInstance();
+    const db = DatabaseManager.getGlobal();
     const row = db.prepare('SELECT COUNT(*) as c FROM instructions').get();
     const count = row.c;
     if (count > 0)
@@ -48,7 +59,7 @@ export function ensureSeedInstructions() {
  * 返回该行 id 与是否新建(created=false 表示覆盖更新)。
  */
 export function saveInstruction(scope, project, content, paths) {
-    const db = DatabaseManager.getInstance();
+    const db = dbForScope(scope, project);
     const existing = db.prepare('SELECT id FROM instructions WHERE scope = ? AND project IS ?').get(scope, project);
     const pathsJson = paths && paths.length > 0 ? JSON.stringify(paths) : null;
     if (existing) {
@@ -130,9 +141,9 @@ export function parseIncludeRefs(raw) {
     catch { /* not JSON */ }
     return t.split(',').map(s => s.trim()).filter(Boolean);
 }
-/** 取规则组内容(scope='rule', project=组名);不存在返回 null */
+/** 取规则组内容(scope='rule', project=组名);规则组放 global.sqlite,可被任何项目 include 引用 */
 export function getRuleGroup(name) {
-    const db = DatabaseManager.getInstance();
+    const db = DatabaseManager.getGlobal();
     const row = db.prepare('SELECT content, paths FROM instructions WHERE scope = ? AND project = ?').get('rule', name);
     if (!row)
         return null;
@@ -190,18 +201,20 @@ export function expandInstruction(content, depth = 0, seen = new Set(), path) {
  * path 可选:只返回 paths 为空或匹配该 path 的指令;L3 仅在传入 project 时查询。
  */
 export function getInstruction(project, path) {
-    const db = DatabaseManager.getInstance();
+    const gdb = DatabaseManager.getGlobal();
     const result = [];
     const cands = [];
-    const l1 = db.prepare('SELECT scope, project, content, paths FROM instructions WHERE scope = ?').get('global');
-    const l2 = db.prepare('SELECT scope, project, content, paths FROM instructions WHERE scope = ?').get('user');
+    const l1 = gdb.prepare('SELECT scope, project, content, paths FROM instructions WHERE scope = ?').get('global');
+    const l2 = gdb.prepare('SELECT scope, project, content, paths FROM instructions WHERE scope = ?').get('user');
     if (l1)
         cands.push(l1);
     if (l2)
         cands.push(l2);
     const proj = (project ?? '').trim();
     if (proj.length > 0) {
-        const l3 = db.prepare('SELECT scope, project, content, paths FROM instructions WHERE scope = ? AND project = ?').get('project', proj);
+        // L3(scope=project) 存在对应项目库
+        const pdb = DatabaseManager.getInstance(proj);
+        const l3 = pdb.prepare('SELECT scope, project, content, paths FROM instructions WHERE scope = ? AND project = ?').get('project', proj);
         if (l3)
             cands.push(l3);
     }
@@ -217,13 +230,33 @@ export function getInstruction(project, path) {
     }
     return result;
 }
-/** admin:全部列出(global/user/project/rule 按层排序,带 updated_at),content 为原始未展开文本 */
+/** admin:全部列出(global/user/project/rule 按层排序,带 updated_at),content 为原始未展开文本。
+ *  L1/L2/rule 来自 global.sqlite;L3(project)散落在各项目库,遍历 memory/ 目录聚合。 */
 export function listInstructions() {
-    const db = DatabaseManager.getInstance();
-    const rows = db.prepare(`
+    const rows = [];
+    const gdb = DatabaseManager.getGlobal();
+    rows.push(...gdb.prepare(`
     SELECT id, scope, project, content, paths, updated_at FROM instructions
+    WHERE scope != 'project'
     ORDER BY CASE scope WHEN 'global' THEN 1 WHEN 'user' THEN 2 ELSE 3 END, project
-  `).all();
+  `).all());
+    // L3 项目指令:每个已有项目库各查一条 scope='project'
+    for (const name of listProjectNames()) {
+        try {
+            const pdb = DatabaseManager.getInstance(name);
+            const projRows = pdb.prepare(`
+        SELECT id, scope, project, content, paths, updated_at FROM instructions
+        WHERE scope = 'project'
+        ORDER BY project
+      `).all();
+            rows.push(...projRows);
+        }
+        catch { /* 打不开的库跳过 */ }
+    }
+    rows.sort((a, b) => {
+        const rank = (s) => (s === 'global' ? 1 : s === 'user' ? 2 : 3);
+        return rank(a.scope) - rank(b.scope) || String(a.project || '').localeCompare(String(b.project || ''));
+    });
     return rows.map(r => ({
         id: r.id,
         scope: r.scope,
@@ -233,9 +266,10 @@ export function listInstructions() {
         updatedAt: r.updated_at,
     }));
 }
-/** admin:删一层(global/user 的 project 传 null);返回是否删到 */
+/** admin:删一层(global/user 的 project 传 null);返回是否删到。
+ *  L1/L2/rule → global.sqlite;L3(project) → 对应项目库。 */
 export function deleteInstruction(scope, project) {
-    const db = DatabaseManager.getInstance();
+    const db = dbForScope(scope, project ?? null);
     const r = db.prepare('DELETE FROM instructions WHERE scope = ? AND project IS ?').run(scope, project ?? null);
     return { deleted: r.changes > 0 };
 }

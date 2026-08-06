@@ -11,7 +11,8 @@
  *
  * 环境变量:
  *   WEB_PORT         默认 3345(避开 AIRI viz 的 3344)
- *   MEMORY_DB_PATH   默认 <项目根>/memory.sqlite
+ *   MEMORY_DB_DIR    默认 <项目根>/memory/(按项目分库:global.sqlite + project-<name>.sqlite)
+ *   MEMORY_DB_PATH   旧单库路径(兼容模式:显式设置时仍指向单库)
  *   NODE_BIN         默认 node(PATH)
  */
 import express from 'express';
@@ -25,11 +26,26 @@ import { readFileSync, existsSync, writeFileSync } from 'fs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT = join(__dirname, '..');
-const DB_PATH = process.env.MEMORY_DB_PATH || join(ROOT, 'memory.sqlite');
+const LEGACY_DB_PATH = process.env.MEMORY_DB_PATH || '';
 const CONFIG_PATH = process.env.MEMORY_CONFIG || join(ROOT, 'config.json');
 const NODE_BIN = process.env.NODE_BIN || 'node';
 const MCP_SERVER = join(ROOT, 'dist', 'index.js');
 const PORT = parseInt(process.env.WEB_PORT || '3345', 10);
+
+// 记忆目录:env MEMORY_DB_DIR > config.json db_dir > <项目根>/memory/(兼容旧 MEMORY_DB_PATH 单库)
+function resolveDbDir() {
+  if (process.env.MEMORY_DB_DIR) return process.env.MEMORY_DB_DIR;
+  try {
+    if (existsSync(CONFIG_PATH)) {
+      const cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+      if (cfg.db_dir && typeof cfg.db_dir === 'string' && cfg.db_dir.trim()) return cfg.db_dir.trim();
+    }
+  } catch {}
+  return join(ROOT, 'memory');
+}
+const DB_DIR = resolveDbDir();
+// Web 控制台直接读库:兼容模式指向单库,新目录结构指向默认项目库(project-default.sqlite)
+const DB_PATH = LEGACY_DB_PATH || join(DB_DIR, 'project-default.sqlite');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -72,7 +88,13 @@ function mcpCall(toolName, args = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(NODE_BIN, [MCP_SERVER], {
       cwd: ROOT,
-      env: { ...process.env, MEMORY_DB_PATH: DB_PATH, MEMORY_CONFIG: CONFIG_PATH, MCP_TOOLS: process.env.MCP_TOOLS || 'all' },
+      env: {
+        ...process.env,
+        MEMORY_DB_DIR: DB_DIR,
+        ...(LEGACY_DB_PATH ? { MEMORY_DB_PATH: LEGACY_DB_PATH } : {}),
+        MEMORY_CONFIG: CONFIG_PATH,
+        MCP_TOOLS: process.env.MCP_TOOLS || 'all',
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let buf = '';
@@ -223,10 +245,12 @@ app.get('/api/stats', (req, res) => {
 // ═══ API: GET /api/status ═══
 app.get('/api/status', (req, res) => {
   const cfg = loadConfig();
+  const dbPath = LEGACY_DB_PATH || join(DB_DIR, 'global.sqlite');
   res.json({
-    db: DB_PATH,
+    db: LEGACY_DB_PATH ? DB_PATH : DB_DIR,
+    dbPath,
     config: CONFIG_PATH,
-    dbExists: existsSync(DB_PATH),
+    dbExists: existsSync(dbPath),
     embedMode: cfg.embedding?.mode || 'ollama',
     reflectConfigured: !!(cfg.reflect?.api_key),
   });
@@ -335,7 +359,7 @@ app.listen(PORT, () => {
   ╔══════════════════════════════════════════╗
   ║   Castalia Web Console                  ║
   ║   http://127.0.0.1:${PORT}                  ║
-  ║   DB: ${DB_PATH}  ║
+  ║   DB_DIR: ${DB_DIR}  ║
   ╚══════════════════════════════════════════╝
   `);
 });

@@ -43,7 +43,7 @@ function computeScore(similarity, row) {
  * 标签优先搜索 → 不足时回退向量 KNN
  */
 export async function searchMemory(options) {
-    const db = DatabaseManager.getInstance();
+    const db = DatabaseManager.getInstance(options.project);
     const profile = options.profile ? SEARCH_PROFILES[options.profile] : null;
     const topK = options.topK ?? profile?.topK ?? 10;
     const minScore = options.minScore ?? profile?.minScore ?? 0;
@@ -59,7 +59,7 @@ export async function searchMemory(options) {
     let vectorResults = [];
     if (isEmbedEnabled()) {
         try {
-            const queryVector = await embed(options.query);
+            const queryVector = await embed(options.query, options.project);
             const floatQuery = new Float32Array(queryVector);
             vectorResults = vectorKnnSearch(db, options, floatQuery, existingIds, topK, minScore);
         }
@@ -271,7 +271,7 @@ function updateAccessed(db, results) {
  * 不做向量搜索，直接按时间+importance 捞
  */
 export function getRecentMemories(characterId, limit = 5, hoursBack = 24, project) {
-    const db = DatabaseManager.getInstance();
+    const db = DatabaseManager.getInstance(project);
     const since = new Date(Date.now() - hoursBack * 3600000).toISOString();
     const proj = normalizeProject(project);
     const rows = db.prepare(`
@@ -299,14 +299,14 @@ export function getRecentMemories(characterId, limit = 5, hoursBack = 24, projec
  * 将查询文本做 embedding，在 vec_facts 中 KNN 搜索。
  */
 export async function searchFacts(query, options = {}) {
-    const db = DatabaseManager.getInstance();
+    const db = DatabaseManager.getInstance(options.project);
     const topK = options.topK ?? 10;
     const minConfidence = options.minConfidence ?? 0.3;
     const proj = normalizeProject(options.project);
     if (!isEmbedEnabled()) {
         return []; // 纯本地模式:facts 无向量可查
     }
-    const queryVector = await embed(query);
+    const queryVector = await embed(query, options.project);
     const floatQuery = new Float32Array(queryVector);
     const knnLimit = Math.min(topK * 8, 60);
     let knnRows;

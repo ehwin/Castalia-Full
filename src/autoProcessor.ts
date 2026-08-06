@@ -35,7 +35,7 @@ export async function autoProcess(args: {
 
   // 事件驱动 digest(不阻塞)
   try {
-    maybeDigest(cid)?.catch(() => {});
+    maybeDigest(cid, proj)?.catch(() => {});
     results.details.push('digest triggered');
   } catch {
     /* noop */

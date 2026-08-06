@@ -49,7 +49,7 @@ export interface MemoryRecord {
 }
 
 export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
-  const db = DatabaseManager.getInstance();
+  const db = DatabaseManager.getInstance(params.project);
   const now = new Date().toISOString();
   const skipEmbed = params.skipEmbed === true;
   const project = normalizeProject(params.project);
@@ -83,7 +83,7 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
 
   if (!skipEmbed && isEmbedEnabled()) {
     try {
-      vector = await getEmbeddingCached(params.text);
+      vector = await getEmbeddingCached(params.text, project);
       const floatVec = new Float32Array(vector);
       const knn = db.prepare(`
         SELECT rowid, distance FROM vec_memory
@@ -165,18 +165,18 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
   return record;
 }
 
-export function forgetMemory(id: string): boolean {
-  const db = DatabaseManager.getInstance();
+export function forgetMemory(id: string, project?: string): boolean {
+  const db = DatabaseManager.getInstance(project);
   return db.prepare('UPDATE memory SET is_active = 0 WHERE id = ?').run(id).changes > 0;
 }
 
-export function restoreMemory(id: string): boolean {
-  const db = DatabaseManager.getInstance();
+export function restoreMemory(id: string, project?: string): boolean {
+  const db = DatabaseManager.getInstance(project);
   return db.prepare('UPDATE memory SET is_active = 1 WHERE id = ?').run(id).changes > 0;
 }
 
 export async function updateMemory(id: string, updates: Partial<StoreParams>): Promise<MemoryRecord | null> {
-  const db = DatabaseManager.getInstance();
+  const db = DatabaseManager.getInstance(updates.project);
   const existing = db.prepare('SELECT * FROM memory WHERE id = ?').get(id) as any;
   if (!existing) return null;
 
@@ -198,7 +198,7 @@ export async function updateMemory(id: string, updates: Partial<StoreParams>): P
   db.prepare(`UPDATE memory SET ${fields.join(', ')} WHERE id = ?`).run(...values);
 
   if (updates.text !== undefined && isEmbedEnabled()) {
-    const newVec = await getEmbeddingCached(updates.text);
+    const newVec = await getEmbeddingCached(updates.text, updates.project);
     db.prepare('DELETE FROM vec_memory WHERE rowid = (SELECT rowid FROM memory WHERE id = ?)').run(id);
     const rowInfo = db.prepare('SELECT rowid FROM memory WHERE id = ?').get(id) as any;
     db.prepare('INSERT INTO vec_memory (rowid, embedding) VALUES (?, ?)').run(
@@ -222,7 +222,7 @@ export async function saveConversationTurn(
   moodReason?: string,
   project?: string,  // v1.5: 项目隔离
 ): Promise<any> {
-  const db = DatabaseManager.getInstance();
+  const db = DatabaseManager.getInstance(project);
   const now = new Date().toISOString();
   const id = generateId();
   const proj = normalizeProject(project);
@@ -252,8 +252,8 @@ export async function saveConversationTurn(
 // 访问次数 ≥ HEAT_PROMOTE_THRESHOLD 的 temporary 记忆自动升 standard(免清理)
 const HEAT_PROMOTE_THRESHOLD = parseInt(process.env.HEAT_PROMOTE_THRESHOLD || '5', 10);
 
-export function promoteByAccess(): number {
-  const db = DatabaseManager.getInstance();
+export function promoteByAccess(project?: string): number {
+  const db = DatabaseManager.getInstance(project);
   const now = new Date().toISOString();
   const r = db.prepare(`
     UPDATE memory SET tier = 'standard', updated_at = ?
@@ -263,11 +263,11 @@ export function promoteByAccess(): number {
   return r.changes;
 }
 
-export function cleanupExpiredMemories(): number {
-  const db = DatabaseManager.getInstance();
+export function cleanupExpiredMemories(project?: string): number {
+  const db = DatabaseManager.getInstance(project);
   const now = new Date().toISOString();
   // 先升格再清理:被反复访问的 temporary 不该被清
-  promoteByAccess();
+  promoteByAccess(project);
   const result = db.prepare(`
     UPDATE memory SET is_active = 0, updated_at = ?
     WHERE tier = 'temporary' AND expires_at IS NOT NULL AND expires_at < ? AND is_active = 1
@@ -302,7 +302,7 @@ export async function reEmbedMemory(id: string): Promise<boolean> {
  */
 export async function batchEmbedPending(characterId: string = 'airi', project?: string): Promise<{ embedded: number; errors: string[] }> {
   if (!isEmbedEnabled()) return { embedded: 0, errors: ['embedding disabled (EMBED_MODE=none)'] };
-  const db = DatabaseManager.getInstance();
+  const db = DatabaseManager.getInstance(project);
   const errors: string[] = [];
 
   // 找所有有记忆但无向量的记录(source 为 NULL 也算,修复 NULL != 'x' 恒假的坑)
@@ -327,7 +327,7 @@ export async function batchEmbedPending(characterId: string = 'airi', project?: 
   let embedded = 0;
   for (const row of pending) {
     try {
-      const vec = new Float32Array(await embed(row.text));
+      const vec = new Float32Array(await embed(row.text, project));
       db.prepare('INSERT INTO vec_memory (rowid, embedding) VALUES (?, ?)').run(BigInt(row.rowid), vec);
       embedded++;
     } catch (e: any) {
@@ -370,7 +370,7 @@ export async function saveFacts(
 ): Promise<{ inserted: number; updated: number }> {
   if (!facts || facts.length === 0) return { inserted: 0, updated: 0 };
 
-  const db = DatabaseManager.getInstance();
+  const db = DatabaseManager.getInstance(project);
   const now = new Date().toISOString();
   const proj = normalizeProject(project);
   let inserted = 0;
@@ -414,7 +414,7 @@ export async function saveFacts(
     for (const row of allFacts) {
       const factText = `${row.subject} ${row.predicate} ${row.object}`;
       try {
-        const vec = new Float32Array(await getEmbeddingCached(factText));
+        const vec = new Float32Array(await getEmbeddingCached(factText, proj));
         // upsert: delete old + insert new
         db.prepare('DELETE FROM vec_facts WHERE rowid = ?').run(BigInt(row.rowid));
         db.prepare('INSERT INTO vec_facts (rowid, embedding) VALUES (?, ?)').run(BigInt(row.rowid), vec);
@@ -429,7 +429,7 @@ export async function saveFacts(
  * 查询某个主体的所有活跃事实
  */
 export function getFactsBySubject(subject: string, characterId?: string, project?: string): FactRecord[] {
-  const db = DatabaseManager.getInstance();
+  const db = DatabaseManager.getInstance(project);
   const proj = normalizeProject(project);
   let query = 'SELECT * FROM facts WHERE subject = ? AND is_active = 1 AND project = ?';
   const params: any[] = [subject, proj];

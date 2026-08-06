@@ -16,6 +16,11 @@ try {
   if (fs.existsSync(CONFIG_PATH)) {
     const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
 
+    // 记忆库目录配置:config.json 的 db_dir 字段(若有)覆盖环境变量
+    if (cfg.db_dir && typeof cfg.db_dir === 'string' && cfg.db_dir.trim()) {
+      process.env.MEMORY_DB_DIR = cfg.db_dir.trim();
+    }
+
     // 嵌入模型配置
     const emb = cfg.embedding || {};
     if (emb.mode === 'api') {

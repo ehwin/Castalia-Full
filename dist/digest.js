@@ -16,8 +16,8 @@ import { cleanupExpiredMemories } from './store.js';
 import { normalizeProject } from './env.js';
 const MIN_DIGEST_GAP_MS = 60 * 1000;
 let lastDigestTime = 0;
-export async function runDigest(characterId = 'default') {
-    const db = DatabaseManager.getInstance();
+export async function runDigest(characterId = 'default', project) {
+    const db = DatabaseManager.getInstance(project);
     const result = {
         success: true,
         cleaned: 0,
@@ -25,7 +25,7 @@ export async function runDigest(characterId = 'default') {
         errors: [],
     };
     // 1. 清理过期临时记忆
-    result.cleaned = cleanupExpiredMemories();
+    result.cleaned = cleanupExpiredMemories(project);
     // 2. 恢复被误标记的 critical 记忆
     try {
         const lostCritical = db.prepare(`
@@ -39,11 +39,11 @@ export async function runDigest(characterId = 'default') {
     }
     return result;
 }
-export function maybeDigest(characterId = 'default') {
+export function maybeDigest(characterId = 'default', project) {
     const now = Date.now();
     if (now - lastDigestTime < MIN_DIGEST_GAP_MS)
         return null;
-    const db = DatabaseManager.getInstance();
+    const db = DatabaseManager.getInstance(project);
     const unanalyzed = db.prepare(`
     SELECT COUNT(*) as c FROM memory
     WHERE is_active = 1 AND source = 'conversation_log'
@@ -52,10 +52,10 @@ export function maybeDigest(characterId = 'default') {
     if (unanalyzed === 0)
         return null;
     lastDigestTime = now;
-    return runDigest(characterId);
+    return runDigest(characterId, project);
 }
 export function getRecentConversations(characterId, hoursBack = 24, limit = 50, project) {
-    const db = DatabaseManager.getInstance();
+    const db = DatabaseManager.getInstance(project);
     const since = new Date(Date.now() - hoursBack * 3600000).toISOString();
     const proj = normalizeProject(project);
     return db.prepare(`

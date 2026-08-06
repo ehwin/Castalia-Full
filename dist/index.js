@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { searchMemory, searchFacts, getRecentMemories } from './search.js';
 import { saveMemory, forgetMemory, updateMemory, saveConversationTurn, cleanupExpiredMemories, batchEmbedPending } from './store.js';
 import { consolidate } from './consolidate.js';
-import { DatabaseManager } from './db.js';
+import { DatabaseManager, listProjectNames } from './db.js';
 import { runDigest, getRecentConversations, maybeDigest } from './digest.js';
 import { reflect, getAllMemories, getMemoryGraph, REFLECT_SYSTEM_PROMPT, getUnanalyzedConversations } from './reflect.js';
 import { autoProcess } from './autoProcessor.js';
@@ -160,8 +160,8 @@ register('memory_save', 'harness', 'Store a new memory or update existing one by
         return err(e.message);
     }
 });
-register('memory_delete', 'harness', 'Soft-delete a memory by ID.', { id: z.string().describe('Memory ID to delete') }, async (args) => {
-    const ok_ = forgetMemory(args.id);
+register('memory_delete', 'harness', 'Soft-delete a memory by ID.', { id: z.string().describe('Memory ID to delete'), project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")') }, async (args) => {
+    const ok_ = forgetMemory(args.id, args.project);
     return ok({ deleted: ok_ });
 });
 register('memory_update', 'harness', 'Update memory fields (text, category, tags, importance, etc.).', {
@@ -171,6 +171,7 @@ register('memory_update', 'harness', 'Update memory fields (text, category, tags
     tags: z.array(z.string()).optional(),
     importance: z.number().optional(),
     tier: z.string().optional(),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
 }, async (args) => {
     try {
         const r = await updateMemory(args.id, args);
@@ -259,7 +260,7 @@ register('conversation_save', 'harness', '[Internal] Save a raw conversation tur
 // ═══════════════════════════════════════════════════════════════════
 register('context_get', 'admin', 'Get memory context summary: recent memories + stats, for prompt injection.', { project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")') }, async (args) => {
     try {
-        const db = DatabaseManager.getInstance();
+        const db = DatabaseManager.getInstance(args.project);
         const recent = getRecentMemories(CHAR_ID, 5, 24, args.project);
         const stats = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1 AND project=?').get(normalizeProject(args.project));
         return ok({
@@ -285,7 +286,7 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
     path: z.string().optional().describe('Current file path for glob-filtered instructions (e.g. src/components/Button.tsx). Instructions whose paths pattern does not match are skipped.'),
 }, async (args) => {
     try {
-        const db = DatabaseManager.getInstance();
+        const db = DatabaseManager.getInstance(args.project);
         const hoursBack = args.hoursBack ?? 48;
         const recentLimit = args.recentLimit ?? 5;
         const relatedLimit = args.relatedLimit ?? 5;
@@ -371,7 +372,7 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
 });
 register('stats_get', 'admin', 'Get memory system statistics: total count, by category, by source.', { project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")') }, async (args) => {
     try {
-        const db = DatabaseManager.getInstance();
+        const db = DatabaseManager.getInstance(args.project);
         const proj = normalizeProject(args.project);
         const total = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? AND project=?').get(CHAR_ID, proj);
         return ok({
@@ -422,9 +423,12 @@ register('memory_list', 'admin', 'List active memories, optionally filtered. Adm
         return err(e.message, 'LIST_FAILED');
     }
 });
-register('memory_get', 'agent', 'Get one memory by ID with full text. Use to expand a search/recent/list result.', { id: z.string().describe('Memory ID') }, async (args) => {
+register('memory_get', 'agent', 'Get one memory by ID with full text. Use to expand a search/recent/list result.', {
+    id: z.string().describe('Memory ID'),
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
+}, async (args) => {
     try {
-        const db = DatabaseManager.getInstance();
+        const db = DatabaseManager.getInstance(args.project);
         const row = db.prepare('SELECT * FROM memory WHERE id = ? AND is_active = 1').get(args.id);
         if (!row)
             return err('memory not found: ' + args.id, 'NOT_FOUND');
@@ -597,7 +601,7 @@ register('reflect_batch_embed', 'harness', '[Internal] Batch embed all pending (
 register('daily_summary_data', 'admin', 'Get conversation and auto-process data for the past N hours.', { hoursBack: z.number().optional().default(24),
     project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")') }, async (args) => {
     try {
-        const db = DatabaseManager.getInstance();
+        const db = DatabaseManager.getInstance(args.project);
         const since = new Date(Date.now() - (args.hoursBack || 24) * 3600000).toISOString();
         const proj = normalizeProject(args.project);
         const convs = db.prepare("SELECT text FROM memory WHERE is_active=1 AND source='conversation_log' AND project=? AND created_at>? ORDER BY created_at ASC LIMIT 100").all(proj, since).map((r) => r.text);
@@ -610,25 +614,60 @@ register('daily_summary_data', 'admin', 'Get conversation and auto-process data 
 });
 register('project_list', 'admin', 'List all project namespaces and their memory/fact counts. Use to discover which projects have memories (e.g. after switching working directories).', {}, async () => {
     try {
-        const db = DatabaseManager.getInstance();
-        const mem = db.prepare(`
-        SELECT project, COUNT(*) as c FROM memory
-        WHERE is_active = 1 GROUP BY project ORDER BY c DESC
-      `).all();
-        const facts = db.prepare(`
-        SELECT project, COUNT(*) as c FROM facts
-        WHERE is_active = 1 GROUP BY project ORDER BY c DESC
-      `).all();
-        const byId = {};
-        for (const r of mem)
-            byId[r.project || 'default'] = { project: r.project || 'default', memories: r.c, facts: 0 };
-        for (const r of facts) {
-            const key = r.project || 'default';
-            if (!byId[key])
-                byId[key] = { project: key, memories: 0, facts: 0 };
-            byId[key].facts = r.c;
+        // 兼容模式(MEMORY_DB_PATH):单库内按 project 列分组统计(旧行为)
+        if (process.env.MEMORY_DB_PATH) {
+            const db = DatabaseManager.getInstance();
+            const mem = db.prepare(`
+          SELECT project, COUNT(*) as c FROM memory
+          WHERE is_active = 1 GROUP BY project ORDER BY c DESC
+        `).all();
+            const facts = db.prepare(`
+          SELECT project, COUNT(*) as c FROM facts
+          WHERE is_active = 1 GROUP BY project ORDER BY c DESC
+        `).all();
+            const byId = {};
+            for (const r of mem)
+                byId[r.project || 'default'] = { project: r.project || 'default', memories: r.c, facts: 0 };
+            for (const r of facts) {
+                const key = r.project || 'default';
+                if (!byId[key])
+                    byId[key] = { project: key, memories: 0, facts: 0 };
+                byId[key].facts = r.c;
+            }
+            const projects = Object.values(byId).sort((a, b) => (b.memories + b.facts) - (a.memories + a.facts));
+            return ok({
+                op: 'project_list',
+                count: projects.length,
+                current: PROJECT_ID,
+                projects,
+                hint: '读写工具传 project 参数即切换到该项目的记忆空间;不传则用当前项目(' + PROJECT_ID + ')',
+            });
         }
-        const projects = Object.values(byId).sort((a, b) => (b.memories + b.facts) - (a.memories + a.facts));
+        // 新目录结构:遍历 memory/ 下 project-*.sqlite(无库文件的项目不算)
+        const gdb = DatabaseManager.getGlobal();
+        const regMap = new Map();
+        try {
+            for (const r of gdb.prepare('SELECT project, created_at FROM projects').all()) {
+                regMap.set(r.project, r.created_at);
+            }
+        }
+        catch { /* projects 表不可用时忽略 */ }
+        const projects = [];
+        for (const name of listProjectNames()) {
+            try {
+                const db = DatabaseManager.getInstance(name);
+                const mem = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1').get();
+                const facts = db.prepare('SELECT COUNT(*) as c FROM facts WHERE is_active=1').get();
+                projects.push({
+                    project: name,
+                    memories: mem.c,
+                    facts: facts.c,
+                    createdAt: regMap.get(name) || null,
+                });
+            }
+            catch { /* 打不开的库跳过 */ }
+        }
+        projects.sort((a, b) => (b.memories + b.facts) - (a.memories + a.facts));
         return ok({
             op: 'project_list',
             count: projects.length,
@@ -695,8 +734,9 @@ register('instruction_delete', 'admin', 'Delete one instruction layer. scope=pro
 // STARTUP
 // ═══════════════════════════════════════════════════════════════════
 async function main() {
-    // 三层指令记忆:首次启动写入 L1 全局种子(必须在建表之后、服务对外之前)
-    DatabaseManager.getInstance();
+    // 三层指令记忆:启动时创建 memory/ 目录 + global.sqlite(建表 + L1 全局种子)
+    // 项目库懒加载:首次访问某 project 才创建
+    DatabaseManager.getGlobal();
     const seed = ensureSeedInstructions();
     console.error(`[instructions] L1 种子${seed.seeded ? '已写入(scope=global)' : `跳过(表已有 ${seed.count} 条)`}`);
     // Agent state: nothing to flush (in-memory only)

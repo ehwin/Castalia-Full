@@ -2,6 +2,12 @@
  * AIRI Memory Database Manager
  * SQLite + sqlite-vec with Alaya-compatible schema
  *
+ * v6.0: 单库 → 按项目分库(物理隔离)
+ *   - global.sqlite             : L1(global)/L2(user) 指令 + rule 规则组 + 项目注册表(projects)
+ *   - project-<name>.sqlite     : 每项目一个库,含全部业务表 + L3(scope=project) 指令
+ *   目录:env MEMORY_DB_DIR 或 <cwd>/memory/。project 为空 → project-default.sqlite(向后兼容)。
+ *   兼容模式:显式设置旧环境变量 MEMORY_DB_PATH 时仍为单库(向后兼容),并警告提示改用 MEMORY_DB_DIR。
+ *
  * v5.0: 1024-dim vectors (Yuan-EB 2.0-zh), auto-migration from 4096
  * v4.0: 4096-dim vectors (qwen3-embedding:8b)
  */
@@ -10,239 +16,335 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
+import { normalizeProject } from './env.js';
 
-const DB_PATH = process.env.MEMORY_DB_PATH || path.join(process.cwd(), 'memory.sqlite');
-const VEC_DIM = 1024; // Yuan-EB 2.0-zh
+export const VEC_DIM = 1024; // Yuan-EB 2.0-zh
 
 export function generateId(): string {
   return crypto.randomUUID();
 }
 
-export class DatabaseManager {
-  private static instance: Database.Database | null = null;
+/** memory 目录:env MEMORY_DB_DIR 或 <cwd>/memory/ */
+function memDir(): string {
+  const dir = process.env.MEMORY_DB_DIR;
+  return dir && dir.trim().length > 0 ? dir.trim() : path.join(process.cwd(), 'memory');
+}
 
-  public static getInstance(): Database.Database {
-    if (!DatabaseManager.instance) {
-      const db = new Database(DB_PATH);
-      sqliteVec.load(db);
-      db.pragma('journal_mode = WAL');
-      DatabaseManager.initSchema(db);
-      DatabaseManager.instance = db;
-    }
-    return DatabaseManager.instance;
-  }
+/** 旧单库路径(兼容模式):显式设置了 MEMORY_DB_PATH 时启用单库行为 */
+function legacyDbPath(): string | undefined {
+  const p = process.env.MEMORY_DB_PATH;
+  return p && p.trim().length > 0 ? p.trim() : undefined;
+}
 
-  private static initSchema(db: Database.Database) {
+/** 项目名 → 文件名安全片段:禁止路径分隔符/危险字符(避免 ../ 逃逸 memory 目录) */
+export function safeFilePart(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]/g, '_') || 'default';
+}
+
+let warnedLegacy = false;
+function isLegacyMode(): boolean {
+  return !!legacyDbPath();
+}
+
+/** 扫描 memory 目录下已有的项目库文件名(project-<name>.sqlite),返回项目名 */
+export function listProjectNames(): string[] {
+  const dir = memDir();
+  if (isLegacyMode() || !fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter(f => f.startsWith('project-') && f.endsWith('.sqlite'))
+    .map(f => f.slice('project-'.length, -'.sqlite'.length));
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Schema 初始化(拆分为 全局库 / 项目库 两组)
+// ═══════════════════════════════════════════════════════════════════
+
+/** 三层指令表(global/user/project/rule)+ 索引 + v5.5 迁移 */
+function initInstructionsSchema(db: Database.Database) {
+  try {
     db.exec(`
-      CREATE TABLE IF NOT EXISTS memory (
+      CREATE TABLE IF NOT EXISTS instructions (
         id TEXT PRIMARY KEY,
-        text TEXT NOT NULL,
-        project TEXT DEFAULT 'default',
-        type TEXT DEFAULT 'episodic',
-        category TEXT DEFAULT 'general',
-        subcategory TEXT,
-        tags TEXT DEFAULT '[]',
-        importance REAL DEFAULT 0.5,
-        character_id TEXT,
-        source TEXT,
-        subject TEXT DEFAULT 'user',
-        tier TEXT DEFAULT 'standard',
-        expires_at DATETIME,
-        is_active INTEGER DEFAULT 1,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        last_accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        accessed_count INTEGER DEFAULT 0,
-        reference_count INTEGER DEFAULT 0
+        scope TEXT NOT NULL CHECK(scope IN ('global','user','project','rule')),
+        project TEXT,
+        content TEXT NOT NULL,
+        paths TEXT,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
-
-      CREATE TABLE IF NOT EXISTS edges (
-        id TEXT PRIMARY KEY,
-        source_id TEXT NOT NULL,
-        target_id TEXT NOT NULL,
-        relation_type TEXT NOT NULL,
-        metadata TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(source_id) REFERENCES memory(id),
-        FOREIGN KEY(target_id) REFERENCES memory(id)
-      );
-
-      CREATE TABLE IF NOT EXISTS categories (
-        name TEXT PRIMARY KEY,
-        description TEXT NOT NULL,
-        parent TEXT,
-        color TEXT,
-        is_parent INTEGER DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE IF NOT EXISTS embedding_cache (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        text_hash TEXT UNIQUE NOT NULL,
-        embedding BLOB NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE IF NOT EXISTS facts (
-        id TEXT PRIMARY KEY,
-        subject TEXT NOT NULL,
-        predicate TEXT NOT NULL,
-        object TEXT NOT NULL,
-        project TEXT DEFAULT 'default',
-        confidence REAL DEFAULT 0.5,
-        source_memory_id TEXT,
-        character_id TEXT,
-        is_active INTEGER DEFAULT 1,
-        accessed_count INTEGER DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(source_memory_id) REFERENCES memory(id)
-      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_scope_unique ON instructions(scope) WHERE scope IN ('global','user');
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_project_unique ON instructions(scope, project) WHERE scope = 'project';
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_rule_unique ON instructions(project) WHERE scope = 'rule';
+      CREATE INDEX IF NOT EXISTS idx_instructions_scope ON instructions(scope, project);
     `);
+  } catch (_e) { /* already exists */ }
 
-    // Safe column migrations (may already exist)
-    const migrations = [
-      `ALTER TABLE memory ADD COLUMN tier TEXT DEFAULT 'standard'`,
-      `ALTER TABLE memory ADD COLUMN expires_at DATETIME`,
-    ];
-    for (const sql of migrations) {
-      try { db.exec(sql); } catch (_e) { /* already exists */ }
-    }
-
-    // v5.3: locked column for permanent memory protection
-    try { db.exec(`ALTER TABLE memory ADD COLUMN locked INTEGER DEFAULT 0`); } catch (_e) { /* already exists */ }
-    try { db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_tier ON memory(tier, is_active)`); } catch (_e) {}
-
-    // v1.5: project column for per-project memory isolation
-    try { db.exec(`ALTER TABLE memory ADD COLUMN project TEXT DEFAULT 'default'`); } catch (_e) { /* already exists */ }
-    try { db.exec(`ALTER TABLE facts ADD COLUMN project TEXT DEFAULT 'default'`); } catch (_e) { /* already exists */ }
-    try { db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_project ON memory(project, is_active)`); } catch (_e) {}
-    try { db.exec(`CREATE INDEX IF NOT EXISTS idx_facts_project ON facts(project, is_active)`); } catch (_e) {}
-
-    // Unique index for fact dedup (per-project: same SPO allowed across projects)
-    try { db.exec(`DROP INDEX IF EXISTS idx_facts_spo`); } catch (_e) {}
-    try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_spo ON facts(subject, predicate, object, project)`); } catch (_e) {}
-    try { db.exec(`CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(subject, is_active)`); } catch (_e) {}
-
-    // ═══ v5.4 迁移：三层指令记忆(instruction memory)═══
-    // L1 global / L2 user / L3 project(类比 Claude Code CLAUDE.md 层级)
-    // 唯一约束:global/user 每层一条(scope 唯一),project 按 (scope, project) 唯一
-    // 用 partial unique index 规避 SQLite 对 NULL 不参与唯一性约束的行为(global/user 的 project 为 NULL)
-    // v5.5:scope 扩为 4 值(新增 'rule' 规则组),新增 paths TEXT 列(JSON 数组 = glob 过滤)
-    try {
+  // v5.5 迁移:老表补 paths 列 + scope='rule'(规则组)。
+  // SQLite 无法 ALTER 修改 CHECK 约束,必须重建表;用事务保证原子性,不破坏已有数据。
+  // 幂等:每次启动检查 table_info + sqlite_master.sql,缺任一特性才重建。
+  try {
+    const instCols = db.prepare(`PRAGMA table_info(instructions)`).all() as any[];
+    const hasPaths = instCols.some(c => c.name === 'paths');
+    const instSql = (db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='instructions'`).get() as any)?.sql || '';
+    const hasRuleScope = /'rule'/.test(instSql);
+    if (!hasPaths || !hasRuleScope) {
+      console.log('[db] migrating instructions → v5.5 (paths column + scope=rule)');
+      db.transaction(() => {
+        db.exec(`ALTER TABLE instructions RENAME TO instructions_v55_old`);
+        db.exec(`
+          CREATE TABLE instructions (
+            id TEXT PRIMARY KEY,
+            scope TEXT NOT NULL CHECK(scope IN ('global','user','project','rule')),
+            project TEXT,
+            content TEXT NOT NULL,
+            paths TEXT,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+          INSERT INTO instructions (id, scope, project, content, updated_at)
+            SELECT id, scope, project, content, updated_at FROM instructions_v55_old;
+          DROP TABLE instructions_v55_old;
+        `);
+      })();
       db.exec(`
-        CREATE TABLE IF NOT EXISTS instructions (
-          id TEXT PRIMARY KEY,
-          scope TEXT NOT NULL CHECK(scope IN ('global','user','project','rule')),
-          project TEXT,
-          content TEXT NOT NULL,
-          paths TEXT,
-          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_scope_unique ON instructions(scope) WHERE scope IN ('global','user');
         CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_project_unique ON instructions(scope, project) WHERE scope = 'project';
         CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_rule_unique ON instructions(project) WHERE scope = 'rule';
         CREATE INDEX IF NOT EXISTS idx_instructions_scope ON instructions(scope, project);
       `);
-    } catch (_e) { /* already exists */ }
-
-    // v5.5 迁移:老表补 paths 列 + scope='rule'(规则组)。
-    // SQLite 无法 ALTER 修改 CHECK 约束,必须重建表;用事务保证原子性,不破坏已有数据。
-    // 幂等:每次启动检查 table_info + sqlite_master.sql,缺任一特性才重建。
-    try {
-      const instCols = db.prepare(`PRAGMA table_info(instructions)`).all() as any[];
-      const hasPaths = instCols.some(c => c.name === 'paths');
-      const instSql = (db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='instructions'`).get() as any)?.sql || '';
-      const hasRuleScope = /'rule'/.test(instSql);
-      if (!hasPaths || !hasRuleScope) {
-        console.log('[db] migrating instructions → v5.5 (paths column + scope=rule)');
-        db.transaction(() => {
-          db.exec(`ALTER TABLE instructions RENAME TO instructions_v55_old`);
-          db.exec(`
-            CREATE TABLE instructions (
-              id TEXT PRIMARY KEY,
-              scope TEXT NOT NULL CHECK(scope IN ('global','user','project','rule')),
-              project TEXT,
-              content TEXT NOT NULL,
-              paths TEXT,
-              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-            INSERT INTO instructions (id, scope, project, content, updated_at)
-              SELECT id, scope, project, content, updated_at FROM instructions_v55_old;
-            DROP TABLE instructions_v55_old;
-          `);
-        })();
-        db.exec(`
-          CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_scope_unique ON instructions(scope) WHERE scope IN ('global','user');
-          CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_project_unique ON instructions(scope, project) WHERE scope = 'project';
-          CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_rule_unique ON instructions(project) WHERE scope = 'rule';
-          CREATE INDEX IF NOT EXISTS idx_instructions_scope ON instructions(scope, project);
-        `);
-      } else {
-        try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_rule_unique ON instructions(project) WHERE scope = 'rule'`); } catch (_e) {}
-      }
-    } catch (_e) { /* instructions 表尚未创建时跳过 */ }
-
-    // ═══ v5.0 迁移：4096-dim → 1024-dim (Yuan-EB) ═══
-    const SCHEMA_VERSION = 5;
-    try { db.exec(`CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER)`); } catch (_e) {}
-    const currentVersion = (db.prepare('SELECT MAX(version) as v FROM _schema_version').get() as any)?.v || 0;
-
-    if (currentVersion < SCHEMA_VERSION) {
-      console.log(`[db] migrating schema v${currentVersion} → v${SCHEMA_VERSION}`);
-      try { db.exec(`DROP TABLE IF EXISTS vec_memory`); } catch (_e) {}
-      try { db.exec(`DROP TABLE IF EXISTS vec_facts`); } catch (_e) {}
-      try { db.exec(`DELETE FROM embedding_cache`); } catch (_e) {}
-      db.prepare('INSERT OR REPLACE INTO _schema_version (version) VALUES (?)').run(SCHEMA_VERSION);
-      console.log(`[db] migration complete: vec tables recreated with ${VEC_DIM}-dim`);
+    } else {
+      try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_rule_unique ON instructions(project) WHERE scope = 'rule'`); } catch (_e) {}
     }
+  } catch (_e) { /* instructions 表尚未创建时跳过 */ }
+}
 
-    // Create vec tables with current dimension
-    try { db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS vec_memory USING vec0(embedding float[${VEC_DIM}])`); } catch (_e) {}
-    try { db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS vec_facts USING vec0(embedding float[${VEC_DIM}])`); } catch (_e) {}
-
-    
-
-    // Seed default categories (SynaBun-style hierarchical)
-    const defaultCategories = [
-      { name: 'episodic', description: '事件记忆 — 发生了什么', is_parent: 1 },
-      { name: 'milestone', description: '成长里程碑 — 第一次、重要决定 [critical]', parent: 'episodic' },
-      { name: 'conversation', description: '对话记忆 — 有意义的对话片段', parent: 'episodic' },
-      { name: 'semantic', description: '事实记忆 — 知识和关系', is_parent: 1 },
-      { name: 'identity', description: '身份信息 — 人物、角色、身份 [critical]', parent: 'semantic' },
-      { name: 'knowledge', description: '知识事实 — 学到的东西', parent: 'semantic' },
-      { name: 'preference', description: '偏好记忆 — 用户喜好和习惯', is_parent: 1 },
-      { name: 'entity', description: '实体记忆 — 人物、地点、物品', is_parent: 1 },
-      { name: 'relationship', description: '关系记忆 — 人与人之间的关系 [critical]', parent: 'entity' },
-    ];
-
-    const insertCat = db.prepare(`
-      INSERT OR IGNORE INTO categories (name, description, parent, is_parent)
-      VALUES (?, ?, ?, ?)
+/** 全局库 schema:指令表 + 项目注册表(不含 memory/vec 业务表) */
+function initGlobalSchema(db: Database.Database) {
+  initInstructionsSchema(db);
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        project TEXT PRIMARY KEY,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
     `);
+  } catch (_e) {}
+}
 
-    for (const cat of defaultCategories) {
-      insertCat.run(cat.name, cat.description, cat.parent || null, cat.is_parent || 0);
-    }
+/** 项目库 schema:全部业务表(与旧单库一致)+ 指令表(保持原 schema) */
+function initProjectSchema(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory (
+      id TEXT PRIMARY KEY,
+      text TEXT NOT NULL,
+      project TEXT DEFAULT 'default',
+      session_id TEXT,
+      type TEXT DEFAULT 'episodic',
+      category TEXT DEFAULT 'general',
+      subcategory TEXT,
+      tags TEXT DEFAULT '[]',
+      importance REAL DEFAULT 0.5,
+      character_id TEXT,
+      source TEXT,
+      subject TEXT DEFAULT 'user',
+      tier TEXT DEFAULT 'standard',
+      expires_at DATETIME,
+      is_active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      accessed_count INTEGER DEFAULT 0,
+      reference_count INTEGER DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS edges (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      relation_type TEXT NOT NULL,
+      metadata TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(source_id) REFERENCES memory(id),
+      FOREIGN KEY(target_id) REFERENCES memory(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS categories (
+      name TEXT PRIMARY KEY,
+      description TEXT NOT NULL,
+      parent TEXT,
+      color TEXT,
+      is_parent INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS embedding_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      text_hash TEXT UNIQUE NOT NULL,
+      embedding BLOB NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS facts (
+      id TEXT PRIMARY KEY,
+      subject TEXT NOT NULL,
+      predicate TEXT NOT NULL,
+      object TEXT NOT NULL,
+      project TEXT DEFAULT 'default',
+      confidence REAL DEFAULT 0.5,
+      source_memory_id TEXT,
+      character_id TEXT,
+      is_active INTEGER DEFAULT 1,
+      accessed_count INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(source_memory_id) REFERENCES memory(id)
+    );
+  `);
+
+  // Safe column migrations (may already exist)
+  const migrations = [
+    `ALTER TABLE memory ADD COLUMN tier TEXT DEFAULT 'standard'`,
+    `ALTER TABLE memory ADD COLUMN expires_at DATETIME`,
+  ];
+  for (const sql of migrations) {
+    try { db.exec(sql); } catch (_e) { /* already exists */ }
   }
 
-  /** v5.3: WAL checkpoint to prevent WAL file bloat */
+  // v5.3: locked column for permanent memory protection
+  try { db.exec(`ALTER TABLE memory ADD COLUMN locked INTEGER DEFAULT 0`); } catch (_e) { /* already exists */ }
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_tier ON memory(tier, is_active)`); } catch (_e) {}
+
+  // v1.5: project column for per-project memory isolation
+  try { db.exec(`ALTER TABLE memory ADD COLUMN project TEXT DEFAULT 'default'`); } catch (_e) { /* already exists */ }
+  try { db.exec(`ALTER TABLE facts ADD COLUMN project TEXT DEFAULT 'default'`); } catch (_e) { /* already exists */ }
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_project ON memory(project, is_active)`); } catch (_e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_facts_project ON facts(project, is_active)`); } catch (_e) {}
+
+  // v6.0: session_id column for session-level memory (reserved, no logic added yet)
+  try { db.exec(`ALTER TABLE memory ADD COLUMN session_id TEXT`); } catch (_e) { /* already exists */ }
+
+  // Unique index for fact dedup (per-project: same SPO allowed across projects)
+  try { db.exec(`DROP INDEX IF EXISTS idx_facts_spo`); } catch (_e) {}
+  try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_spo ON facts(subject, predicate, object, project)`); } catch (_e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(subject, is_active)`); } catch (_e) {}
+
+  // 指令表(保持原 schema:项目库也建;三层指令路由在 instructions.ts 决定)
+  initInstructionsSchema(db);
+
+  // ═══ v5.0 迁移：4096-dim → 1024-dim (Yuan-EB) ═══
+  const SCHEMA_VERSION = 5;
+  try { db.exec(`CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER)`); } catch (_e) {}
+  const currentVersion = (db.prepare('SELECT MAX(version) as v FROM _schema_version').get() as any)?.v || 0;
+
+  if (currentVersion < SCHEMA_VERSION) {
+    console.log(`[db] migrating schema v${currentVersion} → v${SCHEMA_VERSION}`);
+    try { db.exec(`DROP TABLE IF EXISTS vec_memory`); } catch (_e) {}
+    try { db.exec(`DROP TABLE IF EXISTS vec_facts`); } catch (_e) {}
+    try { db.exec(`DELETE FROM embedding_cache`); } catch (_e) {}
+    db.prepare('INSERT OR REPLACE INTO _schema_version (version) VALUES (?)').run(SCHEMA_VERSION);
+    console.log(`[db] migration complete: vec tables recreated with ${VEC_DIM}-dim`);
+  }
+
+  // Create vec tables with current dimension
+  try { db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS vec_memory USING vec0(embedding float[${VEC_DIM}])`); } catch (_e) {}
+  try { db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS vec_facts USING vec0(embedding float[${VEC_DIM}])`); } catch (_e) {}
+
+  // Seed default categories (SynaBun-style hierarchical)
+  const defaultCategories = [
+    { name: 'episodic', description: '事件记忆 — 发生了什么', is_parent: 1 },
+    { name: 'milestone', description: '成长里程碑 — 第一次、重要决定 [critical]', parent: 'episodic' },
+    { name: 'conversation', description: '对话记忆 — 有意义的对话片段', parent: 'episodic' },
+    { name: 'semantic', description: '事实记忆 — 知识和关系', is_parent: 1 },
+    { name: 'identity', description: '身份信息 — 人物、角色、身份 [critical]', parent: 'semantic' },
+    { name: 'knowledge', description: '知识事实 — 学到的东西', parent: 'semantic' },
+    { name: 'preference', description: '偏好记忆 — 用户喜好和习惯', is_parent: 1 },
+    { name: 'entity', description: '实体记忆 — 人物、地点、物品', is_parent: 1 },
+    { name: 'relationship', description: '关系记忆 — 人与人之间的关系 [critical]', parent: 'entity' },
+  ];
+
+  const insertCat = db.prepare(`
+    INSERT OR IGNORE INTO categories (name, description, parent, is_parent)
+    VALUES (?, ?, ?, ?)
+  `);
+
+  for (const cat of defaultCategories) {
+    insertCat.run(cat.name, cat.description, cat.parent || null, cat.is_parent || 0);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// DatabaseManager — 按项目路由,管理所有打开的库连接
+// ═══════════════════════════════════════════════════════════════════
+
+export class DatabaseManager {
+  private static connections = new Map<string, Database.Database>();
+
+  /**
+   * 项目库(project-<name>.sqlite):project 为空 → 默认项目(project-default.sqlite)。
+   * 首次访问某项目时懒加载创建,并登记进 global.sqlite 的 projects 表。
+   * 兼容模式(MEMORY_DB_PATH 显式设置):所有 project 落到同一个单库,行为不变。
+   */
+  public static getInstance(project?: string): Database.Database {
+    const proj = normalizeProject(project);
+    if (isLegacyMode()) {
+      if (!warnedLegacy) {
+        warnedLegacy = true;
+        console.error('[db] ⚠️ MEMORY_DB_PATH 已弃用:建议改用 MEMORY_DB_DIR(按项目分库)。当前以单库兼容模式运行,不创建 memory/ 目录。');
+      }
+      return DatabaseManager.open('__legacy__', legacyDbPath()!, initProjectSchema);
+    }
+    const db = DatabaseManager.open(
+      `project:${proj}`,
+      path.join(memDir(), `project-${safeFilePart(proj)}.sqlite`),
+      initProjectSchema,
+    );
+    // 项目注册表(global.sqlite):懒加载登记
+    try {
+      const g = DatabaseManager.getGlobal();
+      g.prepare('INSERT OR IGNORE INTO projects (project) VALUES (?)').run(proj);
+    } catch (e: any) {
+      console.error('[db] register project failed:', e.message);
+    }
+    return db;
+  }
+
+  /** 全局库(global.sqlite):L1/L2 指令 + rule 规则组 + 项目注册表。兼容模式下返回单库。 */
+  public static getGlobal(): Database.Database {
+    if (isLegacyMode()) return DatabaseManager.getInstance();
+    return DatabaseManager.open('global', path.join(memDir(), 'global.sqlite'), initGlobalSchema);
+  }
+
+  private static open(key: string, dbPath: string, init: (db: Database.Database) => void): Database.Database {
+    let db = DatabaseManager.connections.get(key);
+    if (!db) {
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      db = new Database(dbPath);
+      sqliteVec.load(db);
+      db.pragma('journal_mode = WAL');
+      init(db);
+      DatabaseManager.connections.set(key, db);
+    }
+    return db;
+  }
+
+  /** v5.3: WAL checkpoint to prevent WAL file bloat — 对每个已打开的库执行 */
   public static checkpoint(): { walSize: number; pages: number } {
-    const db = DatabaseManager.instance;
-    if (!db) return { walSize: 0, pages: 0 };
-    const before = db.pragma('wal_checkpoint(TRUNCATE)') as any;
-    return {
-      walSize: before?.wal_size ?? 0,
-      pages: before?.checkpointed ?? 0,
-    };
+    let pages = 0;
+    let walSize = 0;
+    for (const db of DatabaseManager.connections.values()) {
+      try {
+        const before = db.pragma('wal_checkpoint(TRUNCATE)') as any;
+        pages += before?.checkpointed ?? 0;
+        walSize += before?.wal_size ?? 0;
+      } catch { /* ignore */ }
+    }
+    return { walSize, pages };
   }
 
+  /** 关闭所有打开的库连接 */
   public static close(): void {
-    // Run final checkpoint before close
     DatabaseManager.checkpoint();
-    if (DatabaseManager.instance) {
-      DatabaseManager.instance.close();
-      DatabaseManager.instance = null;
+    for (const db of DatabaseManager.connections.values()) {
+      try { db.close(); } catch { /* ignore */ }
     }
+    DatabaseManager.connections.clear();
   }
 }

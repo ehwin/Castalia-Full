@@ -3,6 +3,31 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.7] — 2026-08-05 按项目分库存储(Project-per-DB)
+
+> 架构级改造:单库(project 列)→ 每项目一个 .sqlite 文件,物理隔离。用户确认"现有记忆可丢弃,直接一劳永逸"。
+
+### Changed
+- **DatabaseManager 单例 → 按项目路由**:`getInstance(project)` 空→`project-default.sqlite`,项目名经 `safeFilePart` 安全化(`../` 逃逸防护);全局库 `global.sqlite`(仅 instructions + projects 注册表);项目库含全部现有表(记忆/向量/facts/指令 L3)
+- **39 处调用点改造**:store/search/reflect/digest/category/consolidate/ollama/index 全部传 project 路由;`embed()` 增加可选 project 参数(embedding_cache 按项目)
+- **指令跨库路由**:L1/L2(global/user)和 rule 规则组 → global.sqlite;L3(scope=project) → 对应项目库;`listInstructions`/`deleteInstruction` 聚合全局+各项目
+- **web/server.mjs + configLoader**:`MEMORY_DB_PATH` → `MEMORY_DB_DIR`(兼容 config.json `db_dir` 字段)
+- **启动流程**:创建 memory/ 目录 + global.sqlite + L1 种子;项目库懒加载(首访才建)
+
+### Added
+- **memory 表 `session_id` 列**(默认 NULL = 项目级):预留给独立小模型做会话级/项目级区分,**本次无任何判断逻辑**(晋升机制留空,用户确认由专门小模型处理)
+- `memory_get`/`memory_update`/`memory_delete` 新增可选 `project` 参数(否则只路由默认库,agent 读不到其他项目)
+- 旧 `MEMORY_DB_PATH` 显式设置时走单库兼容模式(弃用警告);smoke_test 兼容验证
+
+### Note(设计取舍,供复核)
+- 维护性周期任务(consolidate/cleanup/digest)只作用于默认库;Web 控制台数据接口只读默认库——多项目遍历聚合未做(最小化)
+- project_list 遍历 memory/ 下 project-*.sqlite 汇总(无库文件的项目不算)
+- README 中 MEMORY_DB_PATH 引用待后续同步
+
+### Verified(独立复验,非自报)
+- 17 项独立 e2e 全过:global.sqlite 种子、alpha 库生成与懒加载、物理隔离(alpha 库只有 alpha 记忆,默认库搜不到)、指令跨库路由(L3 在 alpha 库不在 global)、project_list 汇总、memory_context 三层拼接
+- npm run build exit 0;smoke_test 全 PASS(27 工具 + 旧单库兼容 + 项目隔离)
+
 ## [v1.6.1] — 2026-08-05 上下文路由:include 递归 + picomatch Glob 过滤
 
 > 对齐 Claude Code 上下文路由设计。JIT 工具加载**有意不做**(tools/list 每连接只发现一次、stdio 无重注册通道、动态隐藏工具会破坏 harness 白名单)——路径控制改在数据层实现。

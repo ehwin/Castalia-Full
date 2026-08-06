@@ -27,8 +27,8 @@ export interface DigestResult {
   details?: string[];
 }
 
-export async function runDigest(characterId: string = 'default'): Promise<DigestResult> {
-  const db = DatabaseManager.getInstance();
+export async function runDigest(characterId: string = 'default', project?: string): Promise<DigestResult> {
+  const db = DatabaseManager.getInstance(project);
   const result: DigestResult = {
     success: true,
     cleaned: 0,
@@ -37,7 +37,7 @@ export async function runDigest(characterId: string = 'default'): Promise<Digest
   };
 
   // 1. 清理过期临时记忆
-  result.cleaned = cleanupExpiredMemories();
+  result.cleaned = cleanupExpiredMemories(project);
 
   // 2. 恢复被误标记的 critical 记忆
   try {
@@ -53,11 +53,11 @@ export async function runDigest(characterId: string = 'default'): Promise<Digest
   return result;
 }
 
-export function maybeDigest(characterId: string = 'default'): Promise<DigestResult> | null {
+export function maybeDigest(characterId: string = 'default', project?: string): Promise<DigestResult> | null {
   const now = Date.now();
   if (now - lastDigestTime < MIN_DIGEST_GAP_MS) return null;
 
-  const db = DatabaseManager.getInstance();
+  const db = DatabaseManager.getInstance(project);
   const unanalyzed = (db.prepare(`
     SELECT COUNT(*) as c FROM memory
     WHERE is_active = 1 AND source = 'conversation_log'
@@ -67,11 +67,11 @@ export function maybeDigest(characterId: string = 'default'): Promise<DigestResu
   if (unanalyzed === 0) return null;
 
   lastDigestTime = now;
-  return runDigest(characterId);
+  return runDigest(characterId, project);
 }
 
 export function getRecentConversations(characterId: string, hoursBack: number = 24, limit: number = 50, project?: string): any[] {
-  const db = DatabaseManager.getInstance();
+  const db = DatabaseManager.getInstance(project);
   const since = new Date(Date.now() - hoursBack * 3600000).toISOString();
   const proj = normalizeProject(project);
   return db.prepare(`

@@ -26,18 +26,18 @@ function hashText(text: string): string {
   return crypto.createHash('sha256').update(text).digest('hex');
 }
 
-export async function embed(text: string): Promise<number[]> {
+export async function embed(text: string, project?: string): Promise<number[]> {
   // EMBED_MODE=none → 禁用嵌入(调用方应已降级;这里兜底抛错避免静默外部调用)
   if (!isEmbedEnabled()) {
     throw new Error('embedding disabled: EMBED_MODE=none');
   }
 
-  // 1. 内存缓存
+  // 1. 内存缓存(全局 LRU,跨项目共享文本→向量)
   const memCached = memCache.get(text);
   if (memCached) return memCached;
 
-  // 2. SQLite 缓存
-  const db = DatabaseManager.getInstance();
+  // 2. SQLite 缓存(project 为空 → 默认项目库;embedding_cache 按项目隔离)
+  const db = DatabaseManager.getInstance(project);
   const hash = hashText(text);
   try {
     const row = db.prepare('SELECT embedding FROM embedding_cache WHERE text_hash = ?').get(hash) as any;
@@ -88,8 +88,8 @@ export async function embed(text: string): Promise<number[]> {
 }
 
 /** 带缓存的 embed 别名 */
-export async function getEmbeddingCached(text: string): Promise<number[]> {
-  return embed(text);
+export async function getEmbeddingCached(text: string, project?: string): Promise<number[]> {
+  return embed(text, project);
 }
 
 export function cosineSimilarity(a: number[], b: number[]): number {

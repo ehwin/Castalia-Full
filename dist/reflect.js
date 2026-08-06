@@ -21,7 +21,7 @@ import path from 'node:path';
  * 获取所有记忆（供大模型分析）
  */
 export function listAllMemories(characterId = 'airi', limit = 200, project) {
-    const db = DatabaseManager.getInstance();
+    const db = DatabaseManager.getInstance(project);
     const proj = normalizeProject(project);
     const rows = db.prepare(`
     SELECT id, text, type, category, tags, importance,
@@ -77,7 +77,7 @@ function safeTags(raw) {
     return filtered.length > 0 ? filtered : null;
 }
 export async function applyReflectActions(actions, characterId = 'airi', project) {
-    const db = DatabaseManager.getInstance();
+    const db = DatabaseManager.getInstance(project);
     const result = { applied: 0, errors: [], details: [], receipts: [] };
     for (const action of actions) {
         const receipt = {
@@ -381,7 +381,7 @@ export function getAllMemories(characterId = 'airi', limit = 200, project) {
 }
 /** 获取记忆关联图 */
 export function getMemoryGraph(characterId = 'airi', project) {
-    const db = DatabaseManager.getInstance();
+    const db = DatabaseManager.getInstance(project);
     const proj = normalizeProject(project);
     const nodes = listAllMemories(characterId, 500, proj);
     const nodeIds = new Set(nodes.map((n) => n.id));
@@ -449,7 +449,7 @@ export const REFLECT_SYSTEM_PROMPT = `你是记忆反思引擎。你的任务是
  */
 export function getUnanalyzedConversations(characterId = 'airi', since, // ISO datetime，不传则取上次 reflect 之后
 limit = 30, project) {
-    const db = DatabaseManager.getInstance();
+    const db = DatabaseManager.getInstance(project);
     const proj = normalizeProject(project);
     // 找到上次反思时间（最近一次 source='reflect_summary' 的创建时间）
     if (!since) {
