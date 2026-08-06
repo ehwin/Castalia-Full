@@ -2,7 +2,7 @@
  * Config Loader — 启动时读取 config.json 覆盖环境变量
  *
  * 供 web 管理界面持久化配置:嵌入模型(Ollama/API 两种模式)+ 反思 LLM。
- * 配置文件路径:环境变量 MEMORY_CONFIG 或 ./config.json(与 web/server.mjs 共享)
+ * 配置文件路径:环境变量 MEMORY_CONFIG 或 ./memory/config.json(与 web/server.mjs 共享)
  *
  * 必须在 index.ts 的 import 中放在最前面(确保在 ollama.ts/reflectDriver.ts 读取 env 之前生效)。
  */
@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const CONFIG_PATH = process.env.MEMORY_CONFIG
-  || path.join(process.cwd(), 'config.json');
+  || path.join(process.cwd(), 'memory', 'config.json');
 
 try {
   if (fs.existsSync(CONFIG_PATH)) {

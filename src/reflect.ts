@@ -612,7 +612,7 @@ export async function applyReflectResult(
       out.receipts = ar.receipts;
       // ═══ v1.3: 回执落盘 — 失败动作原文存档,事后可人工修正 ═══
       try {
-        const dir = process.env.REFLECT_RECEIPT_DIR || path.join(process.cwd(), 'reflect-receipts');
+        const dir = process.env.REFLECT_RECEIPT_DIR || path.join(process.cwd(), 'memory', 'receipts');
         fs.mkdirSync(dir, { recursive: true });
         const ts = new Date().toISOString().replace(/[:.]/g, '-');
         fs.writeFileSync(

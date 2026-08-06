@@ -21,16 +21,19 @@ import * as sqliteVec from 'sqlite-vec';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { readFileSync, existsSync, writeFileSync } from 'fs';
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT = join(__dirname, '..');
 const LEGACY_DB_PATH = process.env.MEMORY_DB_PATH || '';
-const CONFIG_PATH = process.env.MEMORY_CONFIG || join(ROOT, 'config.json');
+const CONFIG_PATH = process.env.MEMORY_CONFIG || join(ROOT, 'memory', 'config.json');
 const NODE_BIN = process.env.NODE_BIN || 'node';
 const MCP_SERVER = join(ROOT, 'dist', 'index.js');
 const PORT = parseInt(process.env.WEB_PORT || '3345', 10);
+
+// 读 config 前确保 memory/ 目录存在(首次启动自动创建)
+mkdirSync(dirname(CONFIG_PATH), { recursive: true });
 
 // 记忆目录:env MEMORY_DB_DIR > config.json db_dir > <项目根>/memory/(兼容旧 MEMORY_DB_PATH 单库)
 function resolveDbDir() {

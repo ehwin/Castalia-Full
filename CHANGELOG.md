@@ -3,6 +3,20 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.7.1] — 2026-08-05 记忆存储统一收敛到 memory/ 目录
+
+### Changed
+- **config.json 默认路径**:`<cwd>/config.json` → `<cwd>/memory/config.json`(configLoader + web/server.mjs 同步;`MEMORY_CONFIG` env 仍优先)
+- **反思回执目录**:`<cwd>/reflect-receipts/` → `<cwd>/memory/receipts/`(`REFLECT_RECEIPT_DIR` env 仍优先)
+- **清理项目根残留**:旧版 `memory.sqlite / -shm / -wal`、根目录 `reflect-receipts/` 已删除
+
+### Verified
+- 独立复验:启动后 global.sqlite/project-default.sqlite 均在 memory/ 内;config/receipts 路径常量已收敛;项目根无记忆残留文件
+- npm run build exit 0;smoke_test 全 PASS
+
+### Note
+- 杀掉了两个运行旧代码的 MCP server 实例(旧代码会把 memory.sqlite 写回项目根);**需用新代码重启 MCP server 才能生效**
+
 ## [v1.7] — 2026-08-05 按项目分库存储(Project-per-DB)
 
 > 架构级改造:单库(project 列)→ 每项目一个 .sqlite 文件,物理隔离。用户确认"现有记忆可丢弃,直接一劳永逸"。
