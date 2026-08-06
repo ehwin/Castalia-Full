@@ -46,6 +46,11 @@ try {
             process.env.REFLECT_FACT_EXTRACTION = String(ref.factExtraction);
         if (ref.maxFacts != null)
             process.env.REFLECT_MAX_FACTS = String(ref.maxFacts);
+        // v1.9: 启动自动反思阈值(可选,给 admin 界面留路;没有则用 env/默认值)
+        if (ref.minGapHours != null)
+            process.env.REFLECT_MIN_GAP_HOURS = String(ref.minGapHours);
+        if (ref.minUnanalyzed != null)
+            process.env.REFLECT_MIN_UNANALYZED = String(ref.minUnanalyzed);
         console.error(`[config] loaded ${CONFIG_PATH} (embed=${emb.mode || 'ollama'}, reflect=${ref.model || 'unset'}, facts=${process.env.REFLECT_FACT_EXTRACTION || 'auto'})`);
     }
 }

@@ -18,7 +18,7 @@ import { DatabaseManager, listProjectNames } from './db.js';
 import { runDigest, getRecentConversations, maybeDigest } from './digest.js';
 import { reflect, getAllMemories, getMemoryGraph, REFLECT_SYSTEM_PROMPT, getUnanalyzedConversations } from './reflect.js';
 import { autoProcess } from './autoProcessor.js';
-import { runAutoReflect, runDeepReflect } from './reflectDriver.js';
+import { runAutoReflect, runDeepReflect, shouldAutoReflect } from './reflectDriver.js';
 import { ensureSeedInstructions, saveInstruction, getInstruction, listInstructions, deleteInstruction } from './instructions.js';
 import { CHAR_ID, PROJECT_ID, SERVER_NAME, SERVER_VERSION, normalizeProject } from './env.js';
 import { MEM_TYPES, summarizeForIndex } from './memType.js';
@@ -854,6 +854,29 @@ async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
     console.error('[airi-memory] v5.0.0 started — unified MCP server (proxy + LLM tools)');
+    // ═══ 启动时自动反思 ═══
+    // 触发逻辑:条件达成(距上次反思 ≥ REFLECT_MIN_GAP_HOURS 且未分析对话 > REFLECT_MIN_UNANALYZED)
+    // 后,下次启动 server 时自动执行一次 runAutoReflect;启动后不再周期性自动跑。
+    // 用 setTimeout 异步执行,不阻塞 server 启动;失败 catch 记录不崩。
+    setTimeout(() => {
+        (async () => {
+            try {
+                const cond = shouldAutoReflect(CHAR_ID);
+                if (!cond.should) {
+                    console.error(`[reflect-startup] 跳过: ${cond.reason}`);
+                    return;
+                }
+                console.error(`[reflect-startup] 条件达成(${cond.reason}),启动自动反思...`);
+                const r = await runAutoReflect(CHAR_ID);
+                console.error(`[reflect-startup] 完成: ok=${r.ok}, actions=${r.actions}, applied=${r.applied}, factsInserted=${r.factsInserted ?? 0}, factsUpdated=${r.factsUpdated ?? 0}, errors=${r.errors.length}${r.skipped ? ', skipped' : ''}`);
+                if (r.errors.length > 0)
+                    console.error(`[reflect-startup] errors: ${r.errors.join('; ')}`);
+            }
+            catch (e) {
+                console.error('[reflect-startup] error:', e.message);
+            }
+        })();
+    }, 0);
     process.on('SIGINT', () => { DatabaseManager.close(); process.exit(0); });
     process.on('SIGTERM', () => { DatabaseManager.close(); process.exit(0); });
 }

@@ -3,6 +3,23 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.9] — 2026-08-05 启动时自动反思(条件达成后下次启动执行)
+
+> 用户确认:不做计划任务/常驻 watcher,改为"双条件达成后,下次启动 MCP server 时自动执行一次反思"。
+
+### Added
+- **`shouldAutoReflect(charId, project?)`**(reflectDriver.ts):双条件检查
+  - 距上次反思 ≥ `REFLECT_MIN_GAP_HOURS`(默认 24h;从未反思视为超时,满足)
+  - 未分析对话数 > `REFLECT_MIN_UNANALYZED`(默认 5)
+  - 返回 {should, reason};未配 API key 直接跳过
+- **启动自动反思**(index.ts main):server 启动后 setTimeout 异步检查,条件达成 → `runAutoReflect`,打印条件/结果日志;失败 catch 不崩、不阻塞启动
+- **config.json 支持** `reflect.minGapHours` / `reflect.minUnanalyzed`(configLoader 映射 env)
+- 现有 `REFLECT_INTERVAL_HOURS` 周期定时器保留(默认 0 = 关)
+
+### Verified(独立复验,非自报)
+- 4 场景 e2e 全过:6 条未分析+从未反思 → 触发并调用 LLM;1h 前反思 → 跳过;2 条 → 跳过;无 key → 跳过
+- npm run build exit 0;smoke_test 全 PASS(28 工具)
+
 ## [v1.8] — 2026-08-05 融合 Claude Code 封闭记忆类型 + Markdown 内容格式
 
 > 只改通用版公共代码,不迁移不改造 AIRI 情感数据。SQLite 物理存储 + content 字段 Markdown 格式化(不生成实体 .md 文件)。

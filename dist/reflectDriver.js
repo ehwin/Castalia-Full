@@ -14,16 +14,62 @@
  *   REFLECT_INTERVAL_HOURS auto-reflect interval (hours), 0 = off, default 0
  */
 import { getUnanalyzedConversations, listAllMemories, applyReflectResult } from './reflect.js';
+import { DatabaseManager } from './db.js';
+import { normalizeProject } from './env.js';
 const LLM_URL = (process.env.REFLECT_LLM_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, '');
 const LLM_API_KEY = process.env.REFLECT_LLM_API_KEY || '';
 const LLM_MODEL = process.env.REFLECT_LLM_MODEL || 'deepseek-chat';
 const FACT_EXTRACTION = (process.env.REFLECT_FACT_EXTRACTION || 'auto').trim().toLowerCase();
 const MAX_FACTS = parseInt(process.env.REFLECT_MAX_FACTS || '15', 10) || 15;
+// 启动自动反思触发阈值(条件达成后,下次启动 server 时自动执行一次)
+const MIN_GAP_HOURS = (() => { const v = parseFloat(process.env.REFLECT_MIN_GAP_HOURS || '24'); return Number.isFinite(v) && v > 0 ? v : 24; })();
+const MIN_UNANALYZED = (() => { const v = parseInt(process.env.REFLECT_MIN_UNANALYZED || '5', 10); return Number.isFinite(v) && v >= 0 ? v : 5; })();
 export function isReflectConfigured() {
     return !!LLM_API_KEY;
 }
 export function isFactExtractionEnabled() {
     return FACT_EXTRACTION !== 'off';
+}
+/**
+ * 启动自动反思条件检查(两个同时满足才反思):
+ *   a. REFLECT_LLM_API_KEY 已配置
+ *   b. 距上次反思 ≥ REFLECT_MIN_GAP_HOURS(默认 24h;从未反思 → 视为超时,满足)
+ *   c. 未分析对话数 > REFLECT_MIN_UNANALYZED(默认 5)
+ * 按 project 维度查询(默认项目用 charId + normalizeProject)。
+ */
+export function shouldAutoReflect(charId = 'airi', project) {
+    if (!isReflectConfigured()) {
+        return { should: false, reason: 'REFLECT_LLM_API_KEY 未配置' };
+    }
+    const db = DatabaseManager.getInstance(project);
+    const proj = normalizeProject(project);
+    // 最近一次反思时间(source='reflect_summary',按 project 过滤)
+    const last = db.prepare(`
+    SELECT created_at FROM memory
+    WHERE source = 'reflect_summary' AND character_id = ? AND project = ?
+    ORDER BY created_at DESC LIMIT 1
+  `).get(charId, proj);
+    const lastTime = last?.created_at ? new Date(last.created_at).getTime() : null;
+    const hoursSince = lastTime === null
+        ? Number.POSITIVE_INFINITY // 从未反思 → 视为超时,满足时间条件
+        : (Date.now() - lastTime) / 3600000;
+    const timeOk = hoursSince >= MIN_GAP_HOURS;
+    const gapLabel = lastTime === null ? '∞' : `${Math.floor(hoursSince * 10) / 10}`;
+    if (!timeOk) {
+        return { should: false, reason: `距上次反思 ${gapLabel} 小时,未到 ${MIN_GAP_HOURS}h` };
+    }
+    // 未分析对话数(与 getUnanalyzedConversations 同口径:conversation_log、created_at > 上次反思)
+    const since = last?.created_at || new Date(0).toISOString();
+    const cnt = db.prepare(`
+    SELECT COUNT(*) as c FROM memory
+    WHERE is_active = 1 AND source = 'conversation_log'
+      AND character_id = ? AND project = ? AND created_at > ?
+  `).get(charId, proj, since);
+    const count = cnt?.c ?? 0;
+    if (count <= MIN_UNANALYZED) {
+        return { should: false, reason: `未分析对话 ${count} 条,未超 ${MIN_UNANALYZED}` };
+    }
+    return { should: true, reason: `距上次反思 ${gapLabel}h 且未分析对话 ${count} 条` };
 }
 /** facts 提取规则片段(拼进 prompt) */
 function factsRules(maxFacts) {
