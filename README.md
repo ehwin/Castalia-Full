@@ -6,6 +6,8 @@ Forked from the AIRI memory system as an independent, neutral, general-purpose m
 
 Designed after studying Claude Code's memory architecture (closed memory types, progressive session maintenance, consolidation) and engram / memory-os patterns.
 
+> 📖 详细技术设计见 [docs/TECHNICAL.md](docs/TECHNICAL.md)(架构/数据模型/管线/决策记录)。
+
 ---
 
 ## Architecture Overview (v1.11)
