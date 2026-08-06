@@ -3,6 +3,19 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.10.1] — 2026-08-05 Memory Snapshot Warning(记忆快照警告)
+
+> 补齐吸收 Claude Code 四主文件的最后缺口(retriever.ts formatRetrievedMemoryForPrompt)。
+
+### Added
+- **`memorySnapshotWarn(createdAt)`**(index.ts):记忆年龄 ≥ 1 天(24h)注入时追加 `> ⚠️ [Memory Snapshot Warning] 该记忆记录于 X 天前,属于历史快照,引用前请以最新对话/代码为准`;自然语言(今天/N 天前,对齐原厂 today/N days ago);< 1 天或字段缺失返回 null
+- **recent/related 两个分节**追加快照警告(每条旧记忆后独立换行,2 空格缩进)
+- 防止 LLM 把旧记忆当"当前事实"硬依赖(如端口已改但记忆还是旧值)
+
+### Verified(独立复验,非自报)
+- 6 项独立 e2e 全过:2 天前旧记忆命中 → 带警告 + "2 天前";今天新记忆 → 无警告;引用块格式正确
+- npm run build exit 0;smoke_test 全 PASS(29 工具)
+
 ## [v1.10] — 2026-08-05 记忆整合子进程(Memory Consolidator)
 
 > 直接吸收 Claude Code 原厂 Consolidator 方案(用户确认,不自定义):重量级"去重+矛盾消解+主题归并",由独立 LLM 实例执行。

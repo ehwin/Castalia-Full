@@ -31,6 +31,19 @@ function err(msg, code = 'ERROR') {
     return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: { code, message: msg } }, null, 2) }], isError: true };
 }
 // ═══════════════════════════════════════════════════════════════════
+// Memory Snapshot Warning(借鉴 Claude Code retriever.ts formatRetrievedMemoryForPrompt)
+// 记忆年龄 ≥ 1 天视为历史快照,注入时追加警告;否则返回 null
+// ═══════════════════════════════════════════════════════════════════
+function memorySnapshotWarn(createdAt) {
+    if (!createdAt)
+        return null;
+    const diffDays = Math.floor((Date.now() - new Date(createdAt).getTime()) / 86400000);
+    if (diffDays < 1)
+        return null;
+    const ageText = diffDays === 0 ? '今天' : `${diffDays} 天前`;
+    return `> ⚠️ [Memory Snapshot Warning] 该记忆记录于 ${ageText},属于历史快照,引用前请以最新对话/代码为准`;
+}
+// ═══════════════════════════════════════════════════════════════════
 // 工具分级(借鉴 engram ProfileAgent/ProfileAdmin)
 // 暴露面原则:主 Agent 只读(search/get/recent/fact/graph),
 // 写入与管线工具归 harness,管理工具归 admin(console)。
@@ -354,12 +367,18 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
             sections.push(`\n■ 近期重要记忆(近 ${hoursBack} 小时):`);
             recent.forEach((m, i) => {
                 sections.push(`${i + 1}. [${m.category}] ${m.text}${m.importance >= 0.8 ? ' (重要)' : ''}`);
+                const warn = memorySnapshotWarn(m.createdAt);
+                if (warn)
+                    sections.push(`  ${warn}`);
             });
         }
         if (related.length > 0) {
             sections.push(`\n■ 与当前任务相关:「${args.query}」`);
             related.forEach((m, i) => {
                 sections.push(`${i + 1}. [${m.category}] ${m.text}`);
+                const warn = memorySnapshotWarn(m.createdAt);
+                if (warn)
+                    sections.push(`  ${warn}`);
             });
         }
         if (cognitives.length > 0) {
