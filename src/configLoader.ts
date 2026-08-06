@@ -50,12 +50,16 @@ try {
     if (tri.api_key) process.env.TRIAGE_LLM_API_KEY = tri.api_key;
     if (tri.model) process.env.TRIAGE_LLM_MODEL = tri.model;
 
+    // v1.11 Part2: 渐进式临时反思配置(admin 留路;缺省用 env/默认值)
+    if (tri.bufferSize != null) process.env.BUFFER_SIZE = String(tri.bufferSize);
+    if (tri.sessionTtlDays != null) process.env.SESSION_MEMORY_TTL_DAYS = String(tri.sessionTtlDays);
+
     // v1.10: 记忆整合配置(可选,给 admin 界面留路;没有则用 env/默认值)
     const cons = cfg.consolidate || {};
     if (cons.minMemories != null) process.env.CONSOLIDATE_MIN_MEMORIES = String(cons.minMemories);
     if (cons.similarity != null) process.env.CONSOLIDATE_SIMILARITY = String(cons.similarity);
 
-    console.error(`[config] loaded ${CONFIG_PATH} (embed=${emb.mode || 'ollama'}, reflect=${ref.model || 'unset'}, facts=${process.env.REFLECT_FACT_EXTRACTION || 'auto'}, consolidate=${process.env.CONSOLIDATE_MIN_MEMORIES || '15'}/${process.env.CONSOLIDATE_SIMILARITY || '0.88'}, triage=${tri.model || 'unset'})`);
+    console.error(`[config] loaded ${CONFIG_PATH} (embed=${emb.mode || 'ollama'}, reflect=${ref.model || 'unset'}, facts=${process.env.REFLECT_FACT_EXTRACTION || 'auto'}, consolidate=${process.env.CONSOLIDATE_MIN_MEMORIES || '15'}/${process.env.CONSOLIDATE_SIMILARITY || '0.88'}, triage=${tri.model || 'unset'}, buffer=${process.env.BUFFER_SIZE || '5'}, sessionTtl=${process.env.SESSION_MEMORY_TTL_DAYS || '7'}d)`);
   }
 } catch (e: any) {
   console.error('[config] load failed:', e.message);

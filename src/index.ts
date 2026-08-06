@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { searchMemory, searchFacts, getRecentMemories } from './search.js';
 import { saveMemory, forgetMemory, updateMemory, saveConversationTurn, cleanupExpiredMemories, batchEmbedPending } from './store.js';
 import { consolidate } from './consolidate.js';
-import { DatabaseManager, listProjectNames } from './db.js';
+import { DatabaseManager, listProjectNames, sweepExpiredSessionMemories } from './db.js';
 import { getCategoryTree } from './category.js';
 import { runDigest, getRecentConversations, maybeDigest } from './digest.js';
 import { reflect, getAllMemories, getMemoryGraph, REFLECT_SYSTEM_PROMPT, getUnanalyzedConversations, applyReflectResult } from './reflect.js';
@@ -266,11 +266,12 @@ register(
     assistantMessage: z.string(),
     moodValue: z.number().optional(),
     moodReason: z.string().optional(),
+    sessionId: z.string().optional().describe('Session identifier for progressive in-session reflection (rolls session memory, promotes long-term facts). Omit to keep the legacy behavior (no session buffer).'),
     project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
   },
   async (args) => {
     try {
-      const r = await autoProcess({ userMessage: args.userMessage, assistantMessage: args.assistantMessage, characterId: CHAR_ID, moodValue: args.moodValue, moodReason: args.moodReason, project: args.project });
+      const r = await autoProcess({ userMessage: args.userMessage, assistantMessage: args.assistantMessage, characterId: CHAR_ID, moodValue: args.moodValue, moodReason: args.moodReason, sessionId: args.sessionId, project: args.project });
       // Trigger event-driven digest
       maybeDigest(CHAR_ID)?.catch(() => {});
       return ok(r);
@@ -344,6 +345,7 @@ register(
     relatedLimit: z.number().optional().describe('Max related memories (default 5)'),
     asText: z.boolean().optional().describe('Return ready-to-inject prompt text (default true)'),
     project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
+    sessionId: z.string().optional().describe('Session identifier to inject its rolling session memory (progressive in-session reflection snapshot) into the prompt.'),
     path: z.string().optional().describe('Current file path for glob-filtered instructions (e.g. src/components/Button.tsx). Instructions whose paths pattern does not match are skipped.'),
   },
   async (args) => {
@@ -414,6 +416,20 @@ register(
         });
         sections.push(`【指令(全局→项目,项目约束最高)】\n${lines.join('\n')}`);
       }
+
+      // 0.5 会话滚动状态(可选 sessionId):渐进式临时反思的滚动快照注入
+      if (args.sessionId) {
+        const sess = db.prepare(`
+          SELECT text FROM memory
+          WHERE is_active = 1 AND project = ? AND session_id = ? AND source = 'session_memory'
+          ORDER BY updated_at DESC LIMIT 1
+        `).get(proj, args.sessionId) as any;
+        if (sess?.text) {
+          sections.push(`\n■ 会话滚动状态(会话 ${args.sessionId},以此为准,勿重复询问):`);
+          sections.push(sess.text);
+        }
+      }
+
       sections.push(`【当前记忆上下文】总记忆 ${stats.c} 条。请优先参考以下记忆,它们是之前会话沉淀的事实与经验:`);
 
       if (recent.length > 0) {
@@ -958,6 +974,17 @@ async function main() {
   DatabaseManager.getGlobal();
   const seed = ensureSeedInstructions();
   console.error(`[instructions] L1 种子${seed.seeded ? '已写入(scope=global)' : `跳过(表已有 ${seed.count} 条)`}`);
+
+  // v1.11 Part2: 会话记忆 TTL 孤儿清扫(启动时静默执行,默认项目 + 已存在项目库各一次)
+  try {
+    let swept = sweepExpiredSessionMemories();
+    for (const name of listProjectNames()) {
+      try { swept += sweepExpiredSessionMemories(name); } catch { /* 打不开的库跳过 */ }
+    }
+    if (swept > 0) console.error(`[session-memory] TTL 清扫: ${swept} 条过期会话记忆已清除`);
+  } catch (e: any) {
+    console.error('[session-memory] TTL 清扫失败:', e.message);
+  }
 
   // Agent state: nothing to flush (in-memory only)
 

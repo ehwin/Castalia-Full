@@ -6,8 +6,8 @@
  */
 import { DatabaseManager, generateId } from './db.js';
 import { embed, getEmbeddingCached } from './ollama.js';
-import { PROJECT_ID, normalizeProject, isEmbedEnabled } from './env.js';
-import { MemType, normalizeMarkdown, normalizeMemType } from './memType.js';
+import { PROJECT_ID, CHAR_ID, normalizeProject, isEmbedEnabled } from './env.js';
+import { MemType, isClosedMemType, normalizeMarkdown, normalizeMemType } from './memType.js';
 
 let saveCount = 0;
 const CONSOLIDATE_INTERVAL = 50;
@@ -456,4 +456,109 @@ export function getFactsBySubject(subject: string, characterId?: string, project
   }
   query += ' ORDER BY confidence DESC, updated_at DESC LIMIT 50';
   return db.prepare(query).all(...params) as FactRecord[];
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// v1.11 Part2: 会话记忆数据层 — 渐进式临时反思
+//   getSessionMemory      : 读会话滚动快照(source=session_memory)
+//   upsertSessionMemory   : 会话滚动状态滚动覆盖(同 session_id 单行 upsert)
+//   promoteToProject      : 长效干货晋升到项目级(session_id=NULL, 4 类强制 Markdown)
+//   deleteSessionFragments: 晋升即删(清空该会话已晋升的 session_memory 碎片)
+// ═══════════════════════════════════════════════════════════════════
+
+/** 读取某会话当前滚动记忆快照(source=session_memory,最新一条) */
+export function getSessionMemory(project: string, sessionId: string): string | null {
+  const db = DatabaseManager.getInstance(project);
+  const proj = normalizeProject(project);
+  const row = db.prepare(`
+    SELECT text FROM memory
+    WHERE project = ? AND session_id = ? AND source = 'session_memory' AND is_active = 1
+    ORDER BY updated_at DESC LIMIT 1
+  `).get(proj, sessionId) as any;
+  return row?.text ?? null;
+}
+
+/**
+ * 会话滚动状态覆盖:按 (project, session_id) 查同会话已有 session_memory
+ * → 有则 UPDATE text(覆盖),无则 INSERT(session_id 非空, source=session_memory,
+ *   memType=general 或 LLM 给的, category=session)。
+ * 单会话单行,实现"滚动覆盖"而非碎片堆积。
+ */
+export function upsertSessionMemory(
+  project: string,
+  sessionId: string,
+  content: string,
+  memType?: MemType,
+): { id: string; updated: boolean } {
+  const db = DatabaseManager.getInstance(project);
+  const proj = normalizeProject(project);
+  const now = new Date().toISOString();
+  const existing = db.prepare(`
+    SELECT id FROM memory
+    WHERE project = ? AND session_id = ? AND source = 'session_memory' AND is_active = 1
+    ORDER BY updated_at DESC LIMIT 1
+  `).get(proj, sessionId) as any;
+  if (existing) {
+    db.prepare('UPDATE memory SET text = ?, updated_at = ? WHERE id = ?').run(content, now, existing.id);
+    return { id: existing.id, updated: true };
+  }
+  const id = generateId();
+  db.prepare(`
+    INSERT INTO memory (id, text, project, session_id, type, mem_type, category, tags, importance, source, subject, tier, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
+    VALUES (?, ?, ?, ?, 'episodic', ?, 'session', '[]', 0.5, 'session_memory', 'user', 'standard', 1, ?, ?, ?, 0, 0)
+  `).run(id, content, proj, sessionId, normalizeMemType(memType), now, now, now);
+  return { id, updated: false };
+}
+
+/**
+ * 长效干货晋升:每条 INSERT 到项目级(session_id=NULL, memType, 4 类强制 Markdown)。
+ * 返回落库 ids。
+ * 设计取舍:不用 saveMemory(其精确去重不区分 session_id,可能把晋升项去重到
+ * 会话级碎片——而碎片随后会被"晋升即删"删掉,导致晋升引到已删行)。
+ * 这里自己做"仅项目级"精确去重(session_id IS NULL),命中返回已有 id,否则直接 INSERT。
+ * 同步执行 + 不嵌向量:后台反思不依赖嵌入服务。
+ */
+export function promoteToProject(
+  project: string,
+  items: { memType: MemType; text: string }[],
+  characterId?: string,
+): string[] {
+  const cid = characterId || CHAR_ID;
+  const db = DatabaseManager.getInstance(project);
+  const proj = normalizeProject(project);
+  const now = new Date().toISOString();
+  const ids: string[] = [];
+  for (const item of items || []) {
+    const mt = isClosedMemType(item.memType) ? item.memType : undefined;
+    const text = typeof item.text === 'string' ? item.text.trim() : '';
+    if (!mt || !text) continue;
+    const md = normalizeMarkdown(text, mt);
+    const dup = db.prepare(`
+      SELECT id FROM memory
+      WHERE is_active = 1 AND project = ? AND session_id IS NULL AND LOWER(TRIM(text)) = LOWER(TRIM(?))
+      LIMIT 1
+    `).get(proj, md) as any;
+    if (dup) { ids.push(dup.id); continue; }
+    const id = generateId();
+    db.prepare(`
+      INSERT INTO memory (id, text, project, session_id, type, mem_type, category, tags, importance, character_id, source, subject, tier, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
+      VALUES (?, ?, ?, NULL, 'semantic', ?, 'session_promoted', '[]', 0.6, ?, 'session_promoted', 'user', 'standard', 1, ?, ?, ?, 0, 0)
+    `).run(id, md, proj, mt, cid, now, now, now);
+    ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * 晋升即删(吸收 Claude cleaner.onPromoted):晋升成功后清空该会话
+ * source=session_memory 的已晋升碎片。硬删(内部家计行,不嵌向量)。
+ */
+export function deleteSessionFragments(project: string, sessionId: string): number {
+  const db = DatabaseManager.getInstance(project);
+  const proj = normalizeProject(project);
+  const r = db.prepare(`
+    DELETE FROM memory
+    WHERE project = ? AND session_id = ? AND source = 'session_memory' AND is_active = 1
+  `).run(proj, sessionId);
+  return r.changes;
 }

@@ -3,6 +3,21 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.11.1] — 2026-08-05 三通道架构 Part2:渐进式临时反思(缓冲+晋升+TTL)
+
+> 吸收 Claude Code session/progressiveMemory + reflectDriver + cleaner 原厂逻辑,接在 Part1 的 triage 通道上。
+
+### Added
+- **`SessionMemoryBuffer`**(src/buffer.ts):N 轮攒批(默认 5,`BUFFER_SIZE` env 可配)——每轮对话 `onNewMessage()` → count++,达阈值后台异步触发(绝不 await 阻塞,错误静默捕获);进程内单例 per (project, sessionId)
+- **`runIncrementalReflection`**(src/triage.ts):`INCREMENTAL_REFLECT_PROMPT`(中文,会话记忆维护子代理)+ 快照+增量(最近 10 条)喂 triage 通道 LLM → 输出 {sessionMemory, promoted};promoted 白名单校验(4 封闭类型)+ Markdown 包装;失败/无 key 静默跳过
+- **晋升链**(src/store.ts):`upsertSessionMemory`(滚动覆盖同 session_id)、`promoteToProject`(晋升落项目级 session_id=NULL,仅项目级去重)、`deleteSessionFragments`(晋升即删,顺序:promote→delete→upsert 防误删)
+- **TTL 孤儿清理**(src/db.ts):`sweepExpiredSessionMemories`(默认 7 天,`SESSION_MEMORY_TTL_DAYS`),启动时对默认项目+所有项目库静默清扫(兜底,正常流程晋升即删)
+- **接线**:auto_process 加 `sessionId` 参数(不传保持旧行为向后兼容)、memory_context 加 `sessionId` 注入「会话滚动状态」分节、configLoader 支持 `triage.bufferSize/sessionTtlDays`
+
+### Verified(独立复验,非自报)
+- 12 项独立 e2e 全过:3 轮攒批触发(BUFFER_SIZE=3)、LLM 调用、晋升落库(user 项目级+Markdown)、滚动覆盖带 session_id、memory_context 注入会话状态、TTL 清 8 天前孤儿
+- npm run build exit 0;smoke_test 全 PASS(29 工具,不传 sessionId 行为不变)
+
 ## [v1.11] — 2026-08-05 三通道架构 Part1:LLM1(triage)通道 + session_id 激活
 
 > 用户确认三通道:① LLM1(triage)=入站分拣+临时反思 ② 向量模型=嵌入(已有) ③ LLM2(reflect)=每日反思(已有)。Part1 做基础设施,Part2(缓冲/晋升/TTL)待做。

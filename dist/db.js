@@ -388,3 +388,28 @@ export class DatabaseManager {
         DatabaseManager.connections.clear();
     }
 }
+// ═══════════════════════════════════════════════════════════════════
+// v1.11 Part2: 会话记忆 TTL 孤儿清扫(吸收 Claude cleaner.sweepExpiredSessions)
+// 正常流程晋升即删;TTL 只兜底孤儿(进程被 kill 等)。
+// 仅删 source=session_memory 且 session_id 非空的行。
+// ═══════════════════════════════════════════════════════════════════
+/**
+ * 清扫过期会话记忆:SESSION_MEMORY_TTL_DAYS(默认 7)天无更新的
+ * source=session_memory 会话级记忆。返回删除条数。
+ * 注:updated_at 以 ISO 字符串存储,故用 JS 计算 cutoff 传参,
+ *    而非 SQLite datetime('now','-N days')(两种格式文本序不一致)。
+ */
+export function sweepExpiredSessionMemories(project) {
+    const db = DatabaseManager.getInstance(project);
+    const ttlDays = (() => {
+        const v = parseInt(process.env.SESSION_MEMORY_TTL_DAYS || '7', 10);
+        return Number.isFinite(v) && v > 0 ? v : 7; // 非法值兜底 7
+    })();
+    const cutoff = new Date(Date.now() - ttlDays * 86400000).toISOString();
+    const r = db.prepare(`
+    DELETE FROM memory
+    WHERE source = 'session_memory' AND session_id IS NOT NULL AND is_active = 1
+      AND updated_at < ?
+  `).run(cutoff);
+    return r.changes;
+}
