@@ -3,6 +3,22 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.8] — 2026-08-05 融合 Claude Code 封闭记忆类型 + Markdown 内容格式
+
+> 只改通用版公共代码,不迁移不改造 AIRI 情感数据。SQLite 物理存储 + content 字段 Markdown 格式化(不生成实体 .md 文件)。
+
+### Added
+- **`mem_type` 字段**(用途维度,与现有 `type` 性质维度正交):`user`(用户画像)/ `feedback`(行为纠正,正负双向)/ `project`(项目上下文,相对时间转绝对日期)/ `reference`(外部指针)/ `general`(默认)
+- **Markdown 内容规范化**(src/memType.ts):4 种封闭类型写入时 text 自动包装为 `# <Label>: <标题>` + `- ` 列表结构(已含 `#` 标题则不重复包装;general 不强制转换)
+- **`memory_index` 工具**(agent 组,27→28):轻量索引 `SELECT id, mem_type, substr(text,1,150)` — 只返回摘要行,命中后 `memory_get(id)` 拉详情(对齐 Claude Code MEMORY.md "先索引后详情"召回,省 token)
+- **`memory_context` 记忆索引分节**:注入层只带 150 字摘要 + 提示 memory_get 展开(指令分节未动)
+- **提取子代理 prompt 融合**(reflectDriver):4 种封闭类型分类规则、feedback 正负都记、硬性禁止代码片段/文件路径/git hash、project 相对时间转绝对日期、extract 动作支持 `newMemType`
+- `memory_save/update/search/list/recent` 加 `memType` 参数;`stats_get` 加 byMemType;`memory_get` 返回 memType
+
+### Verified(独立复验,非自报)
+- 16 项独立 e2e 全过:Markdown 规范化(# 标题 + 列表)、mem_type 落库、general 不强制转换、索引 150 字摘要与过滤、search 按 memType 隔离、stats byMemType、memory_context 索引分节
+- npm run build exit 0;smoke_test 全 PASS(28 工具)
+
 ## [v1.7.1] — 2026-08-05 记忆存储统一收敛到 memory/ 目录
 
 ### Changed

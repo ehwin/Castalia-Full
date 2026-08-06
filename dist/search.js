@@ -119,6 +119,10 @@ function tagSearch(db, options) {
         conditions.push('m.type = ?');
         params.push(options.type);
     }
+    if (options.memType) {
+        conditions.push('m.mem_type = ?');
+        params.push(options.memType);
+    }
     if (options.category) {
         conditions.push('m.category = ?');
         params.push(options.category);
@@ -132,7 +136,7 @@ function tagSearch(db, options) {
         params.push(options.subject);
     }
     const rows = db.prepare(`
-    SELECT m.id, m.text, m.project, m.type, m.category, m.subcategory, m.tags,
+    SELECT m.id, m.text, m.project, m.type, m.mem_type, m.category, m.subcategory, m.tags,
       m.importance, m.character_id, m.source,
       m.subject, m.tier,
       m.created_at, m.last_accessed_at, m.accessed_count
@@ -146,7 +150,7 @@ function tagSearch(db, options) {
         const matchedTags = keywords.filter(k => memTags.some((t) => t.toLowerCase().includes(k.toLowerCase()))).length;
         const tagScore = Math.min(1.0, matchedTags / Math.max(1, keywords.length));
         return {
-            id: row.id, text: row.text, project: row.project || 'default', type: row.type, category: row.category,
+            id: row.id, text: row.text, project: row.project || 'default', type: row.type, memType: row.mem_type || 'general', category: row.category,
             subcategory: row.subcategory, tags: memTags,
             importance: row.importance,
             characterId: row.character_id, source: row.source,
@@ -186,6 +190,10 @@ function vectorKnnSearch(db, options, floatQuery, excludeIds, topK, minScore) {
         conditions.push('m.type = ?');
         params.push(options.type);
     }
+    if (options.memType) {
+        conditions.push('m.mem_type = ?');
+        params.push(options.memType);
+    }
     if (options.category) {
         conditions.push('m.category = ?');
         params.push(options.category);
@@ -195,7 +203,7 @@ function vectorKnnSearch(db, options, floatQuery, excludeIds, topK, minScore) {
         params.push(options.characterId);
     }
     const rows = db.prepare(`
-    SELECT m.id, m.text, m.project, m.type, m.category, m.subcategory, m.tags,
+    SELECT m.id, m.text, m.project, m.type, m.mem_type, m.category, m.subcategory, m.tags,
       m.importance, m.character_id, m.source,
       m.subject, m.tier,
       m.created_at, m.last_accessed_at, m.accessed_count, m.rowid
@@ -210,7 +218,7 @@ function vectorKnnSearch(db, options, floatQuery, excludeIds, topK, minScore) {
         const score = computeScore(similarity, row);
         if (score >= minScore) {
             results.push({
-                id: row.id, text: row.text, project: row.project || 'default', type: row.type, category: row.category,
+                id: row.id, text: row.text, project: row.project || 'default', type: row.type, memType: row.mem_type || 'general', category: row.category,
                 subcategory: row.subcategory, tags: JSON.parse(row.tags || '[]'),
                 importance: row.importance,
                 characterId: row.character_id, source: row.source,
@@ -231,19 +239,25 @@ function textFallbackSearch(db, options, excludeIds, topK, minScore) {
     const project = normalizeProject(options.project);
     const likeConditions = terms.map(() => 'm.text LIKE ?').join(' OR ');
     const likeParams = terms.map(t => `%${t}%`);
+    const conds = [`m.is_active = 1`, `m.project = ?`, `(${likeConditions})`];
+    const params = [project, ...likeParams];
+    if (options.memType) {
+        conds.push('m.mem_type = ?');
+        params.push(options.memType);
+    }
     const rows = db.prepare(`
-    SELECT m.id, m.text, m.project, m.type, m.category, m.subcategory, m.tags,
+    SELECT m.id, m.text, m.project, m.type, m.mem_type, m.category, m.subcategory, m.tags,
       m.importance, m.character_id, m.source,
       m.subject, m.tier,
       m.created_at, m.last_accessed_at, m.accessed_count
     FROM memory m
-    WHERE m.is_active = 1 AND m.project = ? AND (${likeConditions})
+    WHERE ${conds.join(' AND ')}
     ORDER BY m.created_at DESC LIMIT ?
-  `).all(project, ...likeParams, topK * 2);
+  `).all(...params, topK * 2);
     return rows
         .filter(row => !excludeIds.has(row.id))
         .map(row => ({
-        id: row.id, text: row.text, project: row.project || 'default', type: row.type, category: row.category,
+        id: row.id, text: row.text, project: row.project || 'default', type: row.type, memType: row.mem_type || 'general', category: row.category,
         subcategory: row.subcategory, tags: JSON.parse(row.tags || '[]'),
         importance: row.importance,
         characterId: row.character_id, source: row.source,
@@ -270,21 +284,28 @@ function updateAccessed(db, results) {
  * 快速获取近期重要记忆(用于请求前注入，<5ms)
  * 不做向量搜索，直接按时间+importance 捞
  */
-export function getRecentMemories(characterId, limit = 5, hoursBack = 24, project) {
+export function getRecentMemories(characterId, limit = 5, hoursBack = 24, project, memType) {
     const db = DatabaseManager.getInstance(project);
     const since = new Date(Date.now() - hoursBack * 3600000).toISOString();
     const proj = normalizeProject(project);
+    const conds = ['is_active = 1', 'character_id = ?', 'project = ?', 'created_at > ?'];
+    const params = [characterId, proj, since];
+    if (memType) {
+        conds.push('mem_type = ?');
+        params.push(memType);
+    }
+    params.push(limit);
     const rows = db.prepare(`
-    SELECT id, text, project, type, category, subcategory, tags,
+    SELECT id, text, project, type, mem_type, category, subcategory, tags,
            importance, character_id, source, subject, tier,
            created_at, last_accessed_at, accessed_count
     FROM memory
-    WHERE is_active = 1 AND character_id = ? AND project = ? AND created_at > ?
+    WHERE ${conds.join(' AND ')}
     ORDER BY importance DESC, created_at DESC
     LIMIT ?
-  `).all(characterId, proj, since, limit);
+  `).all(...params);
     return rows.map(row => ({
-        id: row.id, text: row.text, project: row.project || 'default', type: row.type, category: row.category,
+        id: row.id, text: row.text, project: row.project || 'default', type: row.type, memType: row.mem_type || 'general', category: row.category,
         subcategory: row.subcategory, tags: JSON.parse(row.tags || '[]'),
         importance: row.importance,
         characterId: row.character_id, source: row.source, subject: row.subject || 'user',

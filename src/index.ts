@@ -22,6 +22,7 @@ import { autoProcess } from './autoProcessor.js';
 import { runAutoReflect, runDeepReflect } from './reflectDriver.js';
 import { ensureSeedInstructions, saveInstruction, getInstruction, listInstructions, deleteInstruction } from './instructions.js';
 import { CHAR_ID, PROJECT_ID, SERVER_NAME, SERVER_VERSION, normalizeProject } from './env.js';
+import { MEM_TYPES, MEM_TYPE_LABELS, summarizeForIndex } from './memType.js';
 
 console.log = console.error;
 
@@ -44,7 +45,7 @@ function err(msg: string, code = 'ERROR') {
 // ═══════════════════════════════════════════════════════════════════
 
 const TOOL_GROUPS: Record<string, string[]> = {
-  agent: ['memory_search', 'memory_get', 'memory_recent', 'fact_search', 'memory_graph'],
+  agent: ['memory_search', 'memory_get', 'memory_recent', 'memory_index', 'fact_search', 'memory_graph'],
   harness: ['auto_process', 'conversation_save', 'digest_run', 'reflect_auto', 'reflect_deep', 'reflect_batch_embed', 'memory_save', 'memory_update', 'memory_delete', 'memory_log', 'instruction_save'],
   admin: ['memory_list', 'stats_get', 'recent_conversations', 'daily_summary_data', 'reflect_analyze', 'reflect_apply', 'memory_context', 'context_get', 'project_list', 'instruction_list', 'instruction_delete'],
 };
@@ -90,11 +91,12 @@ register(
     query: z.string().describe('What to search for'),
     topK: z.number().optional().describe('Max results (default 5)'),
     category: z.string().optional().describe('Filter by category'),
+    memType: z.enum(MEM_TYPES).optional().describe('Filter by usage dimension: user/feedback/project/reference/general'),
     project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
   },
   async (args) => {
     try {
-      const r = await searchMemory({ query: args.query, topK: args.topK ?? 5, profile: 'balanced', category: args.category, characterId: CHAR_ID, project: args.project });
+      const r = await searchMemory({ query: args.query, topK: args.topK ?? 5, profile: 'balanced', category: args.category, memType: args.memType, characterId: CHAR_ID, project: args.project });
       return ok({
         op: 'search',
         query: args.query,
@@ -104,6 +106,7 @@ register(
           text: m.text.length > 200 ? m.text.substring(0, 200) + '…' : m.text,
           truncated: m.text.length > 200,
           kind: m.type === 'episodic' ? 'episode' : m.type === 'semantic' ? 'reflection' : m.type,
+          memType: m.memType,
           category: m.category,
           importance: m.importance,
           score: m.score,
@@ -150,10 +153,11 @@ register(
 
 register(
   'memory_save', 'harness',
-  'Store a new memory or update existing one by exact text match.',
+  'Store a new memory or update existing one by exact text match. When memType is one of user/feedback/project/reference, the text is auto-wrapped into Markdown structure (# heading + - list items).',
   {
     text: z.string().describe('Memory content'),
     type: z.enum(['episodic', 'semantic', 'entity', 'preference']).optional().default('episodic'),
+    memType: z.enum(MEM_TYPES).optional().describe('Usage dimension: user (profile) / feedback (correction) / project (context) / reference (external pointer) / general (default). Non-general values force Markdown structure.'),
     category: z.string().optional().default('general'),
     tags: z.array(z.string()).optional().default([]),
     importance: z.number().optional().default(0.5),
@@ -166,8 +170,8 @@ register(
   },
   async (args) => {
     try {
-      const r = await saveMemory({ text: args.text, project: args.project, type: args.type, category: args.category, tags: args.tags, importance: args.importance, tier: args.tier, source: args.source, subject: args.subject, characterId: CHAR_ID, skipEmbed: args.skipEmbed, expiresAt: args.expiresAt });
-      return ok({ id: r.id, text: r.text.substring(0, 100), type: r.type, category: r.category });
+      const r = await saveMemory({ text: args.text, project: args.project, type: args.type, memType: args.memType, category: args.category, tags: args.tags, importance: args.importance, tier: args.tier, source: args.source, subject: args.subject, characterId: CHAR_ID, skipEmbed: args.skipEmbed, expiresAt: args.expiresAt });
+      return ok({ id: r.id, text: r.text.substring(0, 100), type: r.type, memType: r.memType, category: r.category });
     } catch (e: any) { return err(e.message); }
   }
 );
@@ -188,6 +192,7 @@ register(
   {
     id: z.string().describe('Memory ID'),
     text: z.string().optional(),
+    memType: z.enum(MEM_TYPES).optional().describe('Usage dimension to set (user/feedback/project/reference/general)'),
     category: z.string().optional(),
     tags: z.array(z.string()).optional(),
     importance: z.number().optional(),
@@ -197,7 +202,7 @@ register(
   async (args) => {
     try {
       const r = await updateMemory(args.id, args as any);
-      return ok(r ? { updated: true, id: r.id } : { updated: false, error: 'not found' });
+      return ok(r ? { updated: true, id: r.id, memType: (r as any).mem_type || 'general' } : { updated: false, error: 'not found' });
     } catch (e: any) { return err(e.message); }
   }
 );
@@ -362,6 +367,24 @@ register(
         ORDER BY confidence DESC, created_at DESC LIMIT 5
       `).all(proj) as any[];
 
+      // 4.5 记忆索引层(4 种封闭类型,轻量摘要 — 对应 Claude Code MEMORY.md,先索引后详情)
+      const indexRows = db.prepare(`
+        SELECT id, mem_type, substr(text, 1, 150) AS summary, length(text) AS full_len
+        FROM memory
+        WHERE is_active = 1 AND character_id = ? AND project = ?
+          AND mem_type IN ('user','feedback','project','reference')
+        ORDER BY updated_at DESC
+        LIMIT 10
+      `).all(CHAR_ID, proj) as any[];
+      const indexLayer = indexRows.map((row: any) => {
+        const s = row.summary || '';
+        return {
+          id: row.id,
+          memType: row.mem_type || 'general',
+          summary: row.full_len > 150 ? summarizeForIndex(s, 149) : s,
+        };
+      });
+
       // 0. 三层指令记忆(全局→用户→项目;拼接顺序 L1→L2→L3,L3 在 Prompt 末尾约束最高)
       //    path 可选:对带 paths 的指令做 glob 过滤
       const instructions = getInstruction(proj, args.path);
@@ -409,6 +432,13 @@ register(
         });
       }
 
+      if (indexLayer.length > 0) {
+        sections.push(`\n■ 记忆索引(仅摘要,详情用 memory_get(id) 展开):`);
+        indexLayer.forEach((m: any, i: number) => {
+          sections.push(`${i + 1}. [${m.memType}] ${m.summary} (id: ${m.id})`);
+        });
+      }
+
       sections.push(`\n【要求】以上记忆来自用户的真实历史,与当前任务相关时请直接使用,不要重新询问用户已知信息。`);
 
       const bundle = {
@@ -418,6 +448,7 @@ register(
         related,
         cognitives: cognitives.map(m => ({ text: m.text, category: m.category })),
         facts,
+        index: indexLayer,
         stats: { total: stats.c },
         injectedAt: new Date().toISOString(),
       };
@@ -441,6 +472,7 @@ register(
         total: total.c,
         byCategory: db.prepare('SELECT category,COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? AND project=? GROUP BY category').all(CHAR_ID, proj),
         bySource: db.prepare('SELECT source,COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? AND project=? GROUP BY source').all(CHAR_ID, proj),
+        byMemType: db.prepare('SELECT mem_type,COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? AND project=? GROUP BY mem_type').all(CHAR_ID, proj),
         characterId: CHAR_ID,
         project: proj,
       });
@@ -460,6 +492,7 @@ register(
     limit: z.number().max(50).optional().default(50).describe('Max results (hard cap 50)'),
     category: z.string().optional(),
     source: z.string().optional(),
+    memType: z.enum(MEM_TYPES).optional().describe('Filter by usage dimension: user/feedback/project/reference/general'),
     project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
   },
   async (args) => {
@@ -468,6 +501,7 @@ register(
       let filtered = memories;
       if (args.category) filtered = filtered.filter((m: any) => m.category === args.category);
       if (args.source) filtered = filtered.filter((m: any) => m.source === args.source);
+      if (args.memType) filtered = filtered.filter((m: any) => m.memType === args.memType);
       const sliced = filtered.slice(0, args.limit);
       return ok({
         op: 'list',
@@ -476,6 +510,7 @@ register(
           id: m.id,
           text: m.text.length > 200 ? m.text.substring(0, 200) + '…' : m.text,
           truncated: m.text.length > 200,
+          memType: m.memType || 'general',
           category: m.category,
           importance: m.importance,
           createdAt: m.createdAt,
@@ -508,6 +543,7 @@ register(
           text: row.text,
           truncated: false,
           type: row.type,
+          memType: row.mem_type || 'general',
           category: row.category,
           tags: JSON.parse(row.tags || '[]'),
           importance: row.importance,
@@ -557,11 +593,12 @@ register(
   {
     limit: z.number().optional().default(5),
     hoursBack: z.number().optional().default(24),
+    memType: z.enum(MEM_TYPES).optional().describe('Filter by usage dimension: user/feedback/project/reference/general'),
     project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
   },
   async (args) => {
     try {
-      const r = getRecentMemories(CHAR_ID, args.limit, args.hoursBack, args.project);
+      const r = getRecentMemories(CHAR_ID, args.limit, args.hoursBack, args.project, args.memType);
       return ok({
         op: 'recent',
         count: r.length,
@@ -569,6 +606,7 @@ register(
           id: m.id,
           text: m.text.length > 200 ? m.text.substring(0, 200) + '…' : m.text,
           truncated: m.text.length > 200,
+          memType: m.memType,
           category: m.category,
           importance: m.importance,
           createdAt: m.createdAt,
@@ -576,6 +614,46 @@ register(
         hint: '用 memory_get(id) 取完整内容',
       });
     } catch (e: any) { return err(e.message, 'RECENT_FAILED'); }
+  }
+);
+
+register(
+  'memory_index', 'agent',
+  'Lightweight memory index (corresponds to Claude Code MEMORY.md): returns id + mem_type + 150-char summary per row, no full text. Use memory_get(id) to expand a summary into full detail (index-first, detail-after).',
+  {
+    project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
+    memType: z.enum(MEM_TYPES).optional().describe('Filter by usage dimension: user/feedback/project/reference/general'),
+    limit: z.number().max(100).optional().default(20).describe('Max index rows (default 20, hard cap 100)'),
+  },
+  async (args) => {
+    try {
+      const db = DatabaseManager.getInstance(args.project);
+      const proj = normalizeProject(args.project);
+      const limit = Math.min(args.limit ?? 20, 100);
+      const conds = ['is_active = 1', 'character_id = ?', 'project = ?'];
+      const params: any[] = [CHAR_ID, proj];
+      if (args.memType) { conds.push('mem_type = ?'); params.push(args.memType); }
+      params.push(limit);
+      const rows = db.prepare(`
+        SELECT id, mem_type, substr(text, 1, 150) AS summary, length(text) AS full_len, updated_at
+        FROM memory
+        WHERE ${conds.join(' AND ')}
+        ORDER BY updated_at DESC
+        LIMIT ?
+      `).all(...params) as any[];
+      return ok({
+        op: 'index',
+        count: rows.length,
+        results: rows.map((row: any) => ({
+          id: row.id,
+          memType: row.mem_type || 'general',
+          summary: row.summary,
+          summaryTruncated: row.full_len > 150,
+          updatedAt: row.updated_at,
+        })),
+        hint: '摘要层只含标题+150字。用 memory_get(id) 拉全文。',
+      });
+    } catch (e: any) { return err(e.message, 'INDEX_FAILED'); }
   }
 );
 

@@ -36,6 +36,17 @@ function factsRules(maxFacts) {
 - 最多 ${maxFacts} 条
 - 只提取有长期价值、明确陈述的事实；不提取情绪/临时状态`;
 }
+/** v1.8: 4 种封闭记忆类型(mem_type)提取规则 — 融合 Claude Code 封闭记忆类型 */
+function memTypeRules() {
+    return `【记忆类型(mem_type)】extract 时把每条新记忆分类到 4 种封闭类型之一(省略则为 general):
+- user — 用户画像:偏好/技术栈/风格/人物关系洞察
+- feedback — 行为纠正:正负双向都要记录(Negative + Positive 都要,只记一边算不完整)
+- project — 项目上下文:截止时间/环境约定/非代码可推导信息;相对时间(如"下周三")必须转成绝对日期(如"2026-08-12")
+- reference — 外部指针:URL/ID/文档链接,只存指针不存内容副本
+【硬性禁止】
+- 不存代码片段/函数定义/文件路径/git hash(代码库是单一事实源)
+- 不存临时调试日志/错误栈/单次会话状态`;
+}
 function factsFieldSpec(maxFacts) {
     return `,
   "facts": [
@@ -55,13 +66,14 @@ function outputFormatSpec(factExtraction, maxFacts) {
   "insights": ["关于用户性格/沟通风格/潜在需求的深层观察"],
   "actions": [
     {"action":"merge","sourceIds":["同日碎片id"],"newText":"日记约50字","newType":"episodic","newCategory":"conversation","newTags":["标签"],"newImportance":0.5},
-    {"action":"extract","sourceId":"源id","newText":"提取的记忆","newType":"episodic","newCategory":"emotional","newTags":["标签"],"newImportance":0.6,"tier":"standard"}
+    {"action":"extract","sourceId":"源id","newText":"提取的记忆","newType":"episodic","newCategory":"emotional","newTags":["标签"],"newImportance":0.6,"tier":"standard","newMemType":"user"}
   ]
 }
 
 【actions 规则】
 - 仅当确实需要整理已有记忆时才产生 actions
 - 不需要操作时 actions 为空数组 []
+${memTypeRules()}
 ${factExtraction === 'off'
         ? '【facts】本轮不提取 facts。'
         : factsRules(maxFacts)}`;
@@ -294,7 +306,7 @@ export async function runDeepReflect(charId, limit = 500, project) {
         const slim = memories.map(m => ({
             id: m.id,
             text: (m.text || '').slice(0, 300),
-            type: m.type, category: m.category,
+            type: m.type, memType: m.memType || 'general', category: m.category,
             tags: m.tags || [], importance: m.importance ?? 0.5,
             emotionalImpact: m.emotionalImpact ?? 0, tier: m.tier || 'standard',
             locked: m.locked || 0, source: m.source || '',

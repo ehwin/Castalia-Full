@@ -7,6 +7,7 @@
 import { DatabaseManager, generateId } from './db.js';
 import { embed, getEmbeddingCached } from './ollama.js';
 import { normalizeProject, isEmbedEnabled } from './env.js';
+import { normalizeMarkdown, normalizeMemType } from './memType.js';
 let saveCount = 0;
 const CONSOLIDATE_INTERVAL = 50;
 export async function saveMemory(params) {
@@ -14,17 +15,20 @@ export async function saveMemory(params) {
     const now = new Date().toISOString();
     const skipEmbed = params.skipEmbed === true;
     const project = normalizeProject(params.project);
+    const memType = normalizeMemType(params.memType);
+    // v1.8: 4 种封闭类型(memType≠general)且 text 非 Markdown 时,自动规范化包装(加标题行+转列表)
+    const text = normalizeMarkdown(params.text, memType);
     // ═══ 精确去重：完全相同的文本不重复存(仅限同项目) ═══
     const exactDup = db.prepare(`
     SELECT id FROM memory
     WHERE is_active = 1 AND project = ? AND LOWER(TRIM(text)) = LOWER(TRIM(?))
     LIMIT 1
-  `).get(project, params.text?.trim() || '');
+  `).get(project, text?.trim() || '');
     if (exactDup) {
         db.prepare('UPDATE memory SET reference_count = reference_count + 1 WHERE id = ?').run(exactDup.id);
         return {
-            id: exactDup.id, text: params.text, project,
-            type: params.type ?? 'episodic', category: params.category ?? 'general',
+            id: exactDup.id, text, project,
+            type: params.type ?? 'episodic', memType, category: params.category ?? 'general',
             subcategory: params.subcategory ?? null, tags: params.tags ?? [],
             importance: params.importance ?? 0.5,
             characterId: params.characterId ?? null, source: params.source ?? null,
@@ -40,7 +44,7 @@ export async function saveMemory(params) {
     let dupId = null;
     if (!skipEmbed && isEmbedEnabled()) {
         try {
-            vector = await getEmbeddingCached(params.text, project);
+            vector = await getEmbeddingCached(text, project);
             const floatVec = new Float32Array(vector);
             const knn = db.prepare(`
         SELECT rowid, distance FROM vec_memory
@@ -69,8 +73,9 @@ export async function saveMemory(params) {
         : null // standard/critical 永不过期
     );
     const record = {
-        id, text: params.text, project,
+        id, text, project,
         type: params.type ?? 'episodic',
+        memType,
         category: params.category ?? 'general',
         subcategory: params.subcategory ?? null,
         tags: params.tags ?? [],
@@ -85,9 +90,9 @@ export async function saveMemory(params) {
     };
     const storeTx = db.transaction(() => {
         db.prepare(`
-      INSERT INTO memory (id, text, project, type, category, subcategory, tags, importance, character_id, source, subject, tier, expires_at, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(record.id, record.text, record.project, record.type, record.category, record.subcategory, JSON.stringify(record.tags), record.importance, record.characterId, record.source, record.subject, record.tier, record.expiresAt, 1, record.createdAt, record.updatedAt, record.lastAccessedAt, 0, 0);
+      INSERT INTO memory (id, text, project, type, mem_type, category, subcategory, tags, importance, character_id, source, subject, tier, expires_at, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(record.id, record.text, record.project, record.type, record.memType, record.category, record.subcategory, JSON.stringify(record.tags), record.importance, record.characterId, record.source, record.subject, record.tier, record.expiresAt, 1, record.createdAt, record.updatedAt, record.lastAccessedAt, 0, 0);
         // v5.0: 仅在非 skipEmbed 时写入向量
         if (!skipEmbed && vector) {
             const info = db.prepare('SELECT rowid FROM memory WHERE id = ?').get(record.id);
@@ -123,9 +128,16 @@ export async function updateMemory(id, updates) {
         return null;
     const fields = [];
     const values = [];
+    let text;
     if (updates.text !== undefined) {
+        // v1.8: memType 为 4 种封闭类型时,更新 text 同样规范化包装
+        text = normalizeMarkdown(updates.text, updates.memType);
         fields.push('text = ?');
-        values.push(updates.text);
+        values.push(text);
+    }
+    if (updates.memType !== undefined) {
+        fields.push('mem_type = ?');
+        values.push(normalizeMemType(updates.memType));
     }
     if (updates.type !== undefined) {
         fields.push('type = ?');
@@ -154,7 +166,7 @@ export async function updateMemory(id, updates) {
     values.push(id);
     db.prepare(`UPDATE memory SET ${fields.join(', ')} WHERE id = ?`).run(...values);
     if (updates.text !== undefined && isEmbedEnabled()) {
-        const newVec = await getEmbeddingCached(updates.text, updates.project);
+        const newVec = await getEmbeddingCached(text, updates.project);
         db.prepare('DELETE FROM vec_memory WHERE rowid = (SELECT rowid FROM memory WHERE id = ?)').run(id);
         const rowInfo = db.prepare('SELECT rowid FROM memory WHERE id = ?').get(id);
         db.prepare('INSERT INTO vec_memory (rowid, embedding) VALUES (?, ?)').run(BigInt(rowInfo.rowid), new Float32Array(newVec));

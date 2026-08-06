@@ -15,6 +15,7 @@
 import { DatabaseManager } from './db.js';
 import { saveFacts, saveMemory, batchEmbedPending } from './store.js';
 import { normalizeProject } from './env.js';
+import { isMemType, MEM_TYPES } from './memType.js';
 import fs from 'node:fs';
 import path from 'node:path';
 /**
@@ -24,7 +25,7 @@ export function listAllMemories(characterId = 'airi', limit = 200, project) {
     const db = DatabaseManager.getInstance(project);
     const proj = normalizeProject(project);
     const rows = db.prepare(`
-    SELECT id, text, type, category, tags, importance,
+    SELECT id, text, type, mem_type, category, tags, importance,
            subject, source, tier, expires_at, created_at, last_accessed_at, accessed_count, reference_count, locked
     FROM memory
     WHERE is_active = 1 AND character_id = ? AND project = ?
@@ -44,6 +45,7 @@ export function listAllMemories(characterId = 'airi', limit = 200, project) {
             id: r.id,
             text: r.text,
             type: r.type,
+            memType: r.mem_type || 'general',
             category: r.category,
             tags,
             importance: r.importance,
@@ -66,6 +68,7 @@ export function listAllMemories(characterId = 'airi', limit = 200, project) {
 // 护栏：拒绝明显无效的值，防止大模型幻觉污染数据库
 // ═════════════════════════════════════════════════
 const VALID_TYPES = new Set(['episodic', 'semantic', 'entity', 'preference']);
+const VALID_MEM_TYPES = new Set(MEM_TYPES); // v1.8: 4 种封闭类型 + general
 const VALID_CATEGORIES = new Set(['conversation', 'milestone', 'identity', 'relationship', 'knowledge', 'preference', 'general']);
 const VALID_RELATIONS = new Set(['caused_by', 'part_of', 'follows', 'related_to', 'same_subject', 'causes', 'leads_to', 'sequence']);
 function safeTags(raw) {
@@ -262,6 +265,7 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                     }
                     const validType = action.newType && VALID_TYPES.has(action.newType) ? action.newType : 'semantic';
                     const validCat = action.newCategory && VALID_CATEGORIES.has(action.newCategory) ? action.newCategory : 'general';
+                    const validMemType = isMemType(action.newMemType) ? action.newMemType : undefined;
                     const validTags = safeTags(action.newTags) || [];
                     const importance = action.newImportance ?? 0.6;
                     const tier = (action.tier && ['temporary', 'standard', 'critical'].includes(action.tier))
@@ -270,6 +274,7 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                     await saveMemory({
                         text: action.newText,
                         type: validType,
+                        memType: validMemType,
                         category: validCat,
                         tags: validTags,
                         importance,

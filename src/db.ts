@@ -138,6 +138,7 @@ function initProjectSchema(db: Database.Database) {
       project TEXT DEFAULT 'default',
       session_id TEXT,
       type TEXT DEFAULT 'episodic',
+      mem_type TEXT DEFAULT 'general',
       category TEXT DEFAULT 'general',
       subcategory TEXT,
       tags TEXT DEFAULT '[]',
@@ -220,6 +221,10 @@ function initProjectSchema(db: Database.Database) {
 
   // v6.0: session_id column for session-level memory (reserved, no logic added yet)
   try { db.exec(`ALTER TABLE memory ADD COLUMN session_id TEXT`); } catch (_e) { /* already exists */ }
+
+  // v1.8: mem_type column — 用途维度(Claude Code 4 种封闭类型),默认 general
+  try { db.exec(`ALTER TABLE memory ADD COLUMN mem_type TEXT DEFAULT 'general'`); } catch (_e) { /* already exists */ }
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_mem_type ON memory(mem_type, is_active)`); } catch (_e) {}
 
   // Unique index for fact dedup (per-project: same SPO allowed across projects)
   try { db.exec(`DROP INDEX IF EXISTS idx_facts_spo`); } catch (_e) {}
