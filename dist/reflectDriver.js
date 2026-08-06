@@ -19,9 +19,6 @@ import { normalizeProject, isEmbedEnabled } from './env.js';
 import { isMemType } from './memType.js';
 import { findSimilarCandidates, CONSOLIDATE_SIMILARITY, CONSOLIDATE_MAX_PAIRS } from './consolidate.js';
 import { getRecentConversations } from './digest.js';
-const LLM_URL = (process.env.REFLECT_LLM_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, '');
-const LLM_API_KEY = process.env.REFLECT_LLM_API_KEY || '';
-const LLM_MODEL = process.env.REFLECT_LLM_MODEL || 'deepseek-chat';
 const FACT_EXTRACTION = (process.env.REFLECT_FACT_EXTRACTION || 'auto').trim().toLowerCase();
 const MAX_FACTS = parseInt(process.env.REFLECT_MAX_FACTS || '15', 10) || 15;
 // 启动自动反思触发阈值(条件达成后,下次启动 server 时自动执行一次)
@@ -29,8 +26,19 @@ const MIN_GAP_HOURS = (() => { const v = parseFloat(process.env.REFLECT_MIN_GAP_
 const MIN_UNANALYZED = (() => { const v = parseInt(process.env.REFLECT_MIN_UNANALYZED || '5', 10); return Number.isFinite(v) && v >= 0 ? v : 5; })();
 // v1.10: 启动自动整合触发阈值(active 记忆条数 > 该值 → 下次启动自动整合一次)
 const CONSOLIDATE_MIN_MEMORIES = (() => { const v = parseInt(process.env.CONSOLIDATE_MIN_MEMORIES || '15', 10); return Number.isFinite(v) && v >= 0 ? v : 15; })();
+export function makeLlmChannel(prefix) {
+    const get = (suffix, fallback) => {
+        const v = process.env[`${prefix}_${suffix}`];
+        return v && v.trim().length > 0 ? v.trim() : fallback;
+    };
+    return {
+        url: get('LLM_URL', process.env.REFLECT_LLM_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, ''),
+        apiKey: get('LLM_API_KEY', process.env.REFLECT_LLM_API_KEY || ''),
+        model: get('LLM_MODEL', process.env.REFLECT_LLM_MODEL || 'deepseek-chat'),
+    };
+}
 export function isReflectConfigured() {
-    return !!LLM_API_KEY;
+    return !!makeLlmChannel('reflect').apiKey;
 }
 export function isFactExtractionEnabled() {
     return FACT_EXTRACTION !== 'off';
@@ -297,16 +305,20 @@ function normalizeReflectResult(parsed) {
     }
     return out;
 }
-/** 调用 LLM(OpenAI 兼容,非流式) */
-async function callLlm(systemPrompt, userPrompt) {
-    if (!LLM_API_KEY)
+/**
+ * 调用 LLM(OpenAI 兼容,非流式)。
+ * 通道:缺省用 reflect(REFLECT_*);传 channel 则用指定通道(triage/reflect)。
+ */
+export async function callLlm(systemPrompt, userPrompt, channel) {
+    const ch = channel ?? makeLlmChannel('reflect');
+    if (!ch.apiKey)
         return null;
     try {
-        const resp = await fetch(`${LLM_URL}/chat/completions`, {
+        const resp = await fetch(`${ch.url}/chat/completions`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${LLM_API_KEY}` },
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.apiKey}` },
             body: JSON.stringify({
-                model: LLM_MODEL,
+                model: ch.model,
                 messages: [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: userPrompt },

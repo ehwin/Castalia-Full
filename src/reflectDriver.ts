@@ -20,9 +20,6 @@ import { isMemType } from './memType.js';
 import { findSimilarCandidates, SimilarCandidate, CONSOLIDATE_SIMILARITY, CONSOLIDATE_MAX_PAIRS } from './consolidate.js';
 import { getRecentConversations } from './digest.js';
 
-const LLM_URL = (process.env.REFLECT_LLM_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, '');
-const LLM_API_KEY = process.env.REFLECT_LLM_API_KEY || '';
-const LLM_MODEL = process.env.REFLECT_LLM_MODEL || 'deepseek-chat';
 const FACT_EXTRACTION = (process.env.REFLECT_FACT_EXTRACTION || 'auto').trim().toLowerCase();
 const MAX_FACTS = parseInt(process.env.REFLECT_MAX_FACTS || '15', 10) || 15;
 
@@ -33,8 +30,32 @@ const MIN_UNANALYZED = (() => { const v = parseInt(process.env.REFLECT_MIN_UNANA
 // v1.10: 启动自动整合触发阈值(active 记忆条数 > 该值 → 下次启动自动整合一次)
 const CONSOLIDATE_MIN_MEMORIES = (() => { const v = parseInt(process.env.CONSOLIDATE_MIN_MEMORIES || '15', 10); return Number.isFinite(v) && v >= 0 ? v : 15; })();
 
+/**
+ * v1.11: LLM 通道 — 三通道架构(LLM1 triage / 向量模型 / LLM2 reflect)。
+ * 构造 `${PREFIX}_LLM_URL / ${PREFIX}_LLM_API_KEY / ${PREFIX}_LLM_MODEL` 配置:
+ *   优先取前缀通道自身值;缺省回退 REFLECT_*(旧单通道);再回退内置默认。
+ *   供 triage(LLM1) 与 reflect(LLM2) 复用。
+ */
+export interface LlmChannel {
+  url: string;
+  apiKey: string;
+  model: string;
+}
+
+export function makeLlmChannel(prefix: string): LlmChannel {
+  const get = (suffix: string, fallback: string): string => {
+    const v = process.env[`${prefix}_${suffix}`];
+    return v && v.trim().length > 0 ? v.trim() : fallback;
+  };
+  return {
+    url: get('LLM_URL', process.env.REFLECT_LLM_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, ''),
+    apiKey: get('LLM_API_KEY', process.env.REFLECT_LLM_API_KEY || ''),
+    model: get('LLM_MODEL', process.env.REFLECT_LLM_MODEL || 'deepseek-chat'),
+  };
+}
+
 export function isReflectConfigured(): boolean {
-  return !!LLM_API_KEY;
+  return !!makeLlmChannel('reflect').apiKey;
 }
 
 export function isFactExtractionEnabled(): boolean {
@@ -316,20 +337,24 @@ function normalizeReflectResult(parsed: any): ReflectResult {
   return out as ReflectResult;
 }
 
-interface LlmResponse {
+export interface LlmResponse {
   content: string;
   reasoning: string;
 }
 
-/** 调用 LLM(OpenAI 兼容,非流式) */
-async function callLlm(systemPrompt: string, userPrompt: string): Promise<LlmResponse | null> {
-  if (!LLM_API_KEY) return null;
+/**
+ * 调用 LLM(OpenAI 兼容,非流式)。
+ * 通道:缺省用 reflect(REFLECT_*);传 channel 则用指定通道(triage/reflect)。
+ */
+export async function callLlm(systemPrompt: string, userPrompt: string, channel?: LlmChannel): Promise<LlmResponse | null> {
+  const ch = channel ?? makeLlmChannel('reflect');
+  if (!ch.apiKey) return null;
   try {
-    const resp = await fetch(`${LLM_URL}/chat/completions`, {
+    const resp = await fetch(`${ch.url}/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${LLM_API_KEY}` },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.apiKey}` },
       body: JSON.stringify({
-        model: LLM_MODEL,
+        model: ch.model,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },

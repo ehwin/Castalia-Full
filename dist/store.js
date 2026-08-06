@@ -28,6 +28,7 @@ export async function saveMemory(params) {
         db.prepare('UPDATE memory SET reference_count = reference_count + 1 WHERE id = ?').run(exactDup.id);
         return {
             id: exactDup.id, text, project,
+            sessionId: null,
             type: params.type ?? 'episodic', memType, category: params.category ?? 'general',
             subcategory: params.subcategory ?? null, tags: params.tags ?? [],
             importance: params.importance ?? 0.5,
@@ -74,6 +75,7 @@ export async function saveMemory(params) {
     );
     const record = {
         id, text, project,
+        sessionId: params.sessionId ?? null,
         type: params.type ?? 'episodic',
         memType,
         category: params.category ?? 'general',
@@ -90,9 +92,9 @@ export async function saveMemory(params) {
     };
     const storeTx = db.transaction(() => {
         db.prepare(`
-      INSERT INTO memory (id, text, project, type, mem_type, category, subcategory, tags, importance, character_id, source, subject, tier, expires_at, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(record.id, record.text, record.project, record.type, record.memType, record.category, record.subcategory, JSON.stringify(record.tags), record.importance, record.characterId, record.source, record.subject, record.tier, record.expiresAt, 1, record.createdAt, record.updatedAt, record.lastAccessedAt, 0, 0);
+      INSERT INTO memory (id, text, project, session_id, type, mem_type, category, subcategory, tags, importance, character_id, source, subject, tier, expires_at, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(record.id, record.text, record.project, record.sessionId, record.type, record.memType, record.category, record.subcategory, JSON.stringify(record.tags), record.importance, record.characterId, record.source, record.subject, record.tier, record.expiresAt, 1, record.createdAt, record.updatedAt, record.lastAccessedAt, 0, 0);
         // v5.0: 仅在非 skipEmbed 时写入向量
         if (!skipEmbed && vector) {
             const info = db.prepare('SELECT rowid FROM memory WHERE id = ?').get(record.id);

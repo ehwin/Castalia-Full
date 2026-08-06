@@ -3,6 +3,23 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.11] — 2026-08-05 三通道架构 Part1:LLM1(triage)通道 + session_id 激活
+
+> 用户确认三通道:① LLM1(triage)=入站分拣+临时反思 ② 向量模型=嵌入(已有) ③ LLM2(reflect)=每日反思(已有)。Part1 做基础设施,Part2(缓冲/晋升/TTL)待做。
+
+### Added
+- **src/triage.ts**(新):`triageChannel()`(TRIAGE_LLM_* 配置,逐字段回退 REFLECT_* 再回退内置默认)、`isTriageConfigured()`、`classifyMemTypeLLM(text, project?)` — 极简中文分类 prompt(Claude 原厂封闭类型语义),输出 JSON `{"memType":...}`,白名单校验(JSON/裸词双解析),失败/无 key → `{memType:general, skipped:true}`(不阻塞入站)
+- **makeLlmChannel(prefix) + callLlm 参数化**(reflectDriver.ts):通道构造器(前缀通道缺省回退 REFLECT_*),callLlm 加可选 channel 参数,现有 reflect 行为不变
+- **session_id 激活**(store.ts/index.ts):SaveParams.sessionId、memory_save 加 sessionId 参数、INSERT 带 session_id 列(v6.0 预留列正式启用)
+- **configLoader + web**:triage.llm_url/api_key/model → TRIAGE_* env;admin 界面新增「分拣 LLM (triage)」配置组
+
+### Verified(独立复验,非自报)
+- 11 项独立 e2e 全过:triage 通道分类(feedback)、请求走 triage-model、无 key → general+skipped、sessionId 落库/不传 NULL、无 TRIAGE 回退 REFLECT 通道
+- npm run build exit 0;smoke_test 全 PASS(29 工具)
+
+### Note
+- Part2(待做):会话缓冲(N 轮攒批默认5)+ 增量临时反思(LLM1)+ 晋升项目级 + TTL 7天清理
+
 ## [v1.10.1] — 2026-08-05 Memory Snapshot Warning(记忆快照警告)
 
 > 补齐吸收 Claude Code 四主文件的最后缺口(retriever.ts formatRetrievedMemoryForPrompt)。

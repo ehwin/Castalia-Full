@@ -15,6 +15,7 @@ const CONSOLIDATE_INTERVAL = 50;
 export interface StoreParams {
   text: string;
   project?: string;  // v1.5: 项目隔离 — 默认 PROJECT_ID(env CASTALIA_PROJECT)
+  sessionId?: string;  // v1.11: 会话标识 — 落 session_id 列(会话级记忆,暂不参与检索)
   type?: 'episodic' | 'semantic' | 'entity' | 'preference';
   memType?: MemType;  // v1.8: 用途维度(user/feedback/project/reference/general),默认 general
   category?: string;
@@ -33,6 +34,7 @@ export interface MemoryRecord {
   id: string;
   text: string;
   project: string;
+  sessionId: string | null;
   type: string;
   memType: MemType;
   category: string;
@@ -71,6 +73,7 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
     db.prepare('UPDATE memory SET reference_count = reference_count + 1 WHERE id = ?').run(exactDup.id);
     return {
       id: exactDup.id, text, project,
+      sessionId: null,
       type: params.type ?? 'episodic', memType, category: params.category ?? 'general',
       subcategory: params.subcategory ?? null, tags: params.tags ?? [],
       importance: params.importance ?? 0.5,
@@ -123,6 +126,7 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
 
   const record: MemoryRecord = {
     id, text, project,
+    sessionId: params.sessionId ?? null,
     type: params.type ?? 'episodic',
     memType,
     category: params.category ?? 'general',
@@ -140,10 +144,10 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
 
   const storeTx = db.transaction(() => {
     db.prepare(`
-      INSERT INTO memory (id, text, project, type, mem_type, category, subcategory, tags, importance, character_id, source, subject, tier, expires_at, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memory (id, text, project, session_id, type, mem_type, category, subcategory, tags, importance, character_id, source, subject, tier, expires_at, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      record.id, record.text, record.project, record.type, record.memType, record.category, record.subcategory,
+      record.id, record.text, record.project, record.sessionId, record.type, record.memType, record.category, record.subcategory,
       JSON.stringify(record.tags), record.importance,
       record.characterId, record.source, record.subject,
       record.tier, record.expiresAt, 1,

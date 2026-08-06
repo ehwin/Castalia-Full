@@ -178,11 +178,12 @@ register(
     subject: z.enum(['user', 'self', 'environment']).optional().default('user'),
     skipEmbed: z.boolean().optional().default(false),
     expiresAt: z.string().optional().describe('Custom expiration (ISO datetime) for temporary memories. Overrides the default 3-day TTL. Also honored on standard/critical tiers when explicitly set.'),
+    sessionId: z.string().optional().describe('Session identifier for session-scoped memories (stored in session_id column). Reserved for session-level retrieval (next version).'),
     project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
   },
   async (args) => {
     try {
-      const r = await saveMemory({ text: args.text, project: args.project, type: args.type, memType: args.memType, category: args.category, tags: args.tags, importance: args.importance, tier: args.tier, source: args.source, subject: args.subject, characterId: CHAR_ID, skipEmbed: args.skipEmbed, expiresAt: args.expiresAt });
+      const r = await saveMemory({ text: args.text, project: args.project, sessionId: args.sessionId, type: args.type, memType: args.memType, category: args.category, tags: args.tags, importance: args.importance, tier: args.tier, source: args.source, subject: args.subject, characterId: CHAR_ID, skipEmbed: args.skipEmbed, expiresAt: args.expiresAt });
       return ok({ id: r.id, text: r.text.substring(0, 100), type: r.type, memType: r.memType, category: r.category });
     } catch (e: any) { return err(e.message); }
   }

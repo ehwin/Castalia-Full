@@ -79,6 +79,10 @@ function loadConfig() {
       factExtraction: 'auto', maxFacts: 15,
       ...(cfg.reflect || {}),
     },
+    triage: {
+      llm_url: 'https://api.deepseek.com/v1', api_key: '', model: 'deepseek-chat',
+      ...(cfg.triage || {}),
+    },
   };
 }
 
@@ -266,6 +270,7 @@ app.get('/api/config', (req, res) => {
   const safe = JSON.parse(JSON.stringify(cfg));
   if (safe.embedding?.api_key) safe.embedding.api_key = safe.embedding.api_key ? '****' : '';
   if (safe.reflect?.api_key) safe.reflect.api_key = safe.reflect.api_key ? '****' : '';
+  if (safe.triage?.api_key) safe.triage.api_key = safe.triage.api_key ? '****' : '';
   res.json(safe);
 });
 
@@ -276,6 +281,7 @@ app.post('/api/config', (req, res) => {
     // 保留旧 key:前端传 '****' 表示未修改
     if (next.embedding?.api_key === '****') next.embedding.api_key = cur.embedding?.api_key || '';
     if (next.reflect?.api_key === '****') next.reflect.api_key = cur.reflect?.api_key || '';
+    if (next.triage?.api_key === '****') next.triage.api_key = cur.triage?.api_key || '';
     saveConfig(next);
     res.json({ ok: true, path: CONFIG_PATH, note: '已保存。若 MCP server 正在运行,重启后配置生效' });
   } catch (e) { res.status(500).json({ error: e.message }); }
