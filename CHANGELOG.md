@@ -3,6 +3,19 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.11.4] — 2026-08-05 debug:web 控制台两个 bug(空库 500 + 旧列引用)
+
+> 用户检查管理界面(3345)时触发,实测复现。
+
+### Fixed
+- **空库 500**:`memory/` 目录无项目库文件时,`new Database(path, {readonly:true})` 对不存在文件抛错 → /api/graph /api/stats /api/memory 全部 500。修复:openDb 检查 `existsSync(DB_PATH)`,不存在返回 null,各端点优雅返回空结构;前端显示「📭 记忆库为空或未创建」提示而非裸报错
+- **`no such column: emotional_impact`**:server.mjs 查询了 AIRI 旧版情感列(公共版 v1.4 已删),v1.7 分库后库真实建起才暴露。已从 SELECT 和节点对象移除,前端"情绪影响"元数据行删除
+- **`/api/stats` edges 表容错**:edges 表可能未创建,查询加保护
+
+### Verified(独立复验,非自报)
+- 空库:/api/graph 200 {nodes:[]}、/api/stats 200 {total:0};有库(1 条测试记忆):graph 返回节点、stats {total:1};主页 200
+- 测试数据已清理;node --check 通过
+
 ## [v1.11.3] — 2026-08-05 debug:修复空文本记忆落库 + 边界测试
 
 ### Fixed

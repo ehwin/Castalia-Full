@@ -54,6 +54,7 @@ const app = express();
 app.use(express.json({ limit: '2mb' }));
 
 function openDb(readonly = false) {
+  if (!existsSync(DB_PATH)) return null;
   const db = new Database(DB_PATH, readonly ? { readonly: true } : {});
   try { sqliteVec.load(db); } catch (e) { console.error('sqlite-vec load failed:', e.message); }
   return db;
@@ -145,11 +146,12 @@ function mcpCall(toolName, args = {}) {
 
 // ═══ API: GET /api/graph ═══
 app.get('/api/graph', (req, res) => {
+  const db = openDb(true);
+  if (!db) return res.json({ nodes: [], links: [], stats: { totalNodes: 0, totalLinks: 0, byType: {}, byCategory: {}, byTier: {} } });
   try {
-    const db = openDb(true);
     const memories = db.prepare(`
       SELECT id, text, type, category, subcategory, tags,
-             emotional_impact, importance, character_id, source,
+             importance, character_id, source,
              subject, tier, expires_at, created_at, accessed_count
       FROM memory WHERE is_active = 1 ORDER BY created_at ASC
     `).all();
@@ -174,7 +176,7 @@ app.get('/api/graph', (req, res) => {
         label: m.text.length > 60 ? m.text.slice(0, 60) + '...' : m.text,
         fullText: m.text,
         type: m.type, category: m.category, subcategory: m.subcategory,
-        tags, emotionalImpact: m.emotional_impact, importance: m.importance,
+        tags, importance: m.importance,
         source: m.source, subject: m.subject, tier: m.tier || 'standard',
         expiresAt: m.expires_at, createdAt: m.created_at, accessedCount: m.accessed_count,
         valence: isCritical ? (m.importance * 12 + 5) : isTemporary ? (m.importance * 5 + 2) : (m.importance * 8 + 3),
@@ -240,19 +242,21 @@ app.get('/api/graph', (req, res) => {
 
 // ═══ API: GET /api/stats ═══
 app.get('/api/stats', (req, res) => {
+  const db = openDb(true);
+  if (!db) return res.json({ total: 0, edges: 0 });
   try {
-    const db = openDb(true);
     const total = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1').get();
-    const edges = db.prepare('SELECT COUNT(*) as c FROM edges').get();
+    let edgesC = 0;
+    try { edgesC = db.prepare('SELECT COUNT(*) as c FROM edges').get().c; } catch { /* edges 表可能未创建 */ }
     db.close();
-    res.json({ total: total.c, edges: edges.c });
+    res.json({ total: total.c, edges: edgesC });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ═══ API: GET /api/status ═══
 app.get('/api/status', (req, res) => {
   const cfg = loadConfig();
-  const dbPath = LEGACY_DB_PATH || join(DB_DIR, 'global.sqlite');
+  const dbPath = DB_PATH;
   res.json({
     db: LEGACY_DB_PATH ? DB_PATH : DB_DIR,
     dbPath,
@@ -289,8 +293,9 @@ app.post('/api/config', (req, res) => {
 
 // ═══ API: 记忆管理(直接 SQLite 读写) ═══
 app.get('/api/memory', (req, res) => {
+  const db = openDb(true);
+  if (!db) return res.json([]);
   try {
-    const db = openDb(true);
     const limit = Math.min(parseInt(req.query.limit || '200', 10), 500);
     let rows;
     if (req.query.q) {
@@ -309,8 +314,9 @@ function safeTags(raw) {
 }
 
 app.post('/api/memory/delete', (req, res) => {
+  const db = openDb();
+  if (!db) return res.json({ deleted: false });
   try {
-    const db = openDb();
     const r = db.prepare('UPDATE memory SET is_active = 0 WHERE id = ?').run(req.body.id);
     try { db.prepare('DELETE FROM vec_memory WHERE rowid = (SELECT rowid FROM memory WHERE id = ?)').run(req.body.id); } catch {}
     db.close();
@@ -335,6 +341,7 @@ app.post('/api/memory/update', (req, res) => {
     vals.push(new Date().toISOString());
     vals.push(id);
     const db = openDb();
+    if (!db) return res.json({ updated: false });
     const r = db.prepare(`UPDATE memory SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
     db.close();
     res.json({ updated: r.changes > 0 });

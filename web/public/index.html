@@ -261,6 +261,7 @@ function toggleEmbedMode() {
 fetch('/api/graph')
   .then(r => r.json())
   .then(data => {
+    if (data.error || !data.nodes) throw new Error(data.error || '无法读取记忆库');
     allData = data;
     document.getElementById('stat-nodes').textContent = data.nodes.length;
     document.getElementById('stat-links').textContent = data.stats.totalLinks;
@@ -326,8 +327,30 @@ fetch('/api/graph')
       .onNodeHover(node => { document.body.style.cursor = node ? 'pointer' : 'default'; });
 
     loading.style.display = 'none';
+    return fetch('/api/status').then(r => r.json());
   })
-  .catch(err => { loading.textContent = '❌ 加载失败: ' + err.message; loading.classList.add('error'); });
+  .then(s => {
+    if (s && s.dbExists === false) {
+      loading.innerHTML = '📭 记忆库为空或未创建——启动 MCP server 或写入第一条记忆后,图谱会自动出现';
+      loading.classList.add('error');
+      loading.style.display = '';
+    } else {
+      loading.style.display = 'none';
+    }
+  })
+  .catch(err => {
+    fetch('/api/status').then(r => r.json()).then(s => {
+      if (s && s.dbExists === false) {
+        loading.innerHTML = '📭 记忆库为空或未创建——启动 MCP server 或写入第一条记忆后,图谱会自动出现';
+      } else {
+        loading.textContent = '❌ 加载失败: ' + err.message;
+      }
+      loading.classList.add('error');
+    }).catch(() => {
+      loading.textContent = '❌ 加载失败: ' + err.message;
+      loading.classList.add('error');
+    });
+  });
 
 function showPanel(node) {
   const c = CATEGORY_COLORS[node.category] || {label: node.category};
@@ -362,7 +385,6 @@ function showPanel(node) {
     meta.appendChild(div);
   };
   addMeta('重要性', node.importance);
-  addMeta('情绪影响', node.emotionalImpact);
   addMeta('分级', tierLabel);
   if (node.tier === 'temporary' && node.expiresAt) addMeta('过期', new Date(node.expiresAt).toLocaleString('zh-CN'));
   addMeta('创建', new Date(node.createdAt).toLocaleString('zh-CN'));
