@@ -124,6 +124,25 @@ export class DatabaseManager {
     try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_spo ON facts(subject, predicate, object, project)`); } catch (_e) {}
     try { db.exec(`CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(subject, is_active)`); } catch (_e) {}
 
+    // ═══ v5.4 迁移：三层指令记忆(instruction memory)═══
+    // L1 global / L2 user / L3 project(类比 Claude Code CLAUDE.md 层级)
+    // 唯一约束:global/user 每层一条(scope 唯一),project 按 (scope, project) 唯一
+    // 用 partial unique index 规避 SQLite 对 NULL 不参与唯一性约束的行为(global/user 的 project 为 NULL)
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS instructions (
+          id TEXT PRIMARY KEY,
+          scope TEXT NOT NULL CHECK(scope IN ('global','user','project')),
+          project TEXT,
+          content TEXT NOT NULL,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_scope_unique ON instructions(scope) WHERE scope IN ('global','user');
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_instructions_project_unique ON instructions(scope, project) WHERE scope = 'project';
+        CREATE INDEX IF NOT EXISTS idx_instructions_scope ON instructions(scope, project);
+      `);
+    } catch (_e) { /* already exists */ }
+
     // ═══ v5.0 迁移：4096-dim → 1024-dim (Yuan-EB) ═══
     const SCHEMA_VERSION = 5;
     try { db.exec(`CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER)`); } catch (_e) {}

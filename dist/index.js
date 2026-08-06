@@ -19,6 +19,7 @@ import { runDigest, getRecentConversations, maybeDigest } from './digest.js';
 import { reflect, getAllMemories, getMemoryGraph, REFLECT_SYSTEM_PROMPT, getUnanalyzedConversations } from './reflect.js';
 import { autoProcess } from './autoProcessor.js';
 import { runAutoReflect, runDeepReflect } from './reflectDriver.js';
+import { ensureSeedInstructions, saveInstruction, getInstruction, listInstructions, deleteInstruction } from './instructions.js';
 import { CHAR_ID, PROJECT_ID, SERVER_NAME, SERVER_VERSION, normalizeProject } from './env.js';
 console.log = console.error;
 const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
@@ -38,8 +39,8 @@ function err(msg, code = 'ERROR') {
 // ═══════════════════════════════════════════════════════════════════
 const TOOL_GROUPS = {
     agent: ['memory_search', 'memory_get', 'memory_recent', 'fact_search', 'memory_graph'],
-    harness: ['auto_process', 'conversation_save', 'digest_run', 'reflect_auto', 'reflect_deep', 'reflect_batch_embed', 'memory_save', 'memory_update', 'memory_delete', 'memory_log'],
-    admin: ['memory_list', 'stats_get', 'recent_conversations', 'daily_summary_data', 'reflect_analyze', 'reflect_apply', 'memory_context', 'context_get', 'project_list'],
+    harness: ['auto_process', 'conversation_save', 'digest_run', 'reflect_auto', 'reflect_deep', 'reflect_batch_embed', 'memory_save', 'memory_update', 'memory_delete', 'memory_log', 'instruction_save'],
+    admin: ['memory_list', 'stats_get', 'recent_conversations', 'daily_summary_data', 'reflect_analyze', 'reflect_apply', 'memory_context', 'context_get', 'project_list', 'instruction_list', 'instruction_delete'],
 };
 function resolveTools(input) {
     if (!input || input === 'all')
@@ -310,9 +311,18 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
         WHERE is_active = 1 AND project = ? AND confidence >= 0.7
         ORDER BY confidence DESC, created_at DESC LIMIT 5
       `).all(proj);
+        // 0. 三层指令记忆(全局→用户→项目;拼接顺序 L1→L2→L3,L3 在 Prompt 末尾约束最高)
+        const instructions = getInstruction(proj);
         const stats = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1 AND project=?').get(proj);
-        // 5. Ground Truth 提示词组装
+        // 5. Ground Truth 提示词组装(指令分节在最前面)
         const sections = [];
+        if (instructions.length > 0) {
+            const lines = instructions.map(i => {
+                const tag = i.scope === 'global' ? '[全局]' : i.scope === 'user' ? '[用户]' : '[项目]';
+                return `${tag} ${i.content}`;
+            });
+            sections.push(`【指令(全局→项目,项目约束最高)】\n${lines.join('\n')}`);
+        }
         sections.push(`【当前记忆上下文】总记忆 ${stats.c} 条。请优先参考以下记忆,它们是之前会话沉淀的事实与经验:`);
         if (recent.length > 0) {
             sections.push(`\n■ 近期重要记忆(近 ${hoursBack} 小时):`);
@@ -342,6 +352,7 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
         sections.push(`\n【要求】以上记忆来自用户的真实历史,与当前任务相关时请直接使用,不要重新询问用户已知信息。`);
         const bundle = {
             prompt: sections.join('\n'),
+            instructions,
             recent: recent.map(m => ({ text: m.text, category: m.category, importance: m.importance, createdAt: m.createdAt })),
             related,
             cognitives: cognitives.map(m => ({ text: m.text, category: m.category })),
@@ -628,9 +639,59 @@ register('project_list', 'admin', 'List all project namespaces and their memory/
     }
 });
 // ═══════════════════════════════════════════════════════════════════
+// 三层指令记忆工具(类比 CLAUDE.md 层级)
+// L1 global:所有用户/项目通用规则(种子为全局规范)
+// L2 user:当前用户所有项目共享
+// L3 project:单项目专属规则,拼接在 Prompt 最末尾、约束最高,可覆盖 L1/L2 冲突
+// ═══════════════════════════════════════════════════════════════════
+register('instruction_save', 'harness', 'Save (upsert) an instruction rule into one of three layers: global (all users/projects, seeded with global rules), user (current user, all projects), project (this project only). Load order into prompt: global→user→project; project rules land at the very end and carry the highest constraint, overriding conflicting lower layers. Same scope+project overwrites the previous content.', {
+    scope: z.enum(['global', 'user', 'project']).describe('Layer: global=all users/projects, user=this user shared, project=this project only'),
+    project: z.string().optional().describe('Project name — REQUIRED when scope=project'),
+    content: z.string().describe('Instruction rule content'),
+}, async (args) => {
+    try {
+        const proj = args.scope === 'project' ? normalizeProject(args.project) : null;
+        if (args.scope === 'project' && !proj)
+            return err('scope=project 时必须传 project 参数', 'INVALID_PROJECT');
+        const r = saveInstruction(args.scope, proj, args.content);
+        return ok({ saved: true, scope: args.scope, project: proj, created: r.created, id: r.id });
+    }
+    catch (e) {
+        return err(e.message, 'INSTRUCTION_SAVE_FAILED');
+    }
+});
+register('instruction_list', 'admin', 'List all instruction layers (global/user/project) with scope, project, content and updated_at. Admin tool: use instruction_save to add/update, instruction_delete to remove.', {}, async () => {
+    try {
+        const rows = listInstructions();
+        return ok({ count: rows.length, instructions: rows });
+    }
+    catch (e) {
+        return err(e.message, 'INSTRUCTION_LIST_FAILED');
+    }
+});
+register('instruction_delete', 'admin', 'Delete one instruction layer. scope=project requires the matching project name. Admin tool.', {
+    scope: z.enum(['global', 'user', 'project']).describe('Layer to delete'),
+    project: z.string().optional().describe('Project name — required when scope=project'),
+}, async (args) => {
+    try {
+        const proj = args.scope === 'project' ? normalizeProject(args.project) : null;
+        if (args.scope === 'project' && !proj)
+            return err('scope=project 时必须传 project 参数', 'INVALID_PROJECT');
+        const r = deleteInstruction(args.scope, proj);
+        return ok({ deleted: r.deleted, scope: args.scope, project: proj });
+    }
+    catch (e) {
+        return err(e.message, 'INSTRUCTION_DELETE_FAILED');
+    }
+});
+// ═══════════════════════════════════════════════════════════════════
 // STARTUP
 // ═══════════════════════════════════════════════════════════════════
 async function main() {
+    // 三层指令记忆:首次启动写入 L1 全局种子(必须在建表之后、服务对外之前)
+    DatabaseManager.getInstance();
+    const seed = ensureSeedInstructions();
+    console.error(`[instructions] L1 种子${seed.seeded ? '已写入(scope=global)' : `跳过(表已有 ${seed.count} 条)`}`);
     // Agent state: nothing to flush (in-memory only)
     // Consolidate every 24 hours
     setInterval(() => { consolidate().catch(() => { }); }, 24 * 60 * 60 * 1000);

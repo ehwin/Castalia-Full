@@ -3,6 +3,21 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.6] — 2026-08-05 三层指令记忆(Instruction Memory)
+
+> 类比 Claude Code 的 CLAUDE.md 层级机制,DB 版实现。用户确认设计:查找从近到远 L3→L2→L1,拼接喂 LLM 从远到近 L1→L2→L3,L3 落 Prompt 末尾约束最高(近因效应 + 规则覆盖)。
+
+### Added
+- **`instructions` 表**:scope(`global`/`user`/`project`) + project + content;partial unique index(global/user 每层一条,project 按项目一条)
+- **L1 全局种子**:首次启动自动写入用户提供的全局规范(代码风格/工具约束/提交规范),表非空则跳过
+- **`instruction_save`**(harness):三层 upsert,同 scope+project 覆盖更新
+- **`instruction_list` / `instruction_delete`**(admin):查看/删除各层指令
+- **`memory_context` 扩展**:指令分节拼在 Prompt 最前(`【指令(全局→项目,项目约束最高)】`),每层 `[全局]/[用户]/[项目]` 标头,bundle 新增 `instructions` 字段,asText=false 也带
+
+### Verified(独立复验,非自报)
+- L1 种子首启自动写入(内容=全局规范全文);L2/L3 可存;memory_context 顺序 global→user→project 且分节在记忆上下文之前;同层覆盖不新增;L3 可删
+- npm run build exit 0;smoke_test 全 PASS(工具数 24→27);临时文件已清理
+
 ## [v1.5.4] — 2026-08-05 facts 写入链路打通(独立反思 agent 提取)
 
 > 对齐 Claude Code 记忆模式:独立小模型 agent(反思)提取 facts,引擎确定性去重落库。选择项全部收进 admin 界面,不硬编码。
