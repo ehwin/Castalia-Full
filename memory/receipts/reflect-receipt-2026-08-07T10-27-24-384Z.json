@@ -1,0 +1,20 @@
+{
+  "ts": "2026-08-07T10:27:24.385Z",
+  "characterId": "airi",
+  "actionCount": 1,
+  "applied": 0,
+  "failed": 0,
+  "actions": [
+    {
+      "action": "reclassify",
+      "targetId": "6fef8074-3496-431d-8a84-d13592437db3",
+      "newMemType": "project",
+      "newText": "2026-08-05 改的端口",
+      "newCategorySingle": "emotional"
+    }
+  ],
+  "receipts": [],
+  "errors": [
+    "reclassify: invalid category \"emotional\", skipped"
+  ]
+}

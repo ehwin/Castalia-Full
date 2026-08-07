@@ -281,14 +281,41 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
             }
             updates.push('tags = ?'); values.push(JSON.stringify(valid));
           }
+          if (action.newMemType) {
+            if (!isMemType(action.newMemType)) {
+              result.errors.push(`reclassify: invalid memType "${action.newMemType}", skipped`);
+              receipt.status = 'failed'; receipt.reason = `invalid memType "${action.newMemType}"`;
+              continue;
+            }
+            updates.push('mem_type = ?'); values.push(action.newMemType as MemType);
+          }
+          // v5.x: reclassify 支持 newText — 文本内容更新(时间规范化等)
+          let textChanged = false;
+          if (action.newText !== undefined && action.newText !== null) {
+            if (typeof action.newText !== 'string' || action.newText.trim().length === 0) {
+              result.errors.push('reclassify: invalid newText (must be non-empty string), skipped');
+              receipt.status = 'failed'; receipt.reason = 'invalid newText';
+              continue;
+            }
+            updates.push('text = ?');
+            values.push(action.newText.trim());
+            textChanged = true;
+          }
           if (updates.length > 0) {
-            values.push(tid + '%');
+            // 参数顺序:update 字段值 → updated_at → LIKE 前缀(修复历史错位 bug)
             const _recR = db.prepare(`UPDATE memory SET ${updates.join(', ')}, updated_at = ? WHERE id LIKE ?`)
-              .run(new Date().toISOString(), ...values);
+              .run(...values, new Date().toISOString(), tid + '%');
             receipt.rowsAffected = _recR.changes;
             if (_recR.changes === 0) { receipt.status = 'failed'; receipt.reason = `target not found: ${tid}`; }
             if (receipt.status === 'applied') result.applied++;
             result.details.push(`reclassify: ${tid}`);
+            // v5.x: text 变更后删除旧向量,下次 batchEmbedPending 重新 embed
+            if (textChanged && _recR.changes > 0) {
+              try {
+                const _vecRow = db.prepare('SELECT rowid FROM memory WHERE id LIKE ? LIMIT 1').get(tid + '%') as any;
+                if (_vecRow) db.prepare('DELETE FROM vec_memory WHERE rowid = ?').run(_vecRow.rowid);
+              } catch { /* 静默 */ }
+            }
           }
           break;
         }

@@ -1,0 +1,26 @@
+{
+  "ts": "2026-08-07T10:27:41.641Z",
+  "characterId": "airi",
+  "actionCount": 1,
+  "applied": 1,
+  "failed": 0,
+  "actions": [
+    {
+      "action": "reclassify",
+      "targetId": "5dc967f9-383f-4e01-8119-1e404fc2bada",
+      "newMemType": "project",
+      "newText": "2026-08-05 改的端口",
+      "newCategorySingle": "knowledge"
+    }
+  ],
+  "receipts": [
+    {
+      "action": "reclassify",
+      "status": "applied",
+      "targetId": "5dc967f9-383f-4e01-8119-1e404fc2bada",
+      "reason": "",
+      "rowsAffected": 1
+    }
+  ],
+  "errors": []
+}
