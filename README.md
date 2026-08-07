@@ -2,7 +2,7 @@
 
 **Standard MCP stdio server (29 tools, profile-gated).** Local memory on SQLite (per-project DB files) + sqlite-vec vectors — **zero API cost** for storage, works offline once the embedding model is cached.
 
-Forked from the AIRI memory system as an independent, neutral, general-purpose memory component. No personality layer, no vendor lock-in — bring your own LLM, bring your own embedding service (any Ollama-compatible `/api/embed`, 1024-dim).
+Independent, neutral, general-purpose memory component. No personality layer, no vendor lock-in — bring your own LLM, bring your own embedding service (any Ollama-compatible `/api/embed`, 1024-dim).
 
 Designed after studying Claude Code's memory architecture (closed memory types, progressive session maintenance, consolidation) and engram / memory-os patterns.
 
