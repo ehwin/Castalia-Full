@@ -1,127 +1,179 @@
-#!/usr/bin/env node
 /**
- * keygen.js — generate/update Castalia encrypted API-key store (zero dependency)
+ * API key 加密存储工具(零依赖,node:crypto)
  *
- * 将三通道 API key 用 AES-256-GCM 加密写入 <cwd>/memory/keys.enc,
- * 密钥存 <cwd>/memory/keys.key(32 字节 hex)。启动时 configLoader 自动解密并注入环境变量。
+ * 生成/更新 <项目根>/memory/keys.enc(AES-256-GCM 加密的 API keys)与密钥 keys.key。
+ * keys.key 不存在时自动生成 32 字节随机 hex;已存在则复用(保证已加密数据可解密)。
  *
  * 用法:
- *   node scripts/keygen.js            交互式(env/config.json 有值则预填,空回车跳过)
- *   node scripts/keygen.js --no-input 不交互,仅取 env + memory/config.json 已有值
- *   node scripts/keygen.js --new-key  强制生成新密钥(旧 keys.enc 需重新生成)
+ *   node scripts/keygen.js                                       # 交互式,Enter 跳过保持原值
+ *   node scripts/keygen.js --reflect-api-key sk-xxx \            # 命令行传入,未传的保持 keys.enc 原值
+ *                          --triage-api-key sk-xxx \
+ *                          --embedding-api-key sk-xxx
  *
- * 取值优先级:显式环境变量 > memory/config.json > 交互输入
- *   通道      环境变量                config.json 字段
- *   reflect   REFLECT_LLM_API_KEY    reflect.api_key
- *   triage    TRIAGE_LLM_API_KEY     triage.api_key
- *   embedding EMBEDDING_API_KEY      embedding.api_key
+ * 输出文件(均在 memory/ 下,与代码分离,已 .gitignore):
+ *   keys.key  — 32 字节密钥(hex,切勿泄露/提交)
+ *   keys.enc  — 加密负载 JSON {iv, tag, data}
  *
- * 路径可用环境变量覆盖:
- *   CASTALIA_KEYS_FILE / CASTALIA_KEY_FILE(与 configLoader 保持一致)
+ * 启动时 src/configLoader.ts 自动解密 keys.enc 注入环境变量
+ * (REFLECT_LLM_API_KEY / TRIAGE_LLM_API_KEY / EMBEDDING_API_KEY),显式环境变量优先。
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = process.cwd();
-const keysFile = process.env.CASTALIA_KEYS_FILE || path.join(ROOT, 'memory', 'keys.enc');
-const keyFile = process.env.CASTALIA_KEY_FILE || path.join(ROOT, 'memory', 'keys.key');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const memoryDir = path.join(path.resolve(__dirname, '..'), 'memory');
+const KEY_FILE = path.join(memoryDir, 'keys.key');
+const KEYS_FILE = path.join(memoryDir, 'keys.enc');
 
-const forceNewKey = process.argv.includes('--new-key');
-const noInput = process.argv.includes('--no-input');
+const CHANNELS = ['reflect', 'triage', 'embedding'];
+const CHANNEL_FLAGS = {
+  'reflect-api-key': 'reflect',
+  'triage-api-key': 'triage',
+  'embedding-api-key': 'embedding',
+};
 
-const CHANNELS = [
-  { name: 'reflect', env: 'REFLECT_LLM_API_KEY', cfgPath: ['reflect', 'api_key'] },
-  { name: 'triage', env: 'TRIAGE_LLM_API_KEY', cfgPath: ['triage', 'api_key'] },
-  { name: 'embedding', env: 'EMBEDDING_API_KEY', cfgPath: ['embedding', 'api_key'] },
-];
-
-function loadOrCreateKey() {
-  if (!forceNewKey && fs.existsSync(keyFile)) {
-    const buf = Buffer.from(fs.readFileSync(keyFile, 'utf-8').trim(), 'hex');
-    if (buf.length === 32) {
-      console.log(`[keygen] using existing key ${keyFile}`);
-      return buf;
+function parseArgs(argv) {
+  const overrides = {};
+  for (let i = 0; i < argv.length; i++) {
+    const flag = argv[i];
+    if (!flag.startsWith('--')) continue;
+    const channel = CHANNEL_FLAGS[flag.slice(2)];
+    if (!channel) {
+      console.error(`[keygen] 未知参数 ${flag}(支持:--reflect-api-key / --triage-api-key / --embedding-api-key)`);
+      process.exit(1);
     }
-    console.warn(`[keygen] ${keyFile} is not a valid 32-byte key — regenerating`);
+    if (i + 1 >= argv.length) {
+      console.error(`[keygen] 参数 ${flag} 缺少取值`);
+      process.exit(1);
+    }
+    overrides[channel] = argv[++i];
   }
-  const buf = crypto.randomBytes(32);
-  fs.mkdirSync(path.dirname(keyFile), { recursive: true });
-  fs.writeFileSync(keyFile, buf.toString('hex') + '\n');
-  try { fs.chmodSync(keyFile, 0o600); } catch { /* Windows 无 posix 权限 */ }
-  console.log(`[keygen] generated new key ${keyFile}`);
-  return buf;
+  return overrides;
 }
 
-function readConfigJson() {
-  const p = process.env.MEMORY_CONFIG || path.join(ROOT, 'memory', 'config.json');
+function ensureKeyFile() {
+  const existing = fs.existsSync(KEY_FILE) ? fs.readFileSync(KEY_FILE, 'utf-8').trim() : '';
+  if (existing && /^[0-9a-fA-F]{64}$/.test(existing)) return existing;
+  if (existing) console.warn(`[keygen] 现有 ${KEY_FILE} 不是合法的 32 字节 hex,将重新生成`);
+  const keyHex = crypto.randomBytes(32).toString('hex');
+  fs.mkdirSync(memoryDir, { recursive: true });
+  fs.writeFileSync(KEY_FILE, keyHex + '\n', { mode: 0o600 });
+  console.log(`[keygen] 已生成密钥文件 ${KEY_FILE}`);
+  return keyHex;
+}
+
+function loadExistingKeys(keyHex) {
+  if (!fs.existsSync(KEYS_FILE)) return {};
   try {
-    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf-8'));
+    const { iv, tag, data } = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf-8'));
+    const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(keyHex, 'hex'), Buffer.from(iv, 'hex'));
+    decipher.setAuthTag(Buffer.from(tag, 'hex'));
+    const plain = Buffer.concat([decipher.update(Buffer.from(data, 'hex')), decipher.final()]).toString('utf-8');
+    return JSON.parse(plain);
   } catch (e) {
-    console.warn(`[keygen] config.json read failed: ${e.message}`);
+    console.warn(`[keygen] 现有 ${KEYS_FILE} 无法解密(${e.message}),将按空值重新加密`);
+    return {};
   }
-  return {};
 }
 
-function ask(rl, question, def) {
-  const suffix = def ? ` (默认: ${def})` : '';
-  return new Promise((resolve) => {
-    rl.question(`  ${question}${suffix}: `, (ans) => {
-      resolve(ans.trim() || def || '');
-    });
-  });
-}
-
-async function collectSecrets(cfg) {
-  const secrets = {};
-  const rl = noInput ? null : readline.createInterface({ input: process.stdin, output: process.stdout });
-
+function buildData(existing, values) {
+  const data = {};
   for (const ch of CHANNELS) {
-    const fromEnv = (process.env[ch.env] || '').trim();
-    const fromCfg = (cfg[ch.cfgPath[0]]?.[ch.cfgPath[1]] || '').trim();
-    let val = fromEnv || fromCfg || '';
-    if (rl) {
-      const hint = `env:${fromEnv ? 'set' : 'no'} cfg:${fromCfg ? 'set' : 'no'}`;
-      val = await ask(rl, `${ch.name}.api_key [${hint}]`, val);
-    }
-    if (val.trim()) secrets[ch.name] = { api_key: val.trim() };
+    const v = values[ch] !== undefined ? values[ch] : existing[ch]?.api_key ?? '';
+    const t = String(v ?? '').trim();
+    if (t) data[ch] = { api_key: t };
   }
-  if (rl) rl.close();
-  return secrets;
+  return data;
 }
 
-async function main() {
-  const key = loadOrCreateKey();
-  const secrets = await collectSecrets(readConfigJson());
-
+function encryptAndSave(keyHex, data) {
   const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-  const data = Buffer.concat([
-    cipher.update(JSON.stringify(secrets), 'utf-8'),
-    cipher.final(),
-  ]);
-  const tag = cipher.getAuthTag();
-  const payload = JSON.stringify(
-    { iv: iv.toString('base64'), tag: tag.toString('base64'), data: data.toString('base64') },
-    null,
-    2,
-  );
-
-  fs.mkdirSync(path.dirname(keysFile), { recursive: true });
-  fs.writeFileSync(keysFile, payload + '\n');
-  try { fs.chmodSync(keysFile, 0o600); } catch { /* Windows 无 posix 权限 */ }
-
-  const chans = Object.keys(secrets);
-  console.log(`[keygen] wrote ${keysFile} (channels: ${chans.join(', ') || 'none'})`);
-  if (!chans.length) {
-    console.warn('[keygen] no api keys provided — keys.enc is empty; re-run to add them');
-  } else {
-    console.log('[keygen] done. configLoader decrypts and injects on startup (explicit env vars still win).');
-  }
+  const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(keyHex, 'hex'), iv);
+  const enc = Buffer.concat([cipher.update(Buffer.from(JSON.stringify(data), 'utf-8')), cipher.final()]);
+  const payload = JSON.stringify({
+    iv: iv.toString('hex'),
+    tag: cipher.getAuthTag().toString('hex'),
+    data: enc.toString('hex'),
+  });
+  fs.mkdirSync(memoryDir, { recursive: true });
+  fs.writeFileSync(KEYS_FILE, payload, { mode: 0o600 });
+  return payload;
 }
 
-main().catch((e) => {
-  console.error('[keygen] failed:', e.message);
+function mask(v) {
+  const s = String(v ?? '');
+  if (!s) return '(空)';
+  return s.length <= 6 ? '****' : s.slice(0, 3) + '****' + s.slice(-3);
+}
+
+/**
+ * 健壮的行读取:管道输入/TTY 均可用。
+ * 输入的每行进入队列;getLine 消费队首,队列空则等待下一行。
+ */
+function createLineReader(rl) {
+  const queue = [];
+  const waiters = [];
+  let closed = false;
+  rl.on('line', (l) => {
+    const resolve = waiters.shift();
+    if (resolve) resolve(l);
+    else queue.push(l);
+  });
+  rl.on('close', () => {
+    closed = true;
+    for (const resolve of waiters.splice(0)) resolve('');
+  });
+  const getLine = () => new Promise((resolve) => {
+    if (queue.length) return resolve(queue.shift());
+    if (closed) return resolve('');
+    waiters.push(resolve);
+  });
+  return getLine;
+}
+
+async function run() {
+  const overrides = parseArgs(process.argv.slice(2));
+  const interactive = Object.keys(overrides).length === 0;
+
+  const keyHex = ensureKeyFile();
+  const existing = loadExistingKeys(keyHex);
+
+  let data;
+  if (!interactive) {
+    data = buildData(existing, overrides);
+    console.log('[keygen] 命令行模式:未传参数已保持 keys.enc 原值');
+  } else {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const getLine = createLineReader(rl);
+    console.log('[keygen] 交互模式:直接回车 = 跳过,保持原值');
+    const values = {};
+    for (const ch of CHANNELS) {
+      const cur = existing[ch]?.api_key ?? '';
+      process.stdout.write(`  ${ch} api_key [${mask(cur)}]: `);
+      const answer = await getLine();
+      process.stdout.write('\n');
+      const t = answer.trim();
+      values[ch] = t ? t : cur;
+    }
+    rl.close();
+    data = buildData({}, values);
+  }
+
+  encryptAndSave(keyHex, data);
+  const fields = Object.keys(data);
+
+  console.log('');
+  console.log(`[keygen] 已加密字段(${fields.length}): ${fields.join(', ') || '(无)'}`);
+  console.log(`  密钥文件: ${KEY_FILE}`);
+  console.log(`  加密文件: ${KEYS_FILE}`);
+  console.log('  说明:重启 server 后 configLoader 会自动解密注入环境变量(显式环境变量优先)。');
+  return 0;
+}
+
+run().catch((e) => {
+  console.error('[keygen] 失败:', e.message);
   process.exit(1);
 });

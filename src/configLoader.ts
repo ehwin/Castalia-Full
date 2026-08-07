@@ -42,11 +42,11 @@ function loadEncryptedSecrets(): void {
     const key = Buffer.from(fs.readFileSync(keyFile, 'utf-8').trim(), 'hex');
     if (key.length !== 32) throw new Error(`key must be 32 bytes, got ${key.length}`);
     const enc = JSON.parse(fs.readFileSync(keysFile, 'utf-8'));
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(enc.iv, 'base64'));
-    decipher.setAuthTag(Buffer.from(enc.tag, 'base64'));
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(enc.iv, 'hex'));
+    decipher.setAuthTag(Buffer.from(enc.tag, 'hex'));
     const plain = Buffer.concat([
-      decipher.update(Buffer.from(enc.data, 'base64')),
-      decipher.final(),
+        decipher.update(Buffer.from(enc.data, 'hex')),
+        decipher.final(),
     ]).toString('utf-8');
     const secrets = JSON.parse(plain);
 
