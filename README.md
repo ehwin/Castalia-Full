@@ -8,44 +8,6 @@ Designed after studying Claude Code's memory architecture (closed memory types, 
 
 > 📖 详细技术设计见 [docs/TECHNICAL.md](docs/TECHNICAL.md)(架构/数据模型/管线/决策记录)。
 
----
-
-## Architecture Overview (v1.11)
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ Three-channel pipeline                                              │
-│                                                                      │
-│  ① LLM1 (triage)  — 入站分拣 + 渐进式临时反思(轻量,快速)              │
-│     TRIAGE_LLM_URL / TRIAGE_LLM_API_KEY / TRIAGE_LLM_MODEL           │
-│     缺省回退 REFLECT_* 通道                                          │
-│  ② 向量模型        — 记忆库改动后嵌入(1024-dim)                       │
-│     OLLAMA_URL / EMBEDDING_MODEL(已有)                              │
-│  ③ LLM2 (reflect) — 每日反思 + 记忆整合(重量级)                      │
-│     REFLECT_LLM_URL / REFLECT_LLM_API_KEY / REFLECT_LLM_MODEL        │
-└──────────────────────────────────────────────────────────────────────┘
-
-对话进入 auto_process
-  → LLM1 入站分拣:文本 → user/feedback/project/reference(4 种封闭类型)
-  → SessionMemoryBuffer(每 5 轮)→ 后台异步增量反思
-       ├─ 长效干货 → 晋升项目级(session_id=NULL, Markdown 格式)
-       ├─ 会话状态 → 滚动覆盖(session_id 非空)
-       └─ 晋升即删 + TTL 7 天孤儿清理
-  → LLM2 每日反思(距上次 ≥24h 且未分析 >5 条,启动时自动)
-  → consolidate_deep(记忆 >15 条,向量预筛 + LLM 去重/矛盾消解)
-```
-
-### Storage layout — per-project DB files
-
-```
-memory/                          ← MEMORY_DB_DIR(一切记忆的物理载体)
-  global.sqlite                  ← 指令 L1/L2 + 规则组 + 项目注册表
-  project-<name>.sqlite          ← 每项目一库:记忆/向量/facts/指令L3(物理隔离)
-  config.json                    ← 记忆服务配置(embedding/triage/reflect)
-  receipts/                      ← 反思回执
-```
-
-**Per-project physical isolation**: project A's memories, vectors and facts live in their own `.sqlite` — backups, deletes and vector KNN never cross project boundaries.
 
 ---
 
@@ -113,6 +75,48 @@ python scripts/setup.py hermes     # Hermes Agent → prints `hermes config set`
 python scripts/setup.py json       # print standard mcpServers JSON
 ```
 
+---
+
+## Architecture Overview (v1.11)
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ Three-channel pipeline                                              │
+│                                                                      │
+│  ① LLM1 (triage)  — 入站分拣 + 渐进式临时反思(轻量,快速)              │
+│     TRIAGE_LLM_URL / TRIAGE_LLM_API_KEY / TRIAGE_LLM_MODEL           │
+│     缺省回退 REFLECT_* 通道                                          │
+│  ② 向量模型        — 记忆库改动后嵌入(1024-dim)                       │
+│     OLLAMA_URL / EMBEDDING_MODEL(已有)                              │
+│  ③ LLM2 (reflect) — 每日反思 + 记忆整合(重量级)                      │
+│     REFLECT_LLM_URL / REFLECT_LLM_API_KEY / REFLECT_LLM_MODEL        │
+└──────────────────────────────────────────────────────────────────────┘
+
+对话进入 auto_process
+  → LLM1 入站分拣:文本 → user/feedback/project/reference(4 种封闭类型)
+  → SessionMemoryBuffer(每 5 轮)→ 后台异步增量反思
+       ├─ 长效干货 → 晋升项目级(session_id=NULL, Markdown 格式)
+       ├─ 会话状态 → 滚动覆盖(session_id 非空)
+       └─ 晋升即删 + TTL 7 天孤儿清理
+  → LLM2 每日反思(距上次 ≥24h 且未分析 >5 条,启动时自动)
+  → consolidate_deep(记忆 >15 条,向量预筛 + LLM 去重/矛盾消解)
+```
+
+### Storage layout — per-project DB files
+
+```
+memory/                          ← MEMORY_DB_DIR(一切记忆的物理载体)
+  global.sqlite                  ← 指令 L1/L2 + 规则组 + 项目注册表
+  project-<name>.sqlite          ← 每项目一库:记忆/向量/facts/指令L3(物理隔离)
+  config.json                    ← 记忆服务配置(embedding/triage/reflect)
+  receipts/                      ← 反思回执
+```
+
+**Per-project physical isolation**: project A's memories, vectors and facts live in their own `.sqlite` — backups, deletes and vector KNN never cross project boundaries.
+
+
+---
+
 ## Hermes Agent
 
 [Hermes Agent](https://hermes-agent.nousresearch.com) has a native MCP client: any server under `mcp_servers` in `config.yaml` is discovered at startup, and its tools appear with the `mcp_castalia_*` prefix (e.g. `mcp_castalia_memory_search`, `mcp_castalia_memory_save`).
@@ -157,6 +161,7 @@ Memories are **strictly layered** — nothing falls into an unclassified pile, e
 - **渐进式临时反思**(Claude Code progressive maintenance):每 5 轮对话后台异步提炼 → 长效干货**晋升**到项目级,会话状态滚动覆盖,晋升即删 + TTL 兜底
 - **每日反思**:距上次 ≥24h 且未分析对话 >5 条 → 下次启动自动执行(LLM2)
 - **记忆整合**(Memory Consolidator):记忆 >15 条时向量预筛相似对 → LLM 去重/矛盾消解/归并(原子事务)
+
 
 ---
 
@@ -234,6 +239,7 @@ Memories are **strictly layered** — nothing falls into an unclassified pile, e
 - `conversation_save` — save raw turn only
 - `digest_run` — run cleanup cycle
 
+
 ---
 
 ## Web Console (3D main + admin side)
@@ -249,6 +255,7 @@ node server.mjs        # → http://127.0.0.1:3345
 - Config saved to `memory/config.json` (embedding source + triage LLM + reflection LLM), applied on MCP server restart
 - Admin panel configures all **three channels** (embedding / triage / reflect)
 
+
 ---
 
 ## Storage
@@ -257,6 +264,8 @@ node server.mjs        # → http://127.0.0.1:3345
 - Fixed **1024-dim** vectors; swap embedding models only if same dim (or rebuild the DB)
 - WAL mode; auto-checkpoint; expired temporaries cleaned periodically; consolidation on startup when >15 memories
 - DB files are fully portable (copy while stopped)
+
+---
 
 ## Credits & Upstream
 
@@ -268,6 +277,8 @@ Independent evolution of a memory system; design informed by:
 - **memory-os / cognitive-memory** — local vector storage patterns
 
 License: MIT, see `LICENSE`.
+
+---
 
 ## Troubleshooting
 
