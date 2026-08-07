@@ -262,6 +262,7 @@ node server.mjs        # → http://127.0.0.1:3345
 
 Independent evolution of a memory system; design informed by:
 
+- **[Castalia Anima](https://github.com/ehwin/Castalia-Anima)** — the emotional variant of this project (personality layer on the same architecture); the two repos cross-pollinate — Anima feeds architecture back into Castalia, Castalia keeps the neutral core stable
 - **Claude Code** (Anthropic) — closed memory types (user/feedback/project/reference), MEMORY.md index, progressive session maintenance, consolidation sub-agent, snapshot warnings (patterns re-implemented in SQLite)
 - **engram** — profile-gated tool exposure, setup script
 - **memory-os / cognitive-memory** — local vector storage patterns
