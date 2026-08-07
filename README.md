@@ -44,6 +44,17 @@ Copy `memory/config.json` from the template (or create it) to wire the two LLM c
 
 `triage` is optional — unset values fall back to `reflect`. Without any LLM key, the server still works fully as a read/write memory store; only reflection/triage are skipped.
 
+> 🔐 **推荐:API key 加密存储(不落明文到 config.json)**
+>
+> 三通道 API key 可用 `scripts/keygen.js` 加密后单独存放(`memory/keys.enc`,AES-256-GCM,密钥在 `memory/keys.key`,均不入 git):
+>
+> ```bash
+> node scripts/keygen.js     # 交互输入 reflect/triage/embedding 的 api_key(有 env/config.json 值则预填)
+> node scripts/keygen.js --no-input   # 非交互:只取 env 与 memory/config.json 已有值
+> ```
+>
+> 启动时自动解密注入。优先级:**显式环境变量 > keys.enc > config.json**(均不覆盖已有 env)。解密失败/文件缺失时静默回退到 env/config.json。轮换密钥用 `--new-key`(之后需重跑 keygen)。
+
 ### 4. Connect from your MCP client
 
 ```json
