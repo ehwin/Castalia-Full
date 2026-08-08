@@ -16,6 +16,7 @@ import { saveMemory, forgetMemory, updateMemory, saveConversationTurn, cleanupEx
 import { consolidate } from './consolidate.js';
 import { DatabaseManager, listProjectNames, sweepExpiredSessionMemories } from './db.js';
 import { runDigest, getRecentConversations, maybeDigest } from './digest.js';
+import { flushAllBuffers } from './buffer.js';
 import { reflect, getAllMemories, getMemoryGraph, REFLECT_SYSTEM_PROMPT, getUnanalyzedConversations } from './reflect.js';
 import { autoProcess } from './autoProcessor.js';
 import { runAutoReflect, runDeepReflect, shouldAutoReflect, runConsolidate, shouldAutoConsolidate } from './reflectDriver.js';
@@ -260,6 +261,7 @@ register('auto_process', 'harness', '[Internal] Process a conversation turn: sav
 });
 register('digest_run', 'harness', '[Internal] Run the digest cycle: flush VAD queue, cleanup expired memories, restore lost critical memories.', {}, async () => {
     try {
+        flushAllBuffers(); // 周期兜底:强制 flush 所有会话 buffer(补漏未达阈值的尾部消息)
         const r = await runDigest(CHAR_ID);
         return ok(r);
     }

@@ -17,6 +17,7 @@ import { consolidate } from './consolidate.js';
 import { DatabaseManager, listProjectNames, sweepExpiredSessionMemories } from './db.js';
 import { getCategoryTree } from './category.js';
 import { runDigest, getRecentConversations, maybeDigest } from './digest.js';
+import { flushAllBuffers } from './buffer.js';
 import { reflect, getAllMemories, getMemoryGraph, REFLECT_SYSTEM_PROMPT, getUnanalyzedConversations, applyReflectResult } from './reflect.js';
 import { autoProcess } from './autoProcessor.js';
 import { runAutoReflect, runDeepReflect, shouldAutoReflect, runConsolidate, shouldAutoConsolidate } from './reflectDriver.js';
@@ -287,6 +288,7 @@ register(
   {},
   async () => {
     try {
+      flushAllBuffers(); // 周期兜底:强制 flush 所有会话 buffer(补漏未达阈值的尾部消息)
       const r = await runDigest(CHAR_ID);
       return ok(r);
     } catch (e: any) { return err(e.message); }
