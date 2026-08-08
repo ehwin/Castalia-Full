@@ -169,7 +169,7 @@ Memories are **strictly layered** — nothing falls into an unclassified pile, e
 ```
 
 - **写入分层**: `auto_process` 每轮对话由 LLM1 分拣 mem_type;`memory_save` 可显式指定
-- **渐进式临时反思**(Claude Code progressive maintenance):每 5 轮对话后台异步提炼 → 长效干货**晋升**到项目级,会话状态滚动覆盖,晋升即删 + TTL 兜底
+- **渐进式临时反思**(Claude Code progressive maintenance):每 5 轮对话后台异步提炼 → 长效干货**晋升**到项目级,会话状态滚动覆盖,晋升即删 + TTL 兜底;提炼产出经**查重**(文本归一化 + 向量余弦预筛)防止重复堆积
 - **每日反思**:距上次 ≥24h 且未分析对话 >5 条 → 下次启动自动执行(LLM2)
 - **记忆整合**(Memory Consolidator):记忆 >15 条时向量预筛相似对 → LLM 去重/矛盾消解/归并(原子事务)
 
