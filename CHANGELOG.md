@@ -3,6 +3,28 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.12.4] — 2026-08-16 库管理设置页 + reflect_all projects 参数 + 首次人工分拣
+
+> 用户需求:手动调整库归属(清理 AIRI 混杂的 Hermes 记忆、分离助手身份叙事、分别做项目级/总反思)。管理页经 dsh(pro 模型)开发 + Hermes 独立复验。
+
+### Added(库管理)
+- `web/public/manage.html`:库总览卡片(库名/实例/活跃/总数)→ 库内记忆列表(搜索/类型徽章/时间)→ 勾选/批量移动 → 改 mem_type → 软删,全部 confirm 确认,事件委托防 XSS
+- 后端:`GET /api/manage/libraries`(计数)、`GET /api/manage/memories`(库内列表+搜索)、`POST /api/memory/move`(跨库移动:全字段+向量行原样复制不重嵌入、created_at 保留、目标库 schema 自动创建、幂等跳过、逐条事务)、`POST /api/manage/memory/update`(改 mem_type)
+- `index.html` 顶部加「🗂 库管理」入口;server.mjs 加 /manage.html 静态路由
+
+### Added(反思)
+- `reflect_all` 新增 `projects` 参数:只反思指定 project 库(如 ['hermes']),三仓库(通用/Anima/主系统)同步 + 三实例 dist 同步
+
+### Changed(2026-08-16 实际整理)
+- 12 条 Hermes 开发测试记忆(8-08/8-15 测试/架构讨论类,含 session_promoted)从 airi 库移入 hermes 库(facts 外键问题:facts 随迁 + 源副本软删)
+- 4 条助手身份叙事(identity)从 project 类改 general,**保留在 airi 库**(助手身份/感情/人设不迁移)
+- 项目级反思(hermes 12 条→3 条洞察)+ 总反思(7 库 110 条→6 条洞察)写入 reflect 库(现 9 条)
+- 最终:hermes 12 条 / airi 98 条 / reflect 9 条 / 其余库 0
+
+### Verified(独立复验)
+- 副本库移动实测(21 PASS:向量复制/幂等/改类/软删;期间一次 AGGREGATE_DIRS env 失效事故→误移 2 条已完整恢复,教训:测试须先验证库列表只含测试库)
+- node --check exit 0;6 文件 SHA256 三处 MATCH;reflect_all projects 经桥实测(锁定 1 库)
+
 ## [v1.12.3] — 2026-08-16 3D 可视化全面改造(MNEMO 外貌:星座节点+Auto-Tour+全屏+详情卡+统计宫格)
 
 > 用户指定:以 mnemo-memory-os 为设计外貌、supermemory 为架构思维。实现经 dsh(pro 模型)编写 + Hermes 独立复验。

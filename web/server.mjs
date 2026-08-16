@@ -419,6 +419,131 @@ function libFiles() {
   return out;
 }
 
+// ═══ 库管理(手动调整记忆归属)═══
+function safeFilePart(name) {
+  return String(name || '').replace(/[^a-zA-Z0-9._-]/g, '_') || 'default';
+}
+
+function libFilePath(project) {
+  return join(DB_DIR, `project-${safeFilePart(project)}.sqlite`);
+}
+
+/** 按 instance+project 定位库;只按 project 也能兜底匹配(同名跨实例时以 instance 优先) */
+function findLib(instance, project) {
+  const libs = libFiles();
+  if (instance && project) {
+    const exact = libs.find(l => l.instance === instance && l.project === project);
+    if (exact) return exact;
+  }
+  if (project) return libs.find(l => l.project === project) || null;
+  return null;
+}
+
+/** 定位记忆所在源库文件:优先 fromInstance/fromProject,miss 时全库扫描(只读)。
+ *  不排除目标库 —— 源库==目标库的「同库移动」由调用方判 skip。 */
+function resolveSourceFile(id, fromInstance, fromProject) {
+  if (fromInstance || fromProject) {
+    const lib = findLib(fromInstance, fromProject);
+    if (lib) {
+      let db = null;
+      try {
+        db = openLibDb(lib.file, true);
+        if (db && db.prepare('SELECT 1 FROM memory WHERE id = ?').get(id)) return lib.file;
+      } catch {} finally { if (db) { try { db.close(); } catch {} } }
+    }
+  }
+  for (const l of libFiles()) {
+    let db = null;
+    try {
+      db = openLibDb(l.file, true);
+      if (db && db.prepare('SELECT 1 FROM memory WHERE id = ?').get(id)) return l.file;
+    } catch {} finally { if (db) { try { db.close(); } catch {} } }
+  }
+  return null;
+}
+
+/** 建目标库 schema(与 dist/db.ts initProjectSchema 对齐;调用前须已 sqliteVec.load) */
+function ensureLibSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory (
+      id TEXT PRIMARY KEY,
+      text TEXT NOT NULL,
+      project TEXT DEFAULT 'default',
+      session_id TEXT,
+      type TEXT DEFAULT 'episodic',
+      mem_type TEXT DEFAULT 'general',
+      category TEXT DEFAULT 'general',
+      subcategory TEXT,
+      tags TEXT DEFAULT '[]',
+      importance REAL DEFAULT 0.5,
+      character_id TEXT,
+      source TEXT,
+      subject TEXT DEFAULT 'user',
+      tier TEXT DEFAULT 'standard',
+      expires_at DATETIME,
+      is_active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      accessed_count INTEGER DEFAULT 0,
+      reference_count INTEGER DEFAULT 0,
+      locked INTEGER DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS edges (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      relation_type TEXT NOT NULL,
+      metadata TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS facts (
+      id TEXT PRIMARY KEY,
+      subject TEXT NOT NULL,
+      predicate TEXT NOT NULL,
+      object TEXT NOT NULL,
+      project TEXT DEFAULT 'default',
+      confidence REAL DEFAULT 0.5,
+      source_memory_id TEXT,
+      character_id TEXT,
+      is_active INTEGER DEFAULT 1,
+      accessed_count INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS categories (
+      name TEXT PRIMARY KEY,
+      description TEXT NOT NULL,
+      parent TEXT,
+      color TEXT,
+      is_parent INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS embedding_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      text_hash TEXT UNIQUE NOT NULL,
+      embedding BLOB NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS instructions (
+      id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL,
+      project TEXT,
+      content TEXT NOT NULL,
+      paths TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  try { db.exec('CREATE VIRTUAL TABLE IF NOT EXISTS vec_memory USING vec0(embedding float[1024])'); } catch (e) { console.error('vec_memory create failed:', e.message); }
+  try { db.exec('CREATE VIRTUAL TABLE IF NOT EXISTS vec_facts USING vec0(embedding float[1024])'); } catch (e) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_memory_project ON memory(project, is_active)'); } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_memory_mem_type ON memory(mem_type, is_active)'); } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_memory_tier ON memory(tier, is_active)'); } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_facts_project ON facts(project, is_active)'); } catch {}
+  try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_spo ON facts(subject, predicate, object, project)'); } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(subject, is_active)'); } catch {}
+}
+
 // 总览:每个库的条数/最近更新
 app.get('/api/aggregate/overview', (req, res) => {
   const libs = libFiles().map(l => {
@@ -528,6 +653,194 @@ app.post('/api/aggregate/projects', async (req, res) => {
   }
 });
 
+// ═══ 库管理 API:库列表 / 库内列表 / 移动 / 改类 / 软删 ═══
+
+// 所有库及记忆数(active=is_active=1 数,total=全量数)
+app.get('/api/manage/libraries', (req, res) => {
+  const libs = libFiles().map(l => {
+    let db = null;
+    try {
+      db = openLibDb(l.file);
+      if (!db) return { project: l.project, instance: l.instance, file: l.file, active: 0, total: 0, error: 'open_failed' };
+      const active = db.prepare('SELECT COUNT(*) c FROM memory WHERE is_active=1').get().c;
+      const total = db.prepare('SELECT COUNT(*) c FROM memory').get().c;
+      return { project: l.project, instance: l.instance, file: l.file, active, total };
+    } catch (e) {
+      return { project: l.project, instance: l.instance, file: l.file, active: 0, total: 0, error: String(e.message).slice(0, 100) };
+    } finally { if (db) { try { db.close(); } catch {} } }
+  });
+  res.json({ ok: true, libraries: libs });
+});
+
+// 单库记忆列表(活跃),可按 q 过滤文本/类型/分类
+app.get('/api/manage/memories', (req, res) => {
+  const instance = String(req.query.instance || '');
+  const project = String(req.query.project || '');
+  const q = String(req.query.q || '').trim();
+  const limit = Math.min(parseInt(req.query.limit || '500', 10) || 500, 2000);
+  const lib = findLib(instance, project);
+  if (!lib) return res.json({ ok: false, error: '库不存在(instance/project 未匹配)', memories: [] });
+  let db = null;
+  try {
+    db = openLibDb(lib.file);
+    if (!db) return res.json({ ok: false, error: 'open_failed', memories: [] });
+    const base = `SELECT id, substr(text,1,600) AS text, length(text) AS textLen, type, mem_type, category, tier, importance, source, created_at, updated_at FROM memory`;
+    let rows;
+    if (q) {
+      const like = `%${q}%`;
+      rows = db.prepare(`${base} WHERE is_active=1 AND (text LIKE ? OR mem_type LIKE ? OR category LIKE ? OR type LIKE ?) ORDER BY created_at DESC LIMIT ?`)
+        .all(like, like, like, like, limit);
+    } else {
+      rows = db.prepare(`${base} WHERE is_active=1 ORDER BY created_at DESC LIMIT ?`).all(limit);
+    }
+    db.close();
+    res.json({
+      ok: true, count: rows.length,
+      memories: rows.map(r => ({
+        id: r.id,
+        text: String(r.text || ''),
+        textTruncated: (r.textLen || 0) > 600,
+        type: r.type,
+        memType: r.mem_type || 'general',
+        category: r.category,
+        tier: r.tier || 'standard',
+        importance: r.importance,
+        source: r.source,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      })),
+    });
+  } catch (e) {
+    if (db) { try { db.close(); } catch {} }
+    res.status(500).json({ ok: false, error: String(e.message) });
+  }
+});
+
+// 跨库移动记忆:源库可在任意实例,目标恒为当前实例 <DB_DIR>/project-<toProject>.sqlite
+app.post('/api/memory/move', (req, res) => {
+  try {
+    const body = req.body || {};
+    const ids = Array.isArray(body.ids) ? body.ids.map(x => String(x)) : null;
+    const toProject = String(body.toProject || '').trim();
+    if (!ids || ids.length === 0) return res.json({ ok: false, error: 'ids 必填(非空数组)', moved: 0, failed: [] });
+    if (!toProject) return res.json({ ok: false, error: 'toProject 必填', moved: 0, failed: [] });
+    const fromProject = body.fromProject ? String(body.fromProject).trim() : '';
+    const fromInstance = body.fromInstance ? String(body.fromInstance).trim() : '';
+    const targetFile = libFilePath(toProject);
+
+    const moved = [];
+    const failed = [];
+    const skipped = [];
+
+    for (const id of ids) {
+      if (!id) { failed.push({ id, error: 'empty id' }); continue; }
+      let srcDb = null, dstDb = null;
+      try {
+        const srcFile = resolveSourceFile(id, fromInstance, fromProject);
+        if (!srcFile) { failed.push({ id, error: 'not found in any library' }); continue; }
+        if (srcFile === targetFile) { skipped.push({ id, error: 'same library (toProject == fromProject)' }); continue; }
+
+        srcDb = openLibDb(srcFile, false);
+        if (!srcDb) { failed.push({ id, error: 'open source failed' }); continue; }
+
+        const srcMem = srcDb.prepare('SELECT rowid, * FROM memory WHERE id = ?').get(id);
+        if (!srcMem) { failed.push({ id, error: 'source row missing' }); continue; }
+
+        if (!existsSync(targetFile)) {
+          mkdirSync(dirname(targetFile), { recursive: true });
+          dstDb = new Database(targetFile);
+          try { sqliteVec.load(dstDb); } catch {}
+          ensureLibSchema(dstDb);
+        } else {
+          dstDb = openLibDb(targetFile, false);
+          if (!dstDb) dstDb = new Database(targetFile);
+        }
+
+        // 幂等:目标已存在同 id → 跳过
+        if (dstDb.prepare('SELECT 1 FROM memory WHERE id = ?').get(id)) { skipped.push({ id, error: 'already exists in target' }); continue; }
+
+        // 源向量(可能无,如 conversation_log / 未嵌入);文本不变 → 向量不变,原样复制不重新嵌入
+        let vecBuf = null;
+        try {
+          const vr = srcDb.prepare('SELECT embedding FROM vec_memory WHERE rowid = ?').get(BigInt(srcMem.rowid));
+          if (vr && vr.embedding) vecBuf = vr.embedding;
+        } catch {}
+
+        // 目标插入:固定标准字段(丢弃源库非标准扩展列),project 覆盖为目标库名,created_at 保留历史
+        const COLS = ['id','text','project','session_id','type','mem_type','category','subcategory','tags','importance','character_id','source','subject','tier','expires_at','is_active','created_at','updated_at','last_accessed_at','accessed_count','reference_count','locked'];
+        const vals = COLS.map(c => c === 'project' ? toProject : (srcMem[c] === undefined ? null : srcMem[c]));
+        const insertTx = dstDb.transaction(() => {
+          const info = dstDb.prepare(`INSERT INTO memory (${COLS.join(',')}) VALUES (${COLS.map(() => '?').join(',')})`).run(...vals);
+          if (vecBuf) dstDb.prepare('INSERT INTO vec_memory (rowid, embedding) VALUES (?, ?)').run(BigInt(info.lastInsertRowid), vecBuf);
+        });
+        insertTx();
+
+        // 源库删除:vec 行 → edges 行 → memory 行(事务;关系边跨库无效直接删)
+        const delTx = srcDb.transaction(() => {
+          try { srcDb.prepare('DELETE FROM vec_memory WHERE rowid = ?').run(BigInt(srcMem.rowid)); } catch {}
+          try { srcDb.prepare('DELETE FROM edges WHERE source_id = ? OR target_id = ?').run(id, id); } catch {}
+          srcDb.prepare('DELETE FROM memory WHERE id = ?').run(id);
+        });
+        delTx();
+
+        moved.push({ id, fromProject: srcMem.project ?? null, toProject });
+      } catch (e) {
+        failed.push({ id, error: String(e.message).slice(0, 200) });
+      } finally {
+        if (srcDb) { try { srcDb.close(); } catch {} }
+        if (dstDb) { try { dstDb.close(); } catch {} }
+      }
+    }
+
+    res.json({ ok: true, moved: moved.length, skipped: skipped.length, movedIds: moved, failed, skipped });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message), moved: 0, failed: [] });
+  }
+});
+
+// 单条记忆改类(优先 memType;也可 category/tier/importance)——按 instance+project 定位库
+app.post('/api/manage/memory/update', (req, res) => {
+  try {
+    const { instance, project, id, memType, category, tier, importance } = req.body || {};
+    if (!id) return res.json({ ok: false, error: 'id 必填' });
+    const lib = findLib(String(instance || ''), String(project || ''));
+    if (!lib) return res.json({ ok: false, error: '库不存在' });
+    const db = openLibDb(lib.file, false);
+    if (!db) return res.json({ ok: false, error: 'open_failed' });
+    const sets = [], vals = [];
+    if (memType !== undefined && memType !== null) { sets.push('mem_type = ?'); vals.push(String(memType)); }
+    if (category !== undefined && category !== null) { sets.push('category = ?'); vals.push(String(category)); }
+    if (tier !== undefined && tier !== null) { sets.push('tier = ?'); vals.push(String(tier)); }
+    if (importance !== undefined && importance !== null) { sets.push('importance = ?'); vals.push(Number(importance)); }
+    if (sets.length === 0) { db.close(); return res.json({ ok: false, error: '无可更新字段' }); }
+    sets.push('updated_at = ?'); vals.push(new Date().toISOString());
+    vals.push(id);
+    const r = db.prepare(`UPDATE memory SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+    db.close();
+    res.json({ ok: true, updated: r.changes > 0, id });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message) });
+  }
+});
+
+// 单条记忆软删(is_active=0 + 清向量)
+app.post('/api/manage/memory/delete', (req, res) => {
+  try {
+    const { instance, project, id } = req.body || {};
+    if (!id) return res.json({ ok: false, error: 'id 必填' });
+    const lib = findLib(String(instance || ''), String(project || ''));
+    if (!lib) return res.json({ ok: false, error: '库不存在' });
+    const db = openLibDb(lib.file, false);
+    if (!db) return res.json({ ok: false, error: 'open_failed' });
+    const r = db.prepare('UPDATE memory SET is_active = 0, updated_at = ? WHERE id = ?').run(new Date().toISOString(), id);
+    try { db.prepare('DELETE FROM vec_memory WHERE rowid = (SELECT rowid FROM memory WHERE id = ?)').run(id); } catch {}
+    db.close();
+    res.json({ ok: true, deleted: r.changes > 0 });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message) });
+  }
+});
+
 // ═══ 静态服务 ═══
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -538,6 +851,12 @@ app.get('/', (req, res) => {
 app.get('/aggregate.html', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(readFileSync(join(__dirname, 'public', 'aggregate.html'), 'utf-8'));
+});
+
+// 库管理设置页
+app.get('/manage.html', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(readFileSync(join(__dirname, 'public', 'manage.html'), 'utf-8'));
 });
 
 app.listen(PORT, () => {

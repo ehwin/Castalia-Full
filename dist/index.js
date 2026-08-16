@@ -867,12 +867,14 @@ register('reflect_all', 'admin', 'Cross-library reflection & consolidation (non-
     maxTotal: z.number().optional().describe('Max total memories to scan across all libraries (default 300)'),
     maxPerLib: z.number().optional().describe('Max memories per library (default 100)'),
     dryRun: z.boolean().optional().describe('true = analyze only, do not write into reflect library (default false)'),
+    projects: z.array(z.string()).optional().describe('Only reflect the specified project libraries (e.g. ["hermes"]); default = all libraries'),
 }, async (args) => {
     try {
         const r = await runReflectAll({
             maxTotal: args.maxTotal,
             maxPerLib: args.maxPerLib,
             dryRun: args.dryRun,
+            projects: args.projects,
         });
         return ok(r);
     }

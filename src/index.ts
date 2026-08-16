@@ -966,6 +966,7 @@ register(
     maxTotal: z.number().optional().describe('Max total memories to scan across all libraries (default 300)'),
     maxPerLib: z.number().optional().describe('Max memories per library (default 100)'),
     dryRun: z.boolean().optional().describe('true = analyze only, do not write into reflect library (default false)'),
+    projects: z.array(z.string()).optional().describe('Only reflect the specified project libraries (e.g. ["hermes"]); default = all libraries'),
   },
   async (args) => {
     try {
@@ -973,6 +974,7 @@ register(
         maxTotal: args.maxTotal,
         maxPerLib: args.maxPerLib,
         dryRun: args.dryRun,
+        projects: args.projects,
       });
       return ok(r);
     } catch (e: any) { return err(e.message, 'REFLECT_ALL_FAILED'); }

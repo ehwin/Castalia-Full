@@ -21,6 +21,7 @@ export interface ReflectAllOptions {
   maxTotal?: number;   // 总记忆数上限,默认 300
   maxPerLib?: number;  // 每库上限,默认 100
   dryRun?: boolean;    // true = 只分析不写入
+  projects?: string[]; // 只反思指定 project 库(如 ['hermes']),默认全部库
 }
 
 export interface ReflectAllInsightSource {
@@ -196,10 +197,14 @@ export async function runReflectAll(opts?: ReflectAllOptions): Promise<ReflectAl
     insightList: [],
   };
 
-  // 1. 库清单(跳过 reflect 自身)
+  // 1. 库清单(跳过 reflect 自身;projects 指定时只保留匹配库)
   let libs: FedLibrary[];
   try {
     libs = resolveFedLibraries(currentMemDir()).filter(l => l.project !== 'reflect');
+    if (opts?.projects && opts.projects.length > 0) {
+      const want = new Set(opts.projects);
+      libs = libs.filter(l => want.has(l.project));
+    }
   } catch (e: any) {
     return { ...base, errors: [`解析联邦库清单失败: ${e.message}`] };
   }

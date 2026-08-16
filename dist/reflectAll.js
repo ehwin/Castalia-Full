@@ -167,10 +167,14 @@ export async function runReflectAll(opts) {
         errors: [],
         insightList: [],
     };
-    // 1. 库清单(跳过 reflect 自身)
+    // 1. 库清单(跳过 reflect 自身;projects 指定时只保留匹配库)
     let libs;
     try {
         libs = resolveFedLibraries(currentMemDir()).filter(l => l.project !== 'reflect');
+        if (opts?.projects && opts.projects.length > 0) {
+            const want = new Set(opts.projects);
+            libs = libs.filter(l => want.has(l.project));
+        }
     }
     catch (e) {
         return { ...base, errors: [`解析联邦库清单失败: ${e.message}`] };
