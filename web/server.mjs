@@ -298,16 +298,26 @@ app.get('/api/graph', (req, res) => {
 });
 
 // ═══ API: GET /api/stats ═══
+// memdir:聚合当前实例(<DB_DIR>)全部分类库统计
+function currentInstanceLibs() {
+  const self = AGGREGATE_DIRS.find(c => c.dir === DB_DIR);
+  const selfName = self ? self.name : null;
+  return libFiles().filter(l => selfName ? l.instance === selfName : l.file.startsWith(DB_DIR));
+}
 app.get('/api/stats', (req, res) => {
-  const db = openDb(true);
-  if (!db) return res.json({ total: 0, edges: 0 });
-  try {
-    const total = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1').get();
-    let edgesC = 0;
-    try { edgesC = db.prepare('SELECT COUNT(*) as c FROM edges').get().c; } catch { /* edges 表可能未创建 */ }
-    db.close();
-    res.json({ total: total.c, edges: edgesC });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  const libs = currentInstanceLibs();
+  if (!libs.length) return res.json({ total: 0, edges: 0 });
+  let total = 0, edges = 0;
+  for (const l of libs) {
+    try {
+      const db = openLibDb(l.file);
+      if (!db) continue;
+      total += db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1').get().c;
+      try { edges += db.prepare('SELECT COUNT(*) as c FROM edges').get().c; } catch { /* edges 表可能未创建 */ }
+      db.close();
+    } catch (err) { console.error(`stats lib ${l.file} failed:`, err.message); }
+  }
+  res.json({ total, edges });
 });
 
 // ═══ API: GET /api/status ═══
@@ -368,20 +378,27 @@ app.post('/api/config', (req, res) => {
 });
 
 // ═══ API: 记忆管理(直接 SQLite 读写) ═══
+// memdir:聚合当前实例(<DB_DIR>)全部分类库,按时间倒序
 app.get('/api/memory', (req, res) => {
-  const db = openDb(true);
-  if (!db) return res.json([]);
+  const libs = currentInstanceLibs();
+  if (!libs.length) return res.json([]);
   try {
     const limit = Math.min(parseInt(req.query.limit || '200', 10), 500);
-    let rows;
-    if (req.query.q) {
-      const q = `%${req.query.q}%`;
-      rows = db.prepare(`SELECT * FROM memory WHERE is_active=1 AND text LIKE ? ORDER BY created_at DESC LIMIT ?`).all(q, limit);
-    } else {
-      rows = db.prepare('SELECT * FROM memory WHERE is_active=1 ORDER BY created_at DESC LIMIT ?').all(limit);
+    const q = req.query.q ? `%${req.query.q}%` : null;
+    const rows = [];
+    for (const l of libs) {
+      try {
+        const db = openLibDb(l.file);
+        if (!db) continue;
+        const rs = q
+          ? db.prepare(`SELECT * FROM memory WHERE is_active=1 AND text LIKE ? ORDER BY created_at DESC LIMIT ?`).all(q, limit)
+          : db.prepare('SELECT * FROM memory WHERE is_active=1 ORDER BY created_at DESC LIMIT ?').all(limit);
+        db.close();
+        for (const r of rs) rows.push({ ...r, memType: l.memType || 'general', project: l.project, tags: safeTags(r.tags) });
+      } catch (e) { console.error(`memory lib ${l.file} failed:`, e.message); }
     }
-    db.close();
-    res.json(rows.map(r => ({ ...r, tags: safeTags(r.tags) })));
+    rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+    res.json(rows.slice(0, limit));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
