@@ -311,6 +311,25 @@ app.get('/api/stats', (req, res) => {
 });
 
 // ═══ API: GET /api/status ═══
+// memdir 结构:库在 <DB_DIR>/<project>/<memType>/memory.sqlite(或 global.sqlite、旧 project-*.sqlite)
+function dbDirHasData(dir) {
+  try {
+    for (const f of readdirSync(dir)) {
+      const p = join(dir, f);
+      if (!statSync(p).isDirectory()) {
+        if (f === 'global.sqlite' || (f.startsWith('project-') && f.endsWith('.sqlite'))) return true;
+        continue;
+      }
+      for (const sub of readdirSync(p)) {
+        const sp = join(p, sub);
+        try {
+          if (statSync(sp).isDirectory() && existsSync(join(sp, 'memory.sqlite'))) return true;
+        } catch {}
+      }
+    }
+  } catch {}
+  return false;
+}
 app.get('/api/status', (req, res) => {
   const cfg = loadConfig();
   const dbPath = DB_PATH;
@@ -318,7 +337,7 @@ app.get('/api/status', (req, res) => {
     db: LEGACY_DB_PATH ? DB_PATH : DB_DIR,
     dbPath,
     config: CONFIG_PATH,
-    dbExists: existsSync(dbPath),
+    dbExists: existsSync(dbPath) || dbDirHasData(DB_DIR),
     embedMode: cfg.embedding?.mode || 'ollama',
     reflectConfigured: !!(cfg.reflect?.api_key),
   });
