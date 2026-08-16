@@ -3,6 +3,49 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.14.0] — 2026-08-17 星图星系化大版本(布局重构 + 视觉升级 + 全项目审计)
+
+> 大版本修复:星图从"力导向乱图"重构为"三层固定星系布局",修复 3D 渲染崩溃(黑屏根因),完成六项目开源分析吸收,并对全项目做安全/一致性审计。技术报告:`docs/tech-report-v1.14.md`。
+
+### Fixed(渲染崩溃根因链)
+- **3D 全黑屏**:vendor `fg-1.80-full.mjs` 打了两份 three.js(警告 Multiple instances),`renderBufferDirect` 调 `matrixWorld.determinantAffine()` 但节点矩阵来自另一份 three 实例(无该方法)→ TypeError 渲染挂死。修复:缺失时回退 `determinant()`(数学等价),vendor 改名 `fg-1.80-full-v2.mjs` 防 1h 缓存
+- **「记忆库为空」误报**:`/api/status` 的 `dbExists` 仍按旧单库路径 `project-default.sqlite` 判断,memdir 改造后恒 false → 前端错误提示盖住星图。修复:`dbDirHasData()` 扫描 memdir 结构
+- **管理面板空数据**:`/api/stats`/`/api/memory` 用 `openDb` 读不存在的旧库 → 恒 0/空。修复:`currentInstanceLibs()` 聚合当前实例全部分类库
+- **d3ReheatSimulation 崩溃**:vendor 64511 行 `state.layout` undefined → 移除该调用
+
+### Changed(星图布局:力导向 → 三层固定星系)
+- **L0 项目星系**:按 project 分组,球面分布(R=210),项目核心大星(点击看详情),星系桥按方向规则——主节点 {airi,reflect} 双向互联(双 link 双向粒子),reflect 单向读取子节点(箭头指向 reflect,`linkDirectionalArrowLength=6`),子节点间不连
+- **L1 分类小星系**:项目内按 memType 细分,小核心围绕项目核心(SUB_SHELL_R=70),spoke/bridge 层级边
+- **L2 节点固定球壳**:斐波那契均匀分布在小核心周围(半径 16+√n×4),`fx/fy/fz` 全锁定,力模拟不再移动节点——彻底解决"吸成团"(此前 charge/collide 调参均无效,改锁定才根治)
+- 节点斥力增强(charge.strength 按 size `-(45+size×14)`、collide.radius 按 size×0.8)作为拖拽兜底
+
+### Added(六项目分析落地:视觉/交互/聚类)
+- **V1 连线语义编码**(ContextOS):关系边按类型着色(causes/caused_by/leads_to/sequence 暖色,same_subject/related_to/follows 冷色)+ 强度估算 `linkStrength`(server 已返回 strength 优先)
+- **V3 重要节点发光**:importance≥0.85 光晕放大(1.15×)+ 增强(0.42 透明度);文字标签默认隐藏,选中/悬停才显示(防密集)
+- **星空背景**(3d-force-graph `scene()` 方案):Three.js Points 星空,替代 Bloom(vendor 无 UnrealBloomPass,已验证)
+- **相机自动环绕**:30s 无操作自动慢转,交互即停
+- **I1 悬停邻居高亮**(memory-visualizer):悬停一跳邻居亮、其余 dim,连线只保留两端都在集合内
+- **连线粒子流 + 点击脉冲**:`linkDirectionalParticles` 按强度,`onLinkClick → emitParticle`
+- **语义簇聚类**(supermemory BFS 连通分量):强关系边(排除 similarity)上做连通分量,同簇节点光晕 + 簇内连线共享簇色(10 色板)——"扎堆"一眼可见;实测 5 簇 26 节点(13/5/4/2/2)
+- **后端路由拆分**:server.mjs(1101 行)→ `routes/{lib,graph,memory,config,reflect,aggregate}.js`(69 行入口),`/api/graph` 链接带 `strength` 字段
+
+### Fixed(全项目审计,dsh 任务7)
+- **S1 安全**:viz server 原监听 `0.0.0.0`(局域网可读写)→ 绑定 `127.0.0.1`
+- **S2** `move` 接口走 memdir(原按旧路径搬移)
+- **M1** `updateMemory` 跨 memType 丢 `expires_at`/`locked` → 保留
+- **M2** reflect 破坏性动作缺 `locked=1` 护栏 → 补
+- **M3** embed 无超时 + 空 embedding 崩溃 → 30s 超时/空值/维度护栏
+- **M4** 维护任务(清理/升格/清扫/衰减/critical 恢复)只作用 general → memdir 遍历
+- **M5** `listProjectNames` 把 `receipts` 当项目 → 目录判据
+- **M6** `textFallbackSearch` 漏 4 个过滤条件 → 补齐
+- **M7** `mcpCall` ESM 里 `require('node:fs')` 必抛错(死代码)→ 移除
+- **M8** viz 缺 `busy_timeout`(多进程写锁)→ 补
+- 审计正面结论:全项目 SQL 参数化(无注入)、项目名经 `safeFilePart` 消毒(无路径穿越)、`/api/config` 已掩码 api_key
+
+### 工程
+- 四仓库同步铁律(castalia-run / ai-memory / AIRI/memory / lobehub-run 的 index.html+server.mjs+routes/)md5 一致;`npm run build` EXIT=0;dist 同步三实例
+- Node 版本坑固化:必须用 `D:\system\New Folder\node.exe`(v24 ABI 137;PATH 的 v22 因 better-sqlite3 ABI 不匹配致 /api/graph 返回 0 节点)
+
 ## [v1.13.0] — 2026-08-16 memdir 存储架构(项目 → 四分类文件夹)
 
 > 用户拍板 B 方案:以项目为最外层,内部 user/feedback/project/reference 四个分类文件夹(memdir 风格)。
