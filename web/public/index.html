@@ -377,6 +377,7 @@ function makeLabelTexture(text, color) {
 
 function memColor(node) {
   if (node.group === 'galaxy-core') return node.__galaxyColor || '#fbbf24';
+  if (node.group === 'subgalaxy-core') return node.__galaxyColor || '#64748b';
   if (node.group === 'software') return SOFTWARE_COLOR;
   if (node.group === 'library') return LIBRARY_COLOR;
   if (node.memType && MEM_TYPE_COLORS[node.memType]) return MEM_TYPE_COLORS[node.memType];
@@ -384,11 +385,10 @@ function memColor(node) {
   return '#64748b';
 }
 
-/* 星系核心大星:大球 + 双层光晕 + 项目名标签(柔和低调,不抢节点) */
-function buildGalaxyCore(node) {
+/* 核心大星通用构建:大球 + 双层光晕 + 名字标签(柔和低调,不抢节点) */
+function buildCoreNode(node, R, labelW) {
   const color = node.__galaxyColor || '#fbbf24';
   const group = new THREE.Group();
-  const R = 4.5;
   const core = new THREE.Mesh(sphereGeo(R), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 }));
   group.add(core);
   const glow1 = new THREE.Mesh(sphereGeo(R * 1.6), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.25 }));
@@ -399,7 +399,7 @@ function buildGalaxyCore(node) {
   if (name) {
     const mat = new THREE.SpriteMaterial({ map: makeLabelTexture(name, color), transparent: true, depthTest: false, sizeAttenuation: true });
     const spr = new THREE.Sprite(mat);
-    spr.scale.set(R * 7, R * 1.1, 1);
+    spr.scale.set(R * labelW, R * 1.1, 1);
     spr.position.set(0, -(R + 5), 0);
     group.add(spr);
   }
@@ -409,6 +409,12 @@ function buildGalaxyCore(node) {
   node.__baseColor = color;
   return group;
 }
+
+/* 星系核心大星(项目级) */
+function buildGalaxyCore(node) { return buildCoreNode(node, 4.5, 7); }
+
+/* 小星系核心小星(分类级,memType 色) */
+function buildSubGalaxyCore(node) { return buildCoreNode(node, 2.4, 8); }
 
 /* 点击星系核心:飞行到该星系并弹出项目统计 */
 function onGalaxyCoreClick(node) {
@@ -433,9 +439,32 @@ function onGalaxyCoreClick(node) {
   });
 }
 
+/* 点击小星系核心:飞行到该小星系并弹出分类统计 */
+function onSubGalaxyCoreClick(node) {
+  if (!node) return;
+  stopAutoTour();
+  flyTo(node, 900);
+  const p = node.project || node.lib || '';
+  const mt = node.memType || 'general';
+  const subNodes = (allData?.nodes || []).filter(n => (n.project || n.lib) === p && (n.memType || 'general') === mt);
+  showPanel({
+    id: node.id,
+    group: 'subgalaxy-core',
+    __galaxyColor: node.__galaxyColor || '#64748b',
+    label: (MEM_TYPE_LABELS[mt] || mt).toUpperCase() + ' 小星系',
+    fullText: `${p} · ${MEM_TYPE_LABELS[mt] || mt} 小星系 · ${subNodes.length} 条记忆`,
+    importance: 0.6,
+    memType: mt,
+    tags: [],
+    createdAt: null,
+    source: 'subgalaxy',
+  });
+}
+
 function buildNode(node) {
   if (typeof THREE === 'undefined') return null; // CDN 失败时回退默认球体
   if (node.group === 'galaxy-core') return buildGalaxyCore(node);
+  if (node.group === 'subgalaxy-core') return buildSubGalaxyCore(node);
   const size = node.size || 6;
   const color = memColor(node);
   const group = new THREE.Group();
@@ -588,9 +617,10 @@ function onStarNodeClick(node) {
 
 function renderStar(data) {
   window.__galaxyMode = true;
-  /* 清理上一次追加的星系桥(renderStar 会被多次调用,避免重复) */
-  data.links = (data.links || []).filter(l => l.type !== 'galaxy-bridge');
-  /* ── 星系布局:按 project 分组,每项目一个星系,球面分布中心 ── */
+  /* 清理上一次追加的合成边(renderStar 会被多次调用,避免重复) */
+  data.links = (data.links || []).filter(l =>
+    l.type !== 'galaxy-bridge' && l.type !== 'subgalaxy-spoke' && l.type !== 'subgalaxy-bridge');
+  /* ── L0 项目星系:按 project 分组,每项目一个星系,球面分布中心 ── */
   const projects = [...new Set(data.nodes.map(n => n.project || n.lib || 'default'))];
   const GALAXY_COLORS = { airi: '#8b5cf6', hermes: '#14b8a6', reflect: '#f59e0b' };
   const GALAXY_R = 210;
@@ -604,6 +634,47 @@ function renderStar(data) {
       z: GALAXY_R * Math.cos(phi),
     };
   });
+
+  /* ── L1 分类小星系:项目内按 memType 细分,小核心围绕项目核心分布 ── */
+  const SUB_SHELL_R = 70;   // 小星系中心距项目核心的半径(拉大避免小星系互相重叠)
+  const SUB_SCATTER = 14;   // 个体节点初始散布半径(±)
+  const memTypeOf = n => n.memType || 'general';
+  const subCenter = {};     // key = project::memType → {x,y,z}
+  const subCoreNodes = [];  // 小星系核心代表节点(锁定位置)
+  projects.forEach(p => {
+    const mts = [...new Set(data.nodes.filter(n => (n.project || n.lib || 'default') === p).map(memTypeOf))].sort();
+    const g = galaxyCenter[p];
+    mts.forEach((mt, idx) => {
+      const count = mts.length;
+      const phi = Math.acos(1 - 2 * (idx + 0.5) / count);
+      const theta = Math.PI * (1 + Math.sqrt(5)) * idx;
+      const c = {
+        x: g.x + SUB_SHELL_R * Math.sin(phi) * Math.cos(theta),
+        y: g.y + SUB_SHELL_R * Math.sin(phi) * Math.sin(theta),
+        z: g.z + SUB_SHELL_R * Math.cos(phi),
+      };
+      const key = p + '::' + mt;
+      subCenter[key] = c;
+      const nCount = data.nodes.filter(n => (n.project || n.lib || 'default') === p && memTypeOf(n) === mt).length;
+      subCoreNodes.push({
+        id: 'subgalaxy:' + key,
+        rawId: 'subgalaxy:' + key,
+        lib: p,
+        project: p,
+        label: (MEM_TYPE_LABELS[mt] || mt).toUpperCase(),
+        fullText: `${p} · ${MEM_TYPE_LABELS[mt] || mt} 小星系 (${nCount} 条)`,
+        group: 'subgalaxy-core',
+        memType: mt,
+        category: 'subgalaxy',
+        size: 7,
+        importance: 0.6,
+        __galaxyColor: MEM_TYPE_COLORS[mt] || '#64748b',
+        x: c.x, y: c.y, z: c.z,
+        fx: c.x, fy: c.y, fz: c.z,
+      });
+    });
+  });
+
   /* 星系核心代表节点(大星,点击查看项目详情) */
   const coreNodes = projects.map(p => ({
     id: 'galaxy:' + p,
@@ -621,20 +692,29 @@ function renderStar(data) {
     x: galaxyCenter[p].x, y: galaxyCenter[p].y, z: galaxyCenter[p].z,
     fx: galaxyCenter[p].x, fy: galaxyCenter[p].y, fz: galaxyCenter[p].z,
   }));
+
+  /* 个体节点:初始位置围绕各自小星系中心散开 */
+  const nodeById = {};
   data.nodes.forEach(node => {
+    nodeById[node.id] = node;
     node.fx = null; node.fy = null; node.fz = null;
     node.size = (node.importance || 0.5) * 6 + 4;
     node.starred = (node.importance || 0.5) >= 0.9;
-    const g = galaxyCenter[node.project || node.lib || 'default'] || galaxyCenter[projects[0]];
-    if (g) {
-      node.x = g.x + (Math.random() - 0.5) * 40;
-      node.y = g.y + (Math.random() - 0.5) * 40;
-      node.z = g.z + (Math.random() - 0.5) * 40;
+    const p = node.project || node.lib || 'default';
+    const g = galaxyCenter[p] || galaxyCenter[projects[0]];
+    const c = subCenter[p + '::' + memTypeOf(node)] || g;
+    node.__galaxyCenter = g;
+    node.__subCenter = c;
+    if (c) {
+      node.x = c.x + (Math.random() - 0.5) * SUB_SCATTER * 2;
+      node.y = c.y + (Math.random() - 0.5) * SUB_SCATTER * 2;
+      node.z = c.z + (Math.random() - 0.5) * SUB_SCATTER * 2;
     } else {
       node.x = node.y = node.z = 0;
     }
   });
-  /* ── 星系桥:共享标签/分类推导跨项目边 ── */
+
+  /* ── 星系桥:共享标签/分类推导跨项目边(项目核心 ↔ 项目核心)── */
   const tagOf = {};
   data.nodes.forEach(n => { tagOf[n.id] = new Set((n.tags || []).map(t => String(t).trim().toLowerCase())); });
   const catOf = {};
@@ -668,8 +748,32 @@ function renderStar(data) {
       }
     }
   }
-  data.links = (data.links || []).concat(bridges);
-  const allNodes = coreNodes.concat(data.nodes);
+
+  /* ── 小星系层级边:项目核心 ↔ 小核心(spoke)+ 同项目小核心之间(bridge)── */
+  const linkSrc = l => (l.source && typeof l.source === 'object') ? l.source.id : l.source;
+  const linkTgt = l => (l.target && typeof l.target === 'object') ? l.target.id : l.target;
+  const spokes = subCoreNodes.map(sc => ({ source: 'galaxy:' + sc.project, target: sc.id, type: 'subgalaxy-spoke', value: 1 }));
+  const subBridgeWeight = {};
+  (data.links || []).forEach(l => {
+    const s = linkSrc(l), t = linkTgt(l);
+    const ns = nodeById[s], nt = nodeById[t];
+    if (!ns || !nt) return;
+    const ps = ns.project || ns.lib, pt = nt.project || nt.lib;
+    if (ps !== pt) return;                    // 只统计同项目内的跨小星系边
+    const ks = ps + '::' + memTypeOf(ns);
+    const kt = pt + '::' + memTypeOf(nt);
+    if (ks === kt) return;                    // 同小星系内不重复
+    if (!subCenter[ks] || !subCenter[kt]) return;
+    const key = [ks, kt].sort().join('|');
+    subBridgeWeight[key] = (subBridgeWeight[key] || 0) + 1;
+  });
+  const subBridges = Object.entries(subBridgeWeight).map(([key, w]) => {
+    const [a, b] = key.split('|');
+    return { source: 'subgalaxy:' + a, target: 'subgalaxy:' + b, type: 'subgalaxy-bridge', value: w, width: Math.min(0.5 + w * 0.18, 1.8) };
+  });
+
+  data.links = (data.links || []).concat(bridges).concat(spokes).concat(subBridges);
+  const allNodes = coreNodes.concat(subCoreNodes).concat(data.nodes);
   const allLinks = data.links;
 
   graphInstance = (graphInstance || new ForceGraph3D(document.getElementById('graph')))
@@ -679,24 +783,61 @@ function renderStar(data) {
     .nodeVal(n => n.size || 4)
     .nodeColor(n => memColor(n))
     .nodeLabel(null)
-    .linkColor(l => l.type === 'galaxy-bridge' ? 'rgba(255,214,120,0.55)' : (l.type === 'similarity' ? 'rgba(100,100,120,0.12)' : 'rgba(0,168,154,0.25)'))
-    .linkWidth(l => l.type === 'galaxy-bridge' ? (l.width || 1.2) : (l.type === 'similarity' ? 0.3 : 0.8))
-    .linkDirectionalParticles(l => l.type === 'galaxy-bridge' ? 3 : (l.type === 'similarity' ? 0 : 2))
+    .linkColor(l => {
+      if (l.type === 'galaxy-bridge') return 'rgba(255,214,120,0.55)';
+      if (l.type === 'subgalaxy-bridge') return 'rgba(190,200,235,0.5)';
+      if (l.type === 'subgalaxy-spoke') return 'rgba(150,160,185,0.22)';
+      if (l.type === 'similarity') return 'rgba(100,100,120,0.12)';
+      return 'rgba(0,168,154,0.25)';
+    })
+    .linkWidth(l => {
+      if (l.type === 'galaxy-bridge') return (l.width || 1.2);
+      if (l.type === 'subgalaxy-bridge') return (l.width || 0.8);
+      if (l.type === 'subgalaxy-spoke') return 0.4;
+      if (l.type === 'similarity') return 0.3;
+      return 0.8;
+    })
+    .linkDirectionalParticles(l => {
+      if (l.type === 'galaxy-bridge') return 3;
+      if (l.type === 'subgalaxy-bridge') return 1;
+      if (l.type === 'subgalaxy-spoke') return 0;
+      if (l.type === 'similarity') return 0;
+      return 2;
+    })
     .linkDirectionalParticleWidth(0.06)
     .linkDirectionalParticleSpeed(0.004)
-    .linkOpacity(l => l.type === 'galaxy-bridge' ? 0.7 : 0.4)
+    .linkOpacity(l => {
+      if (l.type === 'galaxy-bridge') return 0.7;
+      if (l.type === 'subgalaxy-bridge') return 0.55;
+      if (l.type === 'subgalaxy-spoke') return 0.2;
+      return 0.4;
+    })
     .showNavInfo(false)
     .onNodeClick(node => {
       if (node.group === 'galaxy-core') return onGalaxyCoreClick(node);
+      if (node.group === 'subgalaxy-core') return onSubGalaxyCoreClick(node);
       onStarNodeClick(node);
     })
     .onNodeHover(node => { document.body.style.cursor = node ? 'pointer' : 'default'; });
-  /* 星系向心力:把节点拉向各自星系中心(强度固定,不随 alpha 衰减) */
+  /* 力模拟:
+   *  - subgalaxy-attract:个体节点聚拢到各自 memType 小核心(强)
+   *  - galaxy-attract:个体节点再被较弱地拉向项目核心(维持星系整体内聚)
+   *  强度固定,不随 alpha 衰减 */
   try {
-    graphInstance.d3Force('galaxy-attract', (alpha) => {
-      const strength = 0.06;
+    graphInstance.d3Force('subgalaxy-attract', () => {
+      const strength = 0.13;
       data.nodes.forEach(n => {
-        const c = galaxyCenter[n.project || n.lib] || galaxyCenter[projects[0]];
+        const c = n.__subCenter;
+        if (!c) return;
+        n.vx += (c.x - n.x) * strength;
+        n.vy += (c.y - n.y) * strength;
+        n.vz += (c.z - n.z) * strength;
+      });
+    });
+    graphInstance.d3Force('galaxy-attract', () => {
+      const strength = 0.02;
+      data.nodes.forEach(n => {
+        const c = n.__galaxyCenter;
         if (!c) return;
         n.vx += (c.x - n.x) * strength;
         n.vy += (c.y - n.y) * strength;
@@ -727,7 +868,7 @@ function renderStarLegend(data) {
     const cnt = data.nodes.filter(n => (n.project || n.lib) === p).length;
     return { color: GALAXY_COLORS[p] || '#fbbf24', label: p.toUpperCase() + ' 星系', count: cnt };
   });
-  setLegend('星系与记忆类型', items.concat(galItems), '━ 关系 ┄ 相似度 ⭐ 星系桥');
+  setLegend('星系与记忆类型', items.concat(galItems), '━ 关系 ┄ 相似度 ⭐ 星系桥 · ✦ 小星系');
 }
 
 function renderAssembly(data) {
