@@ -282,7 +282,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 
 <script type="module">
   /* 最新版: three r160 + 3d-force-graph 1.80, esbuild 全打进单文件(自包含,零外部依赖) */
-  import ForceGraph3D, { THREE } from '/vendor/fg-1.80-full.mjs';
+  import ForceGraph3D, { THREE } from '/vendor/fg-1.80-full-v2.mjs';
   window.THREE = THREE;
   window.ForceGraph3D = ForceGraph3D;
   window.dispatchEvent(new CustomEvent('viz-libs-ready'));
