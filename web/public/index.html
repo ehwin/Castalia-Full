@@ -40,14 +40,14 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 #top-bar .logo { font-weight: 600; color: var(--t-bright); letter-spacing: 1px; font-size: .95rem; }
 #top-bar .stat-pill { margin-left: 16px; font-size: .75rem; color: var(--t-secondary); }
 #top-bar .stat-pill b { color: var(--t-primary); font-weight: 500; }
+/* 记忆搜索框: 放进顶栏(最顶上),不再悬浮遮挡 3D 图 */
+#search-bar { flex: 1; max-width: 300px; margin: 0 16px 0 20px; pointer-events: auto; }
+#search-input { width: 100%; background: rgba(31,34,41,0.8); border: 1px solid var(--border); color: var(--t-primary); padding: 6px 14px; border-radius: 18px; font-size: .8rem; outline: none; backdrop-filter: blur(14px); }
 .tool-btn { pointer-events: auto; margin-left: 10px; background: rgba(31,34,41,0.8); border: 1px solid var(--border); color: var(--t-primary); padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: .8rem; transition: .2s; backdrop-filter: blur(10px); }
 .tool-btn:hover { border-color: var(--accent-light); color: var(--accent-light); }
 .tool-btn.active { border-color: var(--accent-hi); color: var(--accent-hi); background: rgba(126,232,216,0.15); }
 .tool-btn:disabled { opacity: .4; cursor: not-allowed; }
 #admin-btn { margin-left: auto; }
-#search-bar { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); width: 340px; z-index: 10; }
-#search-input { width: 100%; background: var(--panel); border: 1px solid var(--border); color: var(--t-primary); padding: 10px 16px; border-radius: 24px; font-size: .85rem; outline: none; backdrop-filter: blur(14px); }
-#search-input:focus { border-color: rgba(122,232,216,0.55); }
 #legend { position: fixed; left: 16px; bottom: 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; font-size: .72rem; color: var(--t-secondary); backdrop-filter: blur(14px); z-index: 10; min-width: 160px; }
 .legend-title { font-weight: 600; margin-bottom: 8px; color: var(--t-primary); }
 .legend-item { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
@@ -56,8 +56,8 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 .legend-divider { border-top: 1px solid var(--border); margin: 8px 0; }
 #controls-hint { position: fixed; bottom: 16px; right: 16px; font-size: .7rem; color: rgba(255,255,255,0.3); z-index: 10; }
 
-/* ─── 统计宫格 (MNEMO MemoryStats) ─── */
-#stats-bar { position: fixed; top: 52px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; z-index: 9; }
+/* ─── 统计宫格 (MNEMO MemoryStats) — 右上角,不挡 3D 图 ─── */
+#stats-bar { position: fixed; top: 52px; right: 16px; left: auto; transform: none; display: flex; align-items: center; gap: 8px; z-index: 9; }
 #stats-grid { display: flex; gap: 8px; flex-wrap: nowrap; }
 .stat-cell { background: rgba(0,0,0,0.4); border: 1px solid; border-radius: 10px; padding: 8px 14px; text-align: center; min-width: 76px; backdrop-filter: blur(10px); }
 .stat-num { font-size: 1.4rem; font-weight: 800; line-height: 1; }
@@ -140,6 +140,9 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
   <span class="logo">✦ Castalia</span>
   <span class="stat-pill">记忆 <b id="stat-nodes">—</b></span>
   <span class="stat-pill">连线 <b id="stat-links">—</b></span>
+  <div id="search-bar">
+    <input type="text" id="search-input" placeholder="搜索记忆..." />
+  </div>
   <button id="tour-btn" class="tool-btn" onclick="toggleTour()" disabled>▶ 自动导览</button>
   <button id="fs-btn" class="tool-btn" onclick="toggleFullscreen()">⛶ 全屏</button>
   <button id="view-btn" class="tool-btn" onclick="toggleView()">🗂 总成视图</button>
@@ -154,10 +157,6 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 </div>
 
 <div id="tour-indicator"><span class="dot"></span><span class="label" id="tour-indicator-label">AUTO-TOUR</span></div>
-
-<div id="search-bar">
-  <input type="text" id="search-input" placeholder="搜索记忆..." />
-</div>
 
 <div id="legend">
   <div class="legend-title">记忆类型</div>

@@ -3,6 +3,14 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.12.8] — 2026-08-16 viz 布局修正:搜索框入顶栏,统计宫格挪右上角
+
+> 用户反馈:搜索框与统计宫格悬浮在 3D 图上方遮挡视图。
+
+- 搜索框 `#search-bar` 从悬浮(`top:56px` 居中)移入 `#top-bar` 内(logo/统计之后,flex:1 自适应,pointer-events 放行)
+- 统计宫格 `#stats-bar` 从顶部中央移到右上角(`top:52px; right:16px`),不再遮挡 3D 图;图例保持左下角
+- 三处同步(主仓库 + castalia-run/lobehub-run viz),index.html 实时读盘无需重启
+
 ## [v1.12.7] — 2026-08-16 3D 依赖升级最新版(three r160 + 3d-force-graph 1.80)
 
 > 用户要求"完全用最新版"。esbuild 将 three r160(ESM) + fg 1.80 全打进单文件,页面改 ES Modules 加载。
