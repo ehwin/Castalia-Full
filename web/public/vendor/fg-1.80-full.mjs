@@ -28107,7 +28107,7 @@ var WebGLRenderer = class {
     }
     this.renderBufferDirect = function(camera3, scene3, geometry, material, object, group) {
       if (scene3 === null) scene3 = _emptyScene;
-      const frontFaceCW = object.isMesh && object.matrixWorld.determinantAffine() < 0;
+      const frontFaceCW = object.isMesh && (object.matrixWorld.determinantAffine ? object.matrixWorld.determinantAffine() : object.matrixWorld.determinant()) < 0;
       const program = setProgram(camera3, scene3, geometry, material, object);
       state.setMaterial(material, frontFaceCW);
       let index5 = geometry.index;
