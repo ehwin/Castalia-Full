@@ -20,15 +20,15 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
+import { dirname, join, basename } from 'path';
+import { readFileSync, existsSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT = join(__dirname, '..');
 const LEGACY_DB_PATH = process.env.MEMORY_DB_PATH || '';
 const CONFIG_PATH = process.env.MEMORY_CONFIG || join(ROOT, 'memory', 'config.json');
-const NODE_BIN = process.env.NODE_BIN || 'node';
+const NODE_BIN = process.env.NODE_BIN || (existsSync('D:\\system\\New Folder\\node.exe') ? 'D:\\system\\New Folder\\node.exe' : 'node');
 const MCP_SERVER = join(ROOT, 'dist', 'index.js');
 const PORT = parseInt(process.env.WEB_PORT || '3345', 10);
 
@@ -364,10 +364,137 @@ app.post('/api/reflect/run', async (req, res) => {
   }
 });
 
+// ═══ 记忆总成(聚合本机多实例库:只读总览/搜索/动态 + 建库)═══
+// 2026-08-16:库管理 + 跨库互通接口(显式语义,引擎不自动合并库)
+const AGGREGATE_DIRS = (() => {
+  const raw = process.env.AGGREGATE_DIRS;
+  if (raw) { try { const d = JSON.parse(raw); if (Array.isArray(d) && d.length) return d; } catch {} }
+  const cands = [
+    { name: 'Hermes', dir: 'D:\\AI\\castalia-run\\memory' },
+    { name: 'LobeHub', dir: 'D:\\AI\\lobehub-run\\memory' },
+    { name: 'AIRI', dir: 'D:\\AI\\anima-run\\memory' },
+    { name: '当前实例', dir: DB_DIR },
+  ];
+  const seen = new Set();
+  return cands.filter(c => c.dir && existsSync(c.dir) && !seen.has(c.dir) && seen.add(c.dir));
+})();
+
+function openLibDb(file, readonly = true) {
+  if (!existsSync(file)) return null;
+  const db = new Database(file, readonly ? { readonly: true } : {});
+  try { sqliteVec.load(db); } catch (e) { console.error('sqlite-vec load failed:', e.message); }
+  return db;
+}
+
+function libFiles() {
+  const out = [];
+  for (const c of AGGREGATE_DIRS) {
+    try {
+      for (const f of readdirSync(c.dir)) {
+        if (f.startsWith('project-') && f.endsWith('.sqlite')) {
+          out.push({ instance: c.name, project: f.slice('project-'.length, -'.sqlite'.length), file: join(c.dir, f) });
+        }
+      }
+    } catch {}
+  }
+  return out;
+}
+
+// 总览:每个库的条数/最近更新
+app.get('/api/aggregate/overview', (req, res) => {
+  const libs = libFiles().map(l => {
+    let db = null;
+    try {
+      db = openLibDb(l.file);
+      if (!db) return { ...l, memories: 0, facts: 0, lastActivity: null, error: 'open_failed' };
+      const mem = db.prepare('SELECT COUNT(*) c FROM memory WHERE is_active=1').get();
+      const facts = db.prepare('SELECT COUNT(*) c FROM facts WHERE is_active=1').get();
+      const last = db.prepare('SELECT MAX(created_at) m FROM memory').get();
+      return { ...l, memories: mem.c, facts: facts.c, lastActivity: last.m };
+    } catch (e) {
+      return { ...l, memories: 0, facts: 0, lastActivity: null, error: String(e.message).slice(0, 100) };
+    } finally { if (db) db.close(); }
+  });
+  const totals = libs.reduce((a, l) => ({ memories: a.memories + (l.memories || 0), facts: a.facts + (l.facts || 0) }), { memories: 0, facts: 0 });
+  res.json({ ok: true, libraries: libs, totals });
+});
+
+// 聚合搜索(文本模式,只读,按库分组)
+app.get('/api/aggregate/search', (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const topK = Math.min(50, parseInt(req.query.topK || '10', 10) || 10);
+  if (!q) return res.json({ ok: false, error: 'q 必填' });
+  const terms = q.split(/[\s,，。！？、；：]+/).filter(t => t.length >= 2);
+  const hits = [];
+  for (const l of libFiles()) {
+    let db = null;
+    try {
+      db = openLibDb(l.file);
+      if (!db) continue;
+      let rows;
+      if (terms.length === 0) {
+        rows = db.prepare('SELECT id, text, created_at FROM memory WHERE is_active=1 ORDER BY created_at DESC LIMIT ?').all(topK);
+      } else {
+        const conds = terms.map(() => 'text LIKE ?').join(' OR ');
+        rows = db.prepare(`SELECT id, text, created_at FROM memory WHERE is_active=1 AND (${conds}) ORDER BY created_at DESC LIMIT ?`).all(...terms.map(t => `%${t}%`), topK);
+      }
+      for (const r of rows) {
+        const hit = terms.filter(t => String(r.text).includes(t)).length;
+        hits.push({
+          instance: l.instance, project: l.project, id: r.id,
+          text: String(r.text).length > 200 ? String(r.text).slice(0, 200) + '…' : String(r.text),
+          score: terms.length ? Math.round(hit / terms.length * 1000) / 1000 : 0.1,
+          createdAt: r.created_at,
+        });
+      }
+    } catch {} finally { if (db) db.close(); }
+  }
+  hits.sort((a, b) => b.score - a.score || String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  res.json({ ok: true, query: q, count: hits.length, results: hits.slice(0, topK * 4) });
+});
+
+// 最近动态:所有库最新记忆
+app.get('/api/aggregate/recent', (req, res) => {
+  const limit = Math.min(100, parseInt(req.query.limit || '30', 10) || 30);
+  const rows = [];
+  for (const l of libFiles()) {
+    let db = null;
+    try {
+      db = openLibDb(l.file);
+      if (!db) continue;
+      const rs = db.prepare('SELECT id, text, mem_type, created_at FROM memory WHERE is_active=1 ORDER BY created_at DESC LIMIT ?').all(limit);
+      for (const r of rs) rows.push({ instance: l.instance, project: l.project, id: r.id, text: String(r.text).slice(0, 150), memType: r.mem_type, createdAt: r.created_at });
+    } catch {} finally { if (db) db.close(); }
+  }
+  rows.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  res.json({ ok: true, count: rows.length, results: rows.slice(0, limit) });
+});
+
+// 建库(经 MCP 调本实例 dist 的 project_create,保证 schema 正确)
+app.post('/api/aggregate/projects', async (req, res) => {
+  const name = String((req.body || {}).name || '').trim();
+  if (!name) return res.json({ ok: false, error: 'name 必填' });
+  try {
+    const r = await mcpCall('project_create', { name });
+    const text = (r.content || []).map(c => c.text || '').join('');
+    let parsed;
+    try { parsed = JSON.parse(text); } catch { parsed = { ok: false, error: text.slice(0, 200) }; }
+    res.json(parsed);
+  } catch (e) {
+    res.json({ ok: false, error: '建库失败: ' + e.message });
+  }
+});
+
 // ═══ 静态服务 ═══
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(readFileSync(join(__dirname, 'public', 'index.html'), 'utf-8'));
+});
+
+// 记忆总成页
+app.get('/aggregate.html', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(readFileSync(join(__dirname, 'public', 'aggregate.html'), 'utf-8'));
 });
 
 app.listen(PORT, () => {

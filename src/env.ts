@@ -12,6 +12,12 @@ export const CHAR_ID: string = process.env.CHAR_ID || 'default';
 export const PROJECT_ID: string = process.env.CASTALIA_PROJECT || 'default';
 
 /**
+ * 共享层项目名(约定,2026-08-16):存进该库的记忆为"所有库共知"候选。
+ * 引擎不做隐式合并 —— 互通语义由上层/调用方显式决定(接口先行,规则待定)。
+ */
+export const SHARED_PROJECT: string = process.env.SHARED_PROJECT || 'shared';
+
+/**
  * 规范化项目名:trim 前后空白;空字符串/纯空白回退到默认项目。
  * 防止 '' / ' ' / ' alpha ' 这类脏值产生孤立项目命名空间。
  */

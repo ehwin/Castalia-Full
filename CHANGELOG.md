@@ -3,6 +3,32 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.12.0] — 2026-08-16 多库管理 + 跨库互通接口 + 记忆总成
+
+> 用户需求:管理不同库、库间记忆互通、全机记忆总成。互通语义用户尚未定稿 → **接口先行**(显式语义,引擎不做隐式合并),总成界面做完整版。
+
+### Added
+- **`memory_search.projects` 参数(agent)**:一次搜多个库,结果每行带 `project` 来源标注;`["*"]`/`["all"]` = 本实例全部库;缺省保持单库(完全向后兼容)
+- **`project_create`(admin)**:建新库(项目命名空间),`safeFilePart` 消毒,立即可用于读写
+- **`memory_search_all`(admin)**:联邦搜索接口(只读),搜本实例全部库 + `FEDERATION_DIRS` env 声明的外部实例目录(`[{"name","dir"}]`);结果带 `instance`/`project` 标注;`mode` 参数预留 vector(当前 text 实现,vector 回退 text)
+- **`shared` 共享层约定**(env.ts `SHARED_PROJECT`):保留库名 `shared` 为"全库共知"候选;引擎不自动合并,互通规则由上层决定
+- **viz 记忆总成页 `/aggregate.html`**:全机库总览卡片(实例/库/记忆/事实/最近活动)+ 聚合搜索(按库分组)+ 最近动态流 + 建库表单;index.html 顶部入口;`AGGREGATE_DIRS` env 可覆盖(默认 Hermes/LobeHub/AIRI/当前实例,按目录去重)
+- **viz API**:`/api/aggregate/overview` `/api/aggregate/search` `/api/aggregate/recent` `/api/aggregate/projects`(建库经 MCP 调 project_create,保证 schema 正确)
+
+### Changed
+- `src/search.ts` 新增 `searchMemoryAcross()`:跨库循环搜索 + 合并排序去重,单库失败不影响其他库
+- `src/federation.ts`(新):只读联邦库解析 + LIKE 文本检索(LIKE 子串 + 命中比例评分,中文整句可搜)
+- `src/db.ts` 导出 `currentMemDir()`;`src/env.ts` 加 `SHARED_PROJECT`
+- `web/server.mjs`:`NODE_BIN` 默认优先本机 137 node(否则 mcpCall 子进程 ABI 崩溃挂起)
+- `scripts/smoke_test.py`:`NODE` 优先 137 绝对路径(PATH 第一个是 Hermes 127 时 better-sqlite3 ABI 崩溃,脚本曾因此拿到空输出)
+
+### Verified(独立复验,非自报)
+- 三仓库(通用/Anima/主系统)同源补丁 + 各自 `npm run build` exit 0(Anima 保留 charFor/情感列,补丁脚本 `scripts/sync_libs_feature.py`)
+- 运行实例 dist 全量同步(castalia-run/lobehub-run/anima-run);双桥(3310/3312)重启后新 dist 生效
+- 桥端到端:tools/list = 31 工具;`memory_search(projects=['default','custom-project'])` 参数接受;`project_create('shared')` ok;`memory_search_all` libraries=3
+- 隔离性实测:存 custom-project → 单库搜 default=0 条;跨库搜=1 条且标注 `project=custom-project`;联邦搜=1 条且标注 `local/custom-project`;测试数据已清理
+- viz 总成页 API:overview 6 库(Hermes×2 + LobeHub×3 + AIRI×1,目录去重生效);聚合搜「记忆」命中 AIRI 5 条;recent 正常;建库 shared(Hermes 侧)成功
+
 ## [v1.11.5] — 2026-08-05 web 管理界面青绿主题改版
 
 > 用户指定配色系统(logo 青绿系):Primary #00A89A / Deep Teal #008880 / Mid Teal #45B9AC / Light Mint #7AE8D8 / Highlight #A0F8E8 / Dark BG #15161B / Surface #1F2229-2A2E38。

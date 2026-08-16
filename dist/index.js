@@ -11,10 +11,10 @@ import './configLoader.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { searchMemory, searchFacts, getRecentMemories } from './search.js';
+import { searchMemory, searchFacts, getRecentMemories, searchMemoryAcross } from './search.js';
 import { saveMemory, forgetMemory, updateMemory, saveConversationTurn, cleanupExpiredMemories, batchEmbedPending } from './store.js';
 import { consolidate } from './consolidate.js';
-import { DatabaseManager, listProjectNames, sweepExpiredSessionMemories } from './db.js';
+import { DatabaseManager, listProjectNames, safeFilePart, currentMemDir, sweepExpiredSessionMemories } from './db.js';
 import { runDigest, getRecentConversations, maybeDigest } from './digest.js';
 import { flushAllBuffers } from './buffer.js';
 import { reflect, getAllMemories, getMemoryGraph, REFLECT_SYSTEM_PROMPT, getUnanalyzedConversations } from './reflect.js';
@@ -23,6 +23,7 @@ import { runAutoReflect, runDeepReflect, shouldAutoReflect, runConsolidate, shou
 import { ensureSeedInstructions, saveInstruction, getInstruction, listInstructions, deleteInstruction } from './instructions.js';
 import { CHAR_ID, PROJECT_ID, SERVER_NAME, SERVER_VERSION, normalizeProject } from './env.js';
 import { MEM_TYPES, summarizeForIndex } from './memType.js';
+import { resolveFedLibraries, fedTextSearch } from './federation.js';
 console.log = console.error;
 const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 function ok(data) {
@@ -79,7 +80,7 @@ function memorySnapshotWarn(createdAt) {
 const TOOL_GROUPS = {
     agent: ['memory_search', 'memory_get', 'memory_recent', 'memory_index', 'fact_search', 'memory_graph'],
     harness: ['auto_process', 'conversation_save', 'digest_run', 'reflect_auto', 'reflect_deep', 'reflect_batch_embed', 'memory_save', 'memory_update', 'memory_delete', 'memory_log', 'instruction_save'],
-    admin: ['memory_list', 'stats_get', 'recent_conversations', 'daily_summary_data', 'reflect_analyze', 'reflect_apply', 'memory_context', 'context_get', 'project_list', 'instruction_list', 'instruction_delete', 'consolidate_deep'],
+    admin: ['memory_list', 'stats_get', 'recent_conversations', 'daily_summary_data', 'reflect_analyze', 'reflect_apply', 'memory_context', 'context_get', 'project_list', 'project_create', 'memory_search_all', 'instruction_list', 'instruction_delete', 'consolidate_deep'],
 };
 function resolveTools(input) {
     if (!input || input === 'all')
@@ -126,14 +127,19 @@ register('memory_search', 'agent', 'Search past memories using tag-first then ve
     category: z.string().optional().describe('Filter by category'),
     memType: z.enum(MEM_TYPES).optional().describe('Filter by usage dimension: user/feedback/project/reference/general'),
     project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
+    projects: z.array(z.string()).optional().describe('Cross-library search: search several libraries in one call (e.g. ["default","custom-project"]). "*" or ["all"] = every library of this instance. Omit for single-library search. Each result carries its source library in "project".'),
 }, async (args) => {
     try {
-        const r = await searchMemory({ query: args.query, topK: args.topK ?? 5, profile: 'balanced', category: args.category, memType: args.memType, characterId: CHAR_ID, project: args.project });
+        const base = { query: args.query, topK: args.topK ?? 5, category: args.category, memType: args.memType, characterId: CHAR_ID };
+        const r = args.projects && args.projects.length > 0
+            ? await searchMemoryAcross({ ...base, projects: args.projects })
+            : await searchMemory({ ...base, profile: 'balanced', project: args.project });
         return ok({
             op: 'search',
             query: args.query,
             count: r.length,
             results: r.map(m => ({
+                project: m.project,
                 id: m.id,
                 text: m.text.length > 200 ? m.text.substring(0, 200) + '…' : m.text,
                 truncated: m.text.length > 200,
@@ -832,6 +838,58 @@ register('project_list', 'admin', 'List all project namespaces and their memory/
     }
     catch (e) {
         return err(e.message, 'PROJECT_LIST_FAILED');
+    }
+});
+register('project_create', 'admin', 'Create a new project (library) namespace. Immediately usable for memory_save / memory_search with project=<name>. Name uses letters/digits/._- only.', {
+    name: z.string().min(1).describe('New library name (letters/digits/._- recommended)'),
+}, async (args) => {
+    try {
+        const raw = String(args.name).trim();
+        if (!raw)
+            return err('项目名不能为空', 'INVALID_PROJECT_NAME');
+        const safe = safeFilePart(raw);
+        if (safe !== raw) {
+            return err(`项目名包含不安全字符,已规范化为 "${safe}"。建议只用字母/数字/._-`, 'INVALID_PROJECT_NAME');
+        }
+        DatabaseManager.getInstance(safe);
+        return ok({
+            op: 'project_create',
+            project: safe,
+            hint: `读写工具传 project=${safe} 即指向该库;约定库名 shared 为共享层(互通语义待定)`,
+        });
+    }
+    catch (e) {
+        return err(e.message, 'PROJECT_CREATE_FAILED');
+    }
+});
+register('memory_search_all', 'admin', 'Federation search interface (read-only): search this instance\'s libraries plus any external instances listed in FEDERATION_DIRS env ([{"name":"...","dir":"..."},...]). Explicit semantics — the engine does NOT merge libraries automatically; the caller decides interop policy. Results carry "instance" and "project".', {
+    query: z.string().describe('Query text'),
+    topK: z.number().optional().describe('Max results per library (default 5)'),
+    mode: z.enum(['text', 'vector']).optional().describe('text = LIKE substring search (default); vector = reserved for sqlite-vec KNN (falls back to text in this build)'),
+}, async (args) => {
+    try {
+        const libs = resolveFedLibraries(currentMemDir());
+        const topK = args.topK ?? 5;
+        const results = fedTextSearch(libs, args.query, topK);
+        return ok({
+            op: 'memory_search_all',
+            query: args.query,
+            libraries: libs.length,
+            mode: args.mode === 'vector' ? 'text_fallback' : 'text',
+            count: results.length,
+            results: results.map(r => ({
+                instance: r.instance,
+                project: r.project,
+                id: r.id,
+                text: r.text,
+                score: r.score,
+                createdAt: r.createdAt,
+            })),
+            hint: '接口先行:互通语义未定,引擎不自动合并库。FEDERATION_DIRS 配置参与联邦的外部实例目录。',
+        });
+    }
+    catch (e) {
+        return err(e.message, 'FEDERATION_FAILED');
     }
 });
 // ═══════════════════════════════════════════════════════════════════
