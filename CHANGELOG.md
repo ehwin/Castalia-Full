@@ -3,6 +3,20 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.12.1] — 2026-08-16 末端反思模块 reflect_all(跨库反思 → reflect 总库)
+
+> 用户拍板"末端互通":日常各库隔离,反思时全量聚合。实现经 dsh(DeepSeek Harness)编写 + Hermes 独立复验。
+
+### Added
+- **`reflect_all`(admin)**:跨库记忆反思整合——扫描全机所有记忆库(本实例 + FEDERATION_DIRS 外部实例,只读),LLM 跨库去重合并/提炼洞察(五类 memType + 硬性禁止 + 严格 JSON),写入专用总库 `project=reflect`(非破坏:源库只读;查重跳过已存在文本;tags 附来源 `instance:project` 标记)
+- **`src/reflectAll.ts`**:scanLibrary 逐库只读 + 预算上限(maxTotal 默认 300 / maxPerLib 100)+ 单库失败隔离;系统提示仿 REFLECT_SYSTEM_PROMPT;JSON 容错解析(围栏/尾逗号);dryRun 只分析不写入;REFLECT LLM 通道未配置时明确报错不崩
+- 托盘 BRIDGES 双桥(3310/3312)env 加 `FEDERATION_DIRS`(Hermes/AIRI 实例目录)→ 桥侧 reflect_all / memory_search_all 可见全机 7 库
+
+### Verified(独立复验,非自报)
+- 三仓库 build exit 0 + smoke 32 工具全 PASSED(主仓库);Anima/主系统锚点补丁(保 charFor/mood_journal),脚本 `scripts/sync_reflect_all.py`
+- dist 全量同步 3 运行实例(anima-run 用 Anima 构建)+ 双桥重启
+- 桥端到端:tools/list 32;reflect_all dryRun 扫 7 库 → LLM 出 3 条洞察、sources 标注 AIRI/default、0 错误;测试数据未写入(dryRun)
+
 ## [v1.12.0] — 2026-08-16 多库管理 + 跨库互通接口 + 记忆总成
 
 > 用户需求:管理不同库、库间记忆互通、全机记忆总成。互通语义用户尚未定稿 → **接口先行**(显式语义,引擎不做隐式合并),总成界面做完整版。

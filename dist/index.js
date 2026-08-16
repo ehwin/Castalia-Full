@@ -24,6 +24,7 @@ import { ensureSeedInstructions, saveInstruction, getInstruction, listInstructio
 import { CHAR_ID, PROJECT_ID, SERVER_NAME, SERVER_VERSION, normalizeProject } from './env.js';
 import { MEM_TYPES, summarizeForIndex } from './memType.js';
 import { resolveFedLibraries, fedTextSearch } from './federation.js';
+import { runReflectAll } from './reflectAll.js';
 console.log = console.error;
 const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 function ok(data) {
@@ -80,7 +81,7 @@ function memorySnapshotWarn(createdAt) {
 const TOOL_GROUPS = {
     agent: ['memory_search', 'memory_get', 'memory_recent', 'memory_index', 'fact_search', 'memory_graph'],
     harness: ['auto_process', 'conversation_save', 'digest_run', 'reflect_auto', 'reflect_deep', 'reflect_batch_embed', 'memory_save', 'memory_update', 'memory_delete', 'memory_log', 'instruction_save'],
-    admin: ['memory_list', 'stats_get', 'recent_conversations', 'daily_summary_data', 'reflect_analyze', 'reflect_apply', 'memory_context', 'context_get', 'project_list', 'project_create', 'memory_search_all', 'instruction_list', 'instruction_delete', 'consolidate_deep'],
+    admin: ['memory_list', 'stats_get', 'recent_conversations', 'daily_summary_data', 'reflect_analyze', 'reflect_apply', 'memory_context', 'context_get', 'project_list', 'project_create', 'memory_search_all', 'instruction_list', 'instruction_delete', 'consolidate_deep', 'reflect_all'],
 };
 function resolveTools(input) {
     if (!input || input === 'all')
@@ -860,6 +861,23 @@ register('project_create', 'admin', 'Create a new project (library) namespace. I
     }
     catch (e) {
         return err(e.message, 'PROJECT_CREATE_FAILED');
+    }
+});
+register('reflect_all', 'admin', 'Cross-library reflection & consolidation (non-destructive): scan active memories from every memory library (this instance + FEDERATION_DIRS external instances), let the LLM merge duplicates and distill high-value insights across libraries, then write the result into the dedicated project=reflect library (skipping already-existing texts). dryRun=true only analyzes without writing. Source libraries are opened read-only and never modified. Requires REFLECT LLM channel (config.json reflect section).', {
+    maxTotal: z.number().optional().describe('Max total memories to scan across all libraries (default 300)'),
+    maxPerLib: z.number().optional().describe('Max memories per library (default 100)'),
+    dryRun: z.boolean().optional().describe('true = analyze only, do not write into reflect library (default false)'),
+}, async (args) => {
+    try {
+        const r = await runReflectAll({
+            maxTotal: args.maxTotal,
+            maxPerLib: args.maxPerLib,
+            dryRun: args.dryRun,
+        });
+        return ok(r);
+    }
+    catch (e) {
+        return err(e.message, 'REFLECT_ALL_FAILED');
     }
 });
 register('memory_search_all', 'admin', 'Federation search interface (read-only): search this instance\'s libraries plus any external instances listed in FEDERATION_DIRS env ([{"name":"...","dir":"..."},...]). Explicit semantics — the engine does NOT merge libraries automatically; the caller decides interop policy. Results carry "instance" and "project".', {
