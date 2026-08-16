@@ -693,8 +693,20 @@ function renderStar(data) {
     fx: galaxyCenter[p].x, fy: galaxyCenter[p].y, fz: galaxyCenter[p].z,
   }));
 
-  /* 个体节点:初始位置围绕各自小星系中心散开 */
+  /* 个体节点:固定在小星系核心周围球壳上(斐波那契均匀分布,位置锁定,绝不被吸成团)
+   * 半径按小星系节点数自适应:节点越多球壳越大,保证不重叠 */
   const nodeById = {};
+  const subNodeCount = {};   // key = project::memType → 节点数
+  data.nodes.forEach(node => {
+    const p = node.project || node.lib || 'default';
+    const k = p + '::' + memTypeOf(node);
+    subNodeCount[k] = (subNodeCount[k] || 0) + 1;
+  });
+  const subOrbitR = {};      // key → 球壳半径
+  for (const k in subNodeCount) {
+    subOrbitR[k] = 16 + Math.sqrt(subNodeCount[k]) * 4;  // n=45→42.8 / n=12→29.9
+  }
+  const subIdx = {};         // key → 已分配索引
   data.nodes.forEach(node => {
     nodeById[node.id] = node;
     node.fx = null; node.fy = null; node.fz = null;
@@ -702,15 +714,26 @@ function renderStar(data) {
     node.starred = (node.importance || 0.5) >= 0.9;
     const p = node.project || node.lib || 'default';
     const g = galaxyCenter[p] || galaxyCenter[projects[0]];
-    const c = subCenter[p + '::' + memTypeOf(node)] || g;
+    const k = p + '::' + memTypeOf(node);
+    const c = subCenter[k] || g;
     node.__galaxyCenter = g;
     node.__subCenter = c;
     if (c) {
-      node.x = c.x + (Math.random() - 0.5) * SUB_SCATTER * 2;
-      node.y = c.y + (Math.random() - 0.5) * SUB_SCATTER * 2;
-      node.z = c.z + (Math.random() - 0.5) * SUB_SCATTER * 2;
+      // 斐波那契球面分布:第 i 个节点落在小核心周围固定半径球壳上
+      const n = subNodeCount[k] || 1;
+      const i = subIdx[k] || 0;
+      subIdx[k] = i + 1;
+      const r = subOrbitR[k] || 26;
+      const phi = Math.acos(1 - 2 * (i + 0.5) / n);
+      const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+      const dx = r * Math.sin(phi) * Math.cos(theta);
+      const dy = r * Math.sin(phi) * Math.sin(theta);
+      const dz = r * Math.cos(phi);
+      node.x = c.x + dx; node.y = c.y + dy; node.z = c.z + dz;
+      node.fx = node.x; node.fy = node.y; node.fz = node.z;  // 锁定:力模拟不再移动
     } else {
       node.x = node.y = node.z = 0;
+      node.fx = node.x; node.fy = node.y; node.fz = node.z;
     }
   });
 
