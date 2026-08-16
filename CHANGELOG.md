@@ -21,6 +21,7 @@
 ### Verified
 - 存量 121 条全迁移(hermes 12/reflect 11/airi 98 按分类落位)
 - viz 联邦 121 节点纯新结构;project_list 聚合 11 条;联邦搜索 50 库;memType=user 写入精确落 hermes/user/
+- 补嵌入:hermes 12/12、reflect 9/11、airi 79/98(batchEmbedPending 遍历全部分类库;3 条旧模型名 404 待下次反思重试)
 
 ## [v1.12.9] — 2026-08-16 星图联邦化(记忆星图显示全机记忆)
 
