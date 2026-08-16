@@ -737,40 +737,29 @@ function renderStar(data) {
     }
   });
 
-  /* ── 星系桥:共享标签/分类推导跨项目边(项目核心 ↔ 项目核心)── */
-  const tagOf = {};
-  data.nodes.forEach(n => { tagOf[n.id] = new Set((n.tags || []).map(t => String(t).trim().toLowerCase())); });
-  const catOf = {};
-  data.nodes.forEach(n => { catOf[n.id] = n.category; });
+  /* ── 星系桥:方向规则(用户拍板 2026-08-16)
+   *  - 主节点 = {airi, reflect}:airi ↔ reflect 双向互联
+   *  - 子节点 = 其他项目(hermes 等):不与主节点互通,仅 reflect 单向读取子节点
+   *  - 子节点之间不连
+   *  视觉:双向 = 金色粗线双向粒子;单向 = 金色细线 + 箭头指向读取方(reflect) */
+  const MAIN_PROJECTS = ['airi', 'reflect'];
   const bridges = [];
-  const bridgeWeight = (a, b) => {
-    let w = 0;
-    for (const idA of tagOf[a]) { if (tagOf[b].has(idA)) w += 2; }
-    if (catOf[a] && catOf[a] === catOf[b]) w += 1;
-    return w;
-  };
-  // 项目级标签全集(去噪:忽略命名空间标签如 xxx:yyy)
-  const cleanTag = t => /^[\w\u4e00-\u9fa5]{2,}$/.test(t) && !t.includes(':') ? t : null;
-  for (let i = 0; i < projects.length; i++) {
-    for (let j = i + 1; j < projects.length; j++) {
-      const pa = projects[i], pb = projects[j];
-      // 项目代表:各取 importance 最高的 5 个节点求桥权重
-      const na = data.nodes.filter(n => (n.project || n.lib) === pa).sort((x, y) => (y.importance || 0) - (x.importance || 0)).slice(0, 5);
-      const nb = data.nodes.filter(n => (n.project || n.lib) === pb).sort((x, y) => (y.importance || 0) - (x.importance || 0)).slice(0, 5);
-      let w = 0;
-      na.forEach(a => nb.forEach(b => { w += bridgeWeight(a.id, b.id); }));
-      // 项目级共享标签兜底(不依赖代表节点)
-      const ta = new Set(), tb = new Set();
-      data.nodes.filter(n => (n.project || n.lib) === pa).forEach(n => (n.tags || []).forEach(t => { const c = cleanTag(t); if (c) ta.add(c); }));
-      data.nodes.filter(n => (n.project || n.lib) === pb).forEach(n => (n.tags || []).forEach(t => { const c = cleanTag(t); if (c) tb.add(c); }));
-      let sharedTags = 0;
-      ta.forEach(t => { if (tb.has(t)) sharedTags += 2; });
-      if (sharedTags > w) w = sharedTags;
-      if (w > 0) {
-        bridges.push({ source: 'galaxy:' + pa, target: 'galaxy:' + pb, type: 'galaxy-bridge', value: w, width: Math.min(0.6 + w * 0.25, 2.2) });
-      }
+  const isMain = p => MAIN_PROJECTS.includes(p);
+  // 1) 主节点之间:airi ↔ reflect 双向(两条反向 link → 双向粒子光流)
+  for (let i = 0; i < MAIN_PROJECTS.length; i++) {
+    for (let j = i + 1; j < MAIN_PROJECTS.length; j++) {
+      const pa = MAIN_PROJECTS[i], pb = MAIN_PROJECTS[j];
+      if (!projects.includes(pa) || !projects.includes(pb)) continue;
+      bridges.push({ source: 'galaxy:' + pa, target: 'galaxy:' + pb, type: 'galaxy-bridge', dir: 'both', width: 1.5 });
+      bridges.push({ source: 'galaxy:' + pb, target: 'galaxy:' + pa, type: 'galaxy-bridge', dir: 'both', width: 1.5 });
     }
   }
+  // 2) reflect 单向读取子节点(箭头指向 reflect:source=子节点, target=reflect)
+  projects.forEach(p => {
+    if (isMain(p)) return;               // 主节点之间已处理
+    if (!projects.includes('reflect')) return;
+    bridges.push({ source: 'galaxy:' + p, target: 'galaxy:reflect', type: 'galaxy-bridge', dir: 'oneway', width: 1.0 });
+  });
 
   /* ── 小星系层级边:项目核心 ↔ 小核心(spoke)+ 同项目小核心之间(bridge)── */
   const linkSrc = l => (l.source && typeof l.source === 'object') ? l.source.id : l.source;
@@ -821,7 +810,8 @@ function renderStar(data) {
       return 0.8;
     })
     .linkDirectionalParticles(l => {
-      if (l.type === 'galaxy-bridge') return 3;
+      // 星系桥:双向=两方向粒子流动;单向=单方向粒子 + 箭头(指向读取方 reflect)
+      if (l.type === 'galaxy-bridge') return l.dir === 'both' ? 3 : 2;
       if (l.type === 'subgalaxy-bridge') return 1;
       if (l.type === 'subgalaxy-spoke') return 0;
       if (l.type === 'similarity') return 0;
@@ -829,6 +819,11 @@ function renderStar(data) {
     })
     .linkDirectionalParticleWidth(0.06)
     .linkDirectionalParticleSpeed(0.004)
+    // 单向桥:粒子从子节点流向 reflect,并加箭头标注方向
+    .linkDirectionalParticleColor(l => l.type === 'galaxy-bridge' ? '#ffd678' : undefined)
+    .linkDirectionalArrowLength(l => (l.type === 'galaxy-bridge' && l.dir === 'oneway') ? 6 : 0)
+    .linkDirectionalArrowColor(() => 'rgba(255,214,120,0.9)')
+    .linkDirectionalArrowRelPos(0.5)
     .linkOpacity(l => {
       if (l.type === 'galaxy-bridge') return 0.7;
       if (l.type === 'subgalaxy-bridge') return 0.55;
@@ -893,7 +888,7 @@ function renderStarLegend(data) {
     const cnt = data.nodes.filter(n => (n.project || n.lib) === p).length;
     return { color: GALAXY_COLORS[p] || '#fbbf24', label: p.toUpperCase() + ' 星系', count: cnt };
   });
-  setLegend('星系与记忆类型', items.concat(galItems), '━ 关系 ┄ 相似度 ⭐ 星系桥 · ✦ 小星系');
+  setLegend('星系与记忆类型', items.concat(galItems), '⭐ 双向互联 · ➤ 单向读取 · ━ 关系 ┄ 相似度');
 }
 
 function renderAssembly(data) {
