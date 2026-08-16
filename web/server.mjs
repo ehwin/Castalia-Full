@@ -973,6 +973,8 @@ app.post('/api/manage/memory/delete', (req, res) => {
 });
 
 // ═══ 静态服务 ═══
+// 本地 3D 依赖(three.js / 3d-force-graph)——离线可用,不依赖 CDN
+app.use('/vendor', express.static(join(__dirname, 'public', 'vendor'), { maxAge: '7d' }));
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(readFileSync(join(__dirname, 'public', 'index.html'), 'utf-8'));

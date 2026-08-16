@@ -72,6 +72,13 @@
 - 真实库零改动(仅下午自检软删记忆,WAL 痕迹非本次);toggle_important 在副本库测过三态
 - 8 个新元素 id 齐全;THREE 守卫;代码审查通过(缓存/材质直改/不每帧重建)
 
+## [v1.12.3] — 2026-08-16 3D 依赖本地化(离线可用,修复 3D 视图无法渲染)
+
+### Fixed
+- 3D 依赖原从 `//cdn.jsdelivr.net` 加载,网络受限时 `ForceGraph3D is not defined` → 3D 视图(星图/总成)全部白屏。改为本地 vendor:`web/public/vendor/three.min.js`(r160)+ `3d-force-graph.min.js`(1.80.0)
+- server.mjs 加 `app.use('/vendor', express.static(...))` 静态路由(带 7d 缓存);index.html 两个 script 改 `/vendor/...` 本地引用
+- 三处(主仓库 + castalia-run/lobehub-run viz)已同步,3345 重启验证:vendor 两文件 200、页面引用本地、API 不受影响
+
 ## [v1.12.2] — 2026-08-16 3D 总成视图(二分图:软件团 ↔ 库团)
 
 > 用户拍板"全权交给 dsh + pro 模型"独立开发(完全权限 danger-full-access),Hermes 独立复验后上线。
