@@ -21,7 +21,7 @@ import * as sqliteVec from 'sqlite-vec';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join, basename } from 'path';
-import { readFileSync, existsSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
+import { readFileSync, existsSync, writeFileSync, appendFileSync, mkdirSync, readdirSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -49,6 +49,40 @@ function resolveDbDir() {
 const DB_DIR = resolveDbDir();
 // Web 控制台直接读库:兼容模式指向单库,新目录结构指向默认项目库(project-default.sqlite)
 const DB_PATH = LEGACY_DB_PATH || join(DB_DIR, 'project-default.sqlite');
+
+// 反思历史记录文件(每行一条 JSON,追加写;防误提交可回看)
+const REFLECT_HISTORY_PATH = join(DB_DIR, 'reflect_history.jsonl');
+const REFLECT_HISTORY_MAX = 200;
+
+/** 追加一条反思历史(写入失败不阻塞主流程;超过上限裁剪保留最新) */
+function appendReflectHistory(entry) {
+  try {
+    appendFileSync(REFLECT_HISTORY_PATH, JSON.stringify(entry) + '\n', 'utf-8');
+    const lines = readFileSync(REFLECT_HISTORY_PATH, 'utf-8').split('\n').filter(l => l.trim());
+    if (lines.length > REFLECT_HISTORY_MAX) {
+      writeFileSync(REFLECT_HISTORY_PATH, lines.slice(lines.length - REFLECT_HISTORY_MAX).join('\n') + '\n', 'utf-8');
+    }
+  } catch (e) {
+    console.error('[reflect-history] write failed:', e.message);
+  }
+}
+
+/** 读取反思历史(倒序,最新在前) */
+function readReflectHistory(limit = 20) {
+  const cap = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+  try {
+    if (!existsSync(REFLECT_HISTORY_PATH)) return [];
+    const lines = readFileSync(REFLECT_HISTORY_PATH, 'utf-8').split('\n').filter(l => l.trim());
+    const out = [];
+    for (let i = lines.length - 1; i >= 0 && out.length < cap; i--) {
+      try { out.push(JSON.parse(lines[i])); } catch { /* 跳过损坏行 */ }
+    }
+    return out;
+  } catch (e) {
+    console.error('[reflect-history] read failed:', e.message);
+    return [];
+  }
+}
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -92,7 +126,7 @@ function saveConfig(cfg) {
 }
 
 // ═══ MCP client:调用 dist/index.js 的反思工具 ═══
-function mcpCall(toolName, args = {}) {
+function mcpCall(toolName, args = {}, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
     const child = spawn(NODE_BIN, [MCP_SERVER], {
       cwd: ROOT,
@@ -108,7 +142,7 @@ function mcpCall(toolName, args = {}) {
     let buf = '';
     let id = 0;
     const pending = {};
-    const timer = setTimeout(() => { child.kill(); reject(new Error('MCP 调用超时(120s)')); }, 120000);
+    const timer = setTimeout(() => { child.kill(); reject(new Error('MCP 调用超时(' + Math.round(timeoutMs / 1000) + 's)')); }, timeoutMs);
 
     child.stdout.on('data', (d) => {
       buf += d.toString();
@@ -368,12 +402,18 @@ app.post('/api/memory/update', (req, res) => {
 });
 
 // ═══ API: POST /api/reflect/run ═══
-// mode: 'auto' | 'deep' — 通过 MCP client 调 dist/index.js
+// mode: 'auto' | 'deep'(旧,单库日常/深度反思) — 通过 MCP client 调 dist/index.js
+// mode: 'all' | 'project'(新,跨库总反思 reflect_all → reflect 总库) — 见 handleReflectAll
 app.post('/api/reflect/run', async (req, res) => {
-  const mode = req.body.mode === 'deep' ? 'reflect_deep' : 'reflect_auto';
-  const limit = parseInt(req.body.limit || (mode === 'reflect_deep' ? '500' : '30'), 10);
+  const mode = req.body.mode;
+  if (mode === 'all' || mode === 'project') {
+    return handleReflectAll(req, res);
+  }
+  // 旧模式 auto/deep(向后兼容 index.html 的反思按钮)
+  const toolName = mode === 'deep' ? 'reflect_deep' : 'reflect_auto';
+  const limit = parseInt(req.body.limit || (toolName === 'reflect_deep' ? '500' : '30'), 10);
   try {
-    const result = await mcpCall(mode, { limit });
+    const result = await mcpCall(toolName, { limit });
     const text = result?.content?.[0]?.text || '{}';
     let parsed;
     try { parsed = JSON.parse(text); } catch { parsed = { raw: text }; }
@@ -381,6 +421,88 @@ app.post('/api/reflect/run', async (req, res) => {
   } catch (e) {
     res.status(502).json({ error: '反思调用失败: ' + e.message });
   }
+});
+
+/** 跨库总反思:mode='all'(全机所有库) / mode='project'(指定库) → reflect_all → 追加历史 */
+async function handleReflectAll(req, res) {
+  const body = req.body || {};
+  const mode = body.mode === 'project' ? 'project' : 'all';
+  const dryRun = body.dryRun === true;
+  const projects = Array.isArray(body.projects)
+    ? body.projects.map(x => String(x)).filter(Boolean)
+    : (body.projects ? [String(body.projects)] : []);
+  if (mode === 'project' && projects.length === 0) {
+    return res.status(400).json({ ok: false, mode, dryRun, error: 'mode=project 时必须提供 projects 库名(如 ["hermes"])' });
+  }
+
+  const args = { dryRun };
+  if (mode === 'project') args.projects = projects;
+  if (Number.isFinite(Number(body.maxTotal)) && Number(body.maxTotal) > 0) args.maxTotal = Number(body.maxTotal);
+  if (Number.isFinite(Number(body.maxPerLib)) && Number(body.maxPerLib) > 0) args.maxPerLib = Number(body.maxPerLib);
+
+  const base = {
+    ok: false, mode, dryRun,
+    scanned: { libraries: 0, memories: 0 },
+    llm: { insights: 0, skipped: 0, saved: 0 },
+    errors: [], insightList: [],
+  };
+
+  try {
+    // reflect_all 会调 LLM,可能 1-3 分钟;超时给足 300s
+    const result = await mcpCall('reflect_all', args, 300000);
+    const text = (result?.content || []).map(c => c.text || '').join('');
+    let parsed;
+    try { parsed = JSON.parse(text); } catch { parsed = null; }
+    if (!parsed || typeof parsed !== 'object') {
+      base.errors = ['reflect_all 返回无法解析的结果: ' + text.slice(0, 300)];
+      appendReflectHistory(historyEntry(base, projects));
+      return res.status(502).json(base);
+    }
+
+    const out = {
+      ok: parsed.ok === true,
+      mode, dryRun,
+      scanned: parsed.scanned || { libraries: 0, memories: 0 },
+      llm: parsed.llm || { insights: 0, skipped: 0, saved: 0 },
+      errors: Array.isArray(parsed.errors) ? parsed.errors : [],
+      insightList: Array.isArray(parsed.insightList) ? parsed.insightList : [],
+    };
+    // reflect_all 工具级异常(index.ts catch → err():{error:{code,message}})
+    if (!out.ok && parsed.error?.message) out.errors = [parsed.error.message, ...out.errors];
+    // LLM 未配置等错误在 errors 里;若完全空但 ok=false,给个兜底
+    if (!out.ok && out.errors.length === 0) out.errors = ['reflect_all 执行失败(无详细错误)'];
+
+    appendReflectHistory(historyEntry(out, projects));
+    res.json(out);
+  } catch (e) {
+    base.errors = ['反思调用失败: ' + e.message];
+    appendReflectHistory(historyEntry(base, projects));
+    res.status(502).json(base);
+  }
+}
+
+/** 把 reflect 结果规整为历史记录条目(insightTexts/sources 按顺序对应) */
+function historyEntry(out, projects) {
+  const list = out.insightList || [];
+  return {
+    ts: new Date().toISOString(),
+    mode: out.mode,
+    projects: out.mode === 'project' ? projects : null,
+    dryRun: out.dryRun,
+    ok: out.ok === true,
+    scanned: out.scanned || { libraries: 0, memories: 0 },
+    llm: out.llm || { insights: 0, skipped: 0, saved: 0 },
+    errors: out.errors || [],
+    insightTexts: list.map(i => (typeof i.text === 'string' ? i.text : '')),
+    sources: list.map(i => (Array.isArray(i.sources) ? i.sources : [])),
+  };
+}
+
+// ═══ API: GET /api/reflect/history ═══
+// 倒序返回反思历史(最新在前),limit 默认 20 最大 100
+app.get('/api/reflect/history', (req, res) => {
+  const limit = parseInt(req.query.limit || '20', 10);
+  res.json({ ok: true, history: readReflectHistory(limit) });
 });
 
 // ═══ 记忆总成(聚合本机多实例库:只读总览/搜索/动态 + 建库)═══

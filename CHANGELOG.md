@@ -3,6 +3,25 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.12.5] — 2026-08-16 全项目优化(嵌入补全/联邦去重/配置加固)
+
+> 用户要求整体优化。Hermes 实施(避开 dsh 任务 5 并发区 web/)。
+
+### Fixed / Improved
+- **reflect_batch_embed 加 characterId 参数**('any' = 不过滤角色):修复 reflect 库(character_id NULL)与跨角色记忆无法补嵌入的问题;Anima/主系统保留 charFor(project) 人格映射(默认值)
+- **resolveFedLibraries 按目录去重**:ownDir 与 FEDERATION_DIRS 同目录时不再重复扫描(之前 local/airi 与 AIRI/airi 重复)
+- **FEDERATION_DIRS 统一正斜杠路径**(托盘 viz+桥、unified-proxy config.py):反斜杠 JSON 在 env 传递中减半导致 JSON.parse 失败静默回退的隐患(与 08-16 误移事故同根因)
+- **anima-run keys.enc 补 embedding.api_key**(从 lobehub-run 复制硅基 key):AIRI 嵌入通道此前缺 key 走 Ollama 分支 → 硅基 404,AIRI 记忆无法嵌入
+
+### Data(补嵌入,硅基 API)
+- reflect 总库 9/9 洞察补嵌入(此前 0,向量搜索/3D 图不可见)
+- hermes 库 3 条非对话记忆补嵌入(9 条 conversation_log 按设计不嵌入)
+- airi 库 4 条补嵌入(其余 conversation_log 不嵌入);AIRI 嵌入通道修复后新记忆可正常嵌入
+
+### Verified
+- 三仓库 build exit 0;dist 三实例同步(store/index/federation 含新逻辑);服务全重启
+- 补嵌入实测:reflect embedded=9 / hermes 3 / airi 4,errors 空
+
 ## [v1.12.4] — 2026-08-16 库管理设置页 + reflect_all projects 参数 + 首次人工分拣
 
 > 用户需求:手动调整库归属(清理 AIRI 混杂的 Hermes 记忆、分离助手身份叙事、分别做项目级/总反思)。管理页经 dsh(pro 模型)开发 + Hermes 独立复验。
