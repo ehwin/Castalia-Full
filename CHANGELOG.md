@@ -8,9 +8,10 @@
 > 浏览器实测报 `ForceGraph3D is not defined`(v1.12.3 MNEMO 改造后页面仍从 jsdelivr CDN 加载 3D 库,网络受限时加载失败)。
 
 ### Fixed
-- 3D 依赖改为本地 vendor:`web/public/vendor/three.min.js`(r160)+ `3d-force-graph.min.js`(1.80.0),离线可用、不依赖外网
-- server.mjs 加 `app.use('/vendor', express.static(...))` 静态路由(带 7d 缓存);index.html 两个 script 改 `/vendor/...` 本地引用
-- 三处(主仓库 + castalia-run/lobehub-run viz)已同步,3345 重启验证:vendor 两文件 200、页面引用本地、星图/总成 API 不受影响
+- 3D 依赖改为本地 vendor:`web/public/vendor/three.min.js`(r149)+ `3d-force-graph.min.js`(1.80.0),离线可用、不依赖外网
+- **坑:three r160 的 `build/three.min.js` 是弃用 stub(仅 console.warn,无 THREE 库)→ 必须用 r149(最后一个完整 UMD 构建)**,r160 下 `typeof THREE === undefined`
+- server.mjs 加 `app.use('/vendor', express.static(...))` 静态路由(带 7d 缓存);index.html 两个 script 改 `/vendor/...` 本地引用;页面/API 加 `Cache-Control: no-cache` 防浏览器沿用旧页面
+- 三处(主仓库 + castalia-run/lobehub-run viz)已同步,3345 重启验证:vendor 两文件 200、r149 无弃用 stub、页面引用本地、星图/总成 API 不受影响
 
 ## [v1.12.5] — 2026-08-16 全项目优化(嵌入补全/联邦去重/配置加固) + 反思面板
 
