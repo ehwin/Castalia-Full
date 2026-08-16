@@ -281,8 +281,19 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
   </div>
 </div>
 
-<script src="/vendor/three.min.js"></script>
-<script src="/vendor/3d-force-graph.min.js"></script>
+<script src="/vendor/three-r149.min.js"></script>
+<script src="/vendor/3d-force-graph-1.78.min.js"></script>
+<script>
+/* [viz-diag] 3D 库加载诊断(排查 ForceGraph3D is not defined) */
+window.__vizDiag = { three: typeof THREE, forceGraph3D: typeof ForceGraph3D };
+console.log('[viz-diag]', JSON.stringify(window.__vizDiag));
+document.addEventListener('DOMContentLoaded', function () {
+  if (window.__vizDiag.forceGraph3D === 'undefined') {
+    var el = document.getElementById('loading');
+    if (el) el.innerHTML = '❌ 3D 库诊断: three=' + window.__vizDiag.three + ' | ForceGraph3D=' + window.__vizDiag.forceGraph3D + ' — 若均为 undefined 说明浏览器未执行本地脚本(缓存/拦截),请强刷或换浏览器打开';
+  }
+});
+</script>
 <script>
 /* ═══════════════════ MNEMO 风格常量 ═══════════════════ */
 const MEM_TYPE_COLORS = {

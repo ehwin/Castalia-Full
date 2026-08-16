@@ -973,8 +973,8 @@ app.post('/api/manage/memory/delete', (req, res) => {
 });
 
 // ═══ 静态服务 ═══
-// 本地 3D 依赖(three.js / 3d-force-graph)——离线可用,不依赖 CDN
-app.use('/vendor', express.static(join(__dirname, 'public', 'vendor'), { maxAge: '7d' }));
+// 本地 3D 依赖(three.js / 3d-force-graph)——离线可用,不依赖 CDN;文件名带版本号,升级即换名防缓存
+app.use('/vendor', express.static(join(__dirname, 'public', 'vendor'), { maxAge: '1h' }));
 // 页面/API 不缓存,避免浏览器沿用旧页面(如 CDN 引用时代)
 app.use((req, res, next) => { res.setHeader('Cache-Control', 'no-cache'); next(); });
 app.get('/', (req, res) => {
