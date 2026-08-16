@@ -3,6 +3,24 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.12.7] — 2026-08-16 3D 依赖升级最新版(three r160 + 3d-force-graph 1.80)
+
+> 用户要求"完全用最新版"。esbuild 将 three r160(ESM) + fg 1.80 全打进单文件,页面改 ES Modules 加载。
+
+### Changed
+- `vendor/fg-1.80-full.mjs`(2.8MB 自包含,零外部 import):three r160 + 3d-force-graph 1.80 + 全部 jsm 依赖(OrbitControls/TrackballControls/FlyControls/DragControls/EffectComposer/RenderPass)打包为单文件,导出 `default`(ForceGraph3D) + `THREE` namespace
+- 页面加载: `<script type="module">` import 单文件 → 设 `window.THREE/ForceGraph3D` → 派发 `viz-libs-ready` → 主逻辑初始化包进 `__init()` 等事件后执行(普通 script 的全局函数/onclick 不受影响)
+- 诊断保留 + 4s 超时兜底(浏览器不支持 ESM 时页面给出明确提示)
+
+### Fixed(升级路上踩掉的坑)
+- fg 1.80 的 UMD(min.js)在全局 THREE 注入场景下顶层崩(`Ak.Timer is not a constructor`)→ 弃 UMD 走 esbuild ESM bundle
+- `three/webgpu` 子路径在 three r160 npm 包**不存在**(jsdelivr 返回 404 文本)→ esbuild `--alias` 到 stub(useWebGPU 默认 false,安全)
+- three-forcegraph 包带 `window.THREE ? window.THREE : bundled` 兼容包装,浏览器里正常 fallback 内置 three
+
+### Verified
+- node ESM 导入实测: `ForceGraph3D=function` | `THREE=object (REVISION=160)` | `WebGLRenderer/Group=function` | 零外部 import
+- 三处(主仓库 + castalia-run/lobehub-run viz)同步 SHA 一致;index.html 实时读盘,服务端无需重启
+
 ## [v1.12.6] — 2026-08-16 3D 依赖本地化(离线可用,修复 3D 视图无法渲染)
 
 > 浏览器实测报 `ForceGraph3D is not defined`(v1.12.3 MNEMO 改造后页面仍从 jsdelivr CDN 加载 3D 库,网络受限时加载失败)。
