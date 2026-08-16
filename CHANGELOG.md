@@ -3,6 +3,15 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.12.6] — 2026-08-16 3D 依赖本地化(离线可用,修复 3D 视图无法渲染)
+
+> 浏览器实测报 `ForceGraph3D is not defined`(v1.12.3 MNEMO 改造后页面仍从 jsdelivr CDN 加载 3D 库,网络受限时加载失败)。
+
+### Fixed
+- 3D 依赖改为本地 vendor:`web/public/vendor/three.min.js`(r160)+ `3d-force-graph.min.js`(1.80.0),离线可用、不依赖外网
+- server.mjs 加 `app.use('/vendor', express.static(...))` 静态路由(带 7d 缓存);index.html 两个 script 改 `/vendor/...` 本地引用
+- 三处(主仓库 + castalia-run/lobehub-run viz)已同步,3345 重启验证:vendor 两文件 200、页面引用本地、星图/总成 API 不受影响
+
 ## [v1.12.5] — 2026-08-16 全项目优化(嵌入补全/联邦去重/配置加固) + 反思面板
 
 > 用户要求整体优化。反思面板经 dsh(pro 模型)开发,优化项 Hermes 实施(避开并发区)。
@@ -71,13 +80,6 @@
 - 实测(3347+anima-run 库):/api/graph 110 nodes/118 links,byMemType={general:51,project:16,user:43},节点字段齐全;aggregate 7/7;页面 200
 - 真实库零改动(仅下午自检软删记忆,WAL 痕迹非本次);toggle_important 在副本库测过三态
 - 8 个新元素 id 齐全;THREE 守卫;代码审查通过(缓存/材质直改/不每帧重建)
-
-## [v1.12.3] — 2026-08-16 3D 依赖本地化(离线可用,修复 3D 视图无法渲染)
-
-### Fixed
-- 3D 依赖原从 `//cdn.jsdelivr.net` 加载,网络受限时 `ForceGraph3D is not defined` → 3D 视图(星图/总成)全部白屏。改为本地 vendor:`web/public/vendor/three.min.js`(r160)+ `3d-force-graph.min.js`(1.80.0)
-- server.mjs 加 `app.use('/vendor', express.static(...))` 静态路由(带 7d 缓存);index.html 两个 script 改 `/vendor/...` 本地引用
-- 三处(主仓库 + castalia-run/lobehub-run viz)已同步,3345 重启验证:vendor 两文件 200、页面引用本地、API 不受影响
 
 ## [v1.12.2] — 2026-08-16 3D 总成视图(二分图:软件团 ↔ 库团)
 
