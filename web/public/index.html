@@ -488,6 +488,9 @@ function onSubGalaxyCoreClick(node) {
   });
 }
 
+/* 语义簇色板(renderStar 聚类时使用,下标与 __clusterColorKey 对应) */
+const CLUSTER_COLORS_GLOBAL = ['#5cdbd3', '#ffa940', '#b37feb', '#69c0ff', '#ff85c0', '#95de64', '#ffd666', '#f759ab', '#40a9ff', '#a0d911'];
+
 function buildNode(node) {
   if (typeof THREE === 'undefined') return null; // CDN 失败时回退默认球体
   if (node.group === 'galaxy-core') return buildGalaxyCore(node);
@@ -495,11 +498,14 @@ function buildNode(node) {
   const size = node.size || 6;
   const color = memColor(node);
   const important = (node.importance || 0) >= 0.85;   // V3:重要记忆更强发光
+  const clusterCol = node.__cluster ? CLUSTER_COLORS_GLOBAL[node.__clusterColorKey || 0] : null;
   const group = new THREE.Group();
 
   const coreMesh = new THREE.Mesh(sphereGeo(size * 0.5), new THREE.MeshBasicMaterial({ color }));
   group.add(coreMesh);
-  const glowMesh = new THREE.Mesh(sphereGeo(important ? size * 1.15 : size * 0.85), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: important ? 0.42 : 0.25 }));
+  // 簇成员:光晕用簇色(叠加语义扎堆);非簇成员保持原色
+  const glowColor = clusterCol || color;
+  const glowMesh = new THREE.Mesh(sphereGeo(important ? size * 1.15 : size * 0.85), new THREE.MeshBasicMaterial({ color: glowColor, transparent: true, opacity: important ? 0.42 : 0.25 }));
   group.add(glowMesh);
 
   let labelSprite = null, labelMat = null;
@@ -543,7 +549,9 @@ function applyNodeVisual(node) {
   const isSel = selectedNodeId != null && node.id === selectedNodeId;
   const isHover = hoveredNodeId != null && node.id === hoveredNodeId;
   const base = node.__baseColor || '#64748b';
-  const glowColor = isDim ? '#3c3c46' : (isTour ? '#fbbf24' : base);
+  // 簇成员:基础光晕色 = 簇色(非 dim/导览/选中/悬停态时显示簇色扎堆)
+  const baseGlowColor = node.__cluster ? (CLUSTER_COLORS_GLOBAL[node.__clusterColorKey || 0] || base) : base;
+  const glowColor = isDim ? '#3c3c46' : (isTour ? '#fbbf24' : baseGlowColor);
   const baseGlow = node.__important ? 0.42 : 0.25;
   const glowOpacity = isDim ? 0.04 : (isTour ? 0.85 : (isSel ? 0.7 : (isHover ? 0.6 : baseGlow)));
   node.__glowMat.color.set(glowColor);
@@ -923,6 +931,50 @@ function renderStar(data) {
   const allNodes = coreNodes.concat(subCoreNodes).concat(data.nodes);
   const allLinks = data.links;
 
+  /* ── 语义簇聚类(借鉴 supermemory computeClusterAssignments):
+   * 在真实关系边(非合成边)上做 BFS 连通分量,同簇节点共享簇色
+   * 视觉:节点光晕 = 簇色(半透明),簇内连线 = 簇色,跨簇=灰——"扎堆"一眼可见 */
+  const clusterOf = {};      // node.id → clusterKey
+  const clusterColor = {};   // clusterKey → 颜色
+  // 只用强关系边聚类(排除 similarity 自动相似边——supermemory 经验:纯视觉边不进结构聚类)
+  const realLinks = allLinks.filter(l => !isSyntheticLink(l) && l.type !== 'similarity');
+  const adj = {};
+  realLinks.forEach(l => {
+    const s = linkSrcId(l), t = linkTgtId(l);
+    if (s === t) return;
+    (adj[s] = adj[s] || new Set()).add(t);
+    (adj[t] = adj[t] || new Set()).add(s);
+  });
+  let clusterIdx = 0;
+  const visited = new Set();
+  Object.keys(adj).forEach(startId => {
+    if (visited.has(startId)) return;
+    const comp = [];
+    const queue = [startId];
+    visited.add(startId);
+    while (queue.length) {
+      const id = queue.shift();
+      comp.push(id);
+      (adj[id] || []).forEach(nid => { if (!visited.has(nid)) { visited.add(nid); queue.push(nid); } });
+    }
+    if (comp.length < 2) return;                      // 孤立节点不成簇
+    const key = 'cluster:' + clusterIdx++;
+    const color = CLUSTER_COLORS_GLOBAL[clusterIdx % CLUSTER_COLORS_GLOBAL.length];
+    clusterColor[key] = color;
+    comp.forEach(id => { clusterOf[id] = key; });
+  });
+  // 节点打簇标记(供 buildNode/applyNodeVisual 用):__cluster=key,__clusterColorKey=色板下标
+  allNodes.forEach(n => {
+    n.__cluster = clusterOf[n.id] || null;
+    n.__clusterColorKey = n.__cluster ? (parseInt(n.__cluster.split(':')[1], 10) % CLUSTER_COLORS_GLOBAL.length) : null;
+  });
+  // 簇内真实边染色;合成边(桥/spoke/bridge)保持原逻辑
+  allLinks.forEach(l => {
+    if (isSyntheticLink(l)) return;
+    const k = clusterOf[linkSrcId(l)];
+    if (k && clusterOf[linkTgtId(l)] === k) l.__clusterColor = clusterColor[k];
+  });
+
   graphInstance = (graphInstance || new ForceGraph3D(document.getElementById('graph')))
     .graphData({ nodes: allNodes, links: allLinks })
     .backgroundColor(document.fullscreenElement ? '#000000' : '#15161B')
@@ -935,6 +987,7 @@ function renderStar(data) {
       if (l.type === 'subgalaxy-bridge') return 'rgba(190,200,235,0.5)';
       if (l.type === 'subgalaxy-spoke') return 'rgba(150,160,185,0.22)';
       if (l.type === 'similarity') return 'rgba(100,100,120,0.12)';
+      if (l.__clusterColor) return l.__clusterColor;   // 语义簇内连线:簇色
       const tc = linkTypeColor(l);
       if (tc) return tc;
       return 'rgba(0,168,154,0.25)';
