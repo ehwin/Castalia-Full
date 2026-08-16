@@ -844,14 +844,16 @@ function renderStar(data) {
         n.vz += (c.z - n.z) * strength;
       });
     });
-    // 星系内:适度电荷斥力让节点散开,形成"星团"而非一点
+    // 星系内:电荷斥力按节点大小增强,防止个体被吸到小核心重叠
     const charge = graphInstance.d3Force('charge');
-    if (charge && typeof charge.strength === 'function') charge.strength(-60);
+    if (charge && typeof charge.strength === 'function') {
+      charge.strength(d => -(45 + (d.size || 4) * 14));
+    }
     const linkF = graphInstance.d3Force('link');
     if (linkF && typeof linkF.distance === 'function') linkF.distance(30);
-    // 提高碰撞检测,节点不重叠
+    // 碰撞检测半径按节点大小,节点不重叠穿透
     const collide = graphInstance.d3Force('collide');
-    if (collide && typeof collide.radius === 'function') collide.radius(5);
+    if (collide && typeof collide.radius === 'function') collide.radius(d => (d.size || 4) * 0.8);
   } catch (e) { console.error('galaxy force:', e.message); }
 }
 
