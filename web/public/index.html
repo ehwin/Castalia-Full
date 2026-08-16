@@ -328,6 +328,33 @@ const SOFTWARE_COLOR = '#00A89A';
 const LIBRARY_COLOR = '#7c6ff7';
 const MEM_TYPE_ORDER = ['user', 'feedback', 'project', 'reference', 'general'];
 
+/* ═══════════════════ 连线语义编码 (ContextOS / V1) ═══════════════════ */
+/* 关系边按类型着色:暖色=因果/时序,冷色=同主题/相关/跟随 */
+const LINK_TYPE_COLORS = {
+  causes: '#ff7a45', caused_by: '#ff7a45',
+  leads_to: '#ffa940', sequence: '#ffc53d',
+  same_subject: '#5cdbd3', related_to: '#69c0ff',
+  follows: '#40a9ff', context: '#b37feb', part_of: '#ff85c0', same_event: '#ffadd2',
+};
+/* 强度估算(server 端已返回 strength,这里仅作回退) */
+const LINK_TYPE_STRENGTH = {
+  part_of: 0.9, same_event: 0.85, causes: 0.7, caused_by: 0.7,
+  leads_to: 0.65, sequence: 0.6, context: 0.5, same_subject: 0.5,
+  related_to: 0.4, follows: 0.4, similarity: 0.5,
+};
+function linkStrength(l) {
+  if (typeof l.strength === 'number') return l.strength;
+  if (typeof l.similarity === 'number') return l.similarity;
+  return LINK_TYPE_STRENGTH[l.type] != null ? LINK_TYPE_STRENGTH[l.type] : 0.5;
+}
+function isWarmLinkType(t) { return t === 'causes' || t === 'caused_by' || t === 'leads_to' || t === 'sequence'; }
+function linkTypeColor(l) { return LINK_TYPE_COLORS[l.type] || null; }
+function isSyntheticLink(l) {
+  return l.type === 'galaxy-bridge' || l.type === 'subgalaxy-spoke' || l.type === 'subgalaxy-bridge';
+}
+function linkSrcId(l) { return (l.source && typeof l.source === 'object') ? l.source.id : l.source; }
+function linkTgtId(l) { return (l.target && typeof l.target === 'object') ? l.target.id : l.target; }
+
 const sidePanel = document.getElementById('side-panel');
 const loading = document.getElementById('loading');
 const adminDrawer = document.getElementById('admin-drawer');
@@ -467,21 +494,23 @@ function buildNode(node) {
   if (node.group === 'subgalaxy-core') return buildSubGalaxyCore(node);
   const size = node.size || 6;
   const color = memColor(node);
+  const important = (node.importance || 0) >= 0.85;   // V3:重要记忆更强发光
   const group = new THREE.Group();
 
   const coreMesh = new THREE.Mesh(sphereGeo(size * 0.5), new THREE.MeshBasicMaterial({ color }));
   group.add(coreMesh);
-  const glowMesh = new THREE.Mesh(sphereGeo(size * 0.85), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.25 }));
+  const glowMesh = new THREE.Mesh(sphereGeo(important ? size * 1.15 : size * 0.85), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: important ? 0.42 : 0.25 }));
   group.add(glowMesh);
 
   let labelSprite = null, labelMat = null;
-  // 星系视图默认隐藏节点文字标签(太密集),仅星系核心/选中节点显示
-  const labelText = node.group ? (node.group + '·' + (node.label || '')) : (node.fullText || node.label || '');
-  if (labelText && (node.showLabel || (window.__galaxyMode && node.starred) || !window.__galaxyMode)) {
+  // V3:文字标签默认隐藏(防密集),选中/悬停时才显示;星系/小星系核心始终显示
+  const labelText = node.fullText || node.label || '';
+  if (labelText) {
     labelMat = new THREE.SpriteMaterial({ map: makeLabelTexture(labelText, color), transparent: true, depthTest: false, sizeAttenuation: true });
     labelSprite = new THREE.Sprite(labelMat);
     labelSprite.scale.set(size * 6, size * 0.9, 1);
     labelSprite.position.set(0, -(size + 4), 0);
+    labelSprite.visible = false;
     group.add(labelSprite);
   }
 
@@ -500,6 +529,7 @@ function buildNode(node) {
   node.__labelSprite = labelSprite;
   node.__labelMat = labelMat;
   node.__starMesh = starMesh;
+  node.__important = important;
   node.__baseColor = color;
 
   return group;
@@ -511,13 +541,17 @@ function applyNodeVisual(node) {
   const isDim = !!node.dimmed;
   const isTour = autoTargetId != null && node.id === autoTargetId;
   const isSel = selectedNodeId != null && node.id === selectedNodeId;
+  const isHover = hoveredNodeId != null && node.id === hoveredNodeId;
   const base = node.__baseColor || '#64748b';
   const glowColor = isDim ? '#3c3c46' : (isTour ? '#fbbf24' : base);
-  const glowOpacity = isDim ? 0.04 : (isTour ? 0.85 : (isSel ? 0.7 : 0.25));
+  const baseGlow = node.__important ? 0.42 : 0.25;
+  const glowOpacity = isDim ? 0.04 : (isTour ? 0.85 : (isSel ? 0.7 : (isHover ? 0.6 : baseGlow)));
   node.__glowMat.color.set(glowColor);
   node.__glowMat.opacity = glowOpacity;
   if (node.__coreMat) node.__coreMat.color.set(isDim ? '#3c3c46' : (isTour ? '#fbbf24' : base));
-  if (node.__labelMat) node.__labelMat.opacity = isDim ? 0.15 : 0.85;
+  // 标签:选中/悬停才显示(dim 时隐藏)
+  if (node.__labelSprite) node.__labelSprite.visible = !isDim && (isSel || isHover);
+  if (node.__labelMat) node.__labelMat.opacity = isDim ? 0 : 0.95;
 }
 
 function refreshNodeVisuals() {
@@ -530,7 +564,7 @@ function applyNodeSizeAndStar(node) {
   if (typeof THREE === 'undefined') return;
   const size = node.size || 6;
   if (node.__coreMesh) node.__coreMesh.geometry = sphereGeo(size * 0.5);
-  if (node.__glowMesh) node.__glowMesh.geometry = sphereGeo(size * 0.85);
+  if (node.__glowMesh) node.__glowMesh.geometry = sphereGeo(node.__important ? size * 1.15 : size * 0.85);
   if (node.__labelSprite) {
     node.__labelSprite.position.set(0, -(size + 4), 0);
     node.__labelSprite.scale.set(size * 6, size * 0.9, 1);
@@ -551,6 +585,106 @@ function flyTo(node, ms) {
   const d = Math.hypot(nx, ny, nz) || 1;
   const distRatio = 1 + distance / d;
   graphInstance.cameraPosition({ x: nx * distRatio, y: ny * distRatio, z: nz * distRatio }, { x: nx, y: ny, z: nz }, ms);
+}
+
+/* ═══════════════════ 星空背景 (V2) ═══════════════════ */
+let starField = null;
+function addStarField() {
+  if (!graphInstance || typeof THREE === 'undefined') return;
+  try {
+    const scene = graphInstance.scene();
+    if (starField && starField.parent === scene) return;   // 已添加
+    if (starField && starField.parent) starField.parent.remove(starField);
+    const N = 2000, R = 2000;
+    const pos = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const r = R * (0.4 + 0.6 * Math.random());
+      pos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+      pos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+      pos[i * 3 + 2] = r * Math.cos(phi);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const mat = new THREE.PointsMaterial({ color: 0x9fb4c8, size: 3.0, sizeAttenuation: true, transparent: true, opacity: 0.8, depthWrite: false });
+    starField = new THREE.Points(geo, mat);
+    scene.add(starField);
+  } catch (e) { console.error('starfield:', e.message); }
+}
+
+/* ═══════════════════ 相机自动环绕 (M2) ═══════════════════ */
+let orbitRAF = null;
+let orbitAngle = null;
+let lastInteraction = 0;
+let interactionBound = false;
+const ORBIT_RESUME_MS = 30000;
+function markInteraction() { lastInteraction = Date.now(); }
+function orbitTick() {
+  if (orbitRAF == null) return;
+  if (currentView === 'star' && graphInstance && !autoTourActive && selectedNodeId == null && (Date.now() - lastInteraction) > ORBIT_RESUME_MS) {
+    try {
+      const cam = graphInstance.camera();
+      const r = Math.hypot(cam.position.x, cam.position.z);
+      if (r > 10) {
+        if (orbitAngle == null) orbitAngle = Math.atan2(cam.position.z, cam.position.x);
+        orbitAngle += 0.0012;
+        graphInstance.cameraPosition({ x: r * Math.cos(orbitAngle), y: cam.position.y, z: r * Math.sin(orbitAngle) }, { x: 0, y: 0, z: 0 }, 0);
+      }
+    } catch (e) {}
+  } else {
+    orbitAngle = null;
+  }
+  orbitRAF = requestAnimationFrame(orbitTick);
+}
+function startOrbit() {
+  markInteraction();
+  if (orbitRAF == null) orbitRAF = requestAnimationFrame(orbitTick);
+}
+function bindInteraction() {
+  if (interactionBound) return;
+  interactionBound = true;
+  const graphEl = document.getElementById('graph');
+  graphEl.addEventListener('pointerdown', markInteraction);
+  graphEl.addEventListener('wheel', markInteraction, { passive: true });
+  graphEl.addEventListener('touchstart', markInteraction);
+}
+
+/* ═══════════════════ 悬停邻居高亮 (I1) ═══════════════════ */
+let hoverSet = null;
+let hoveredNodeId = null;
+let searchQuery = '';
+function oneHopNeighbors(nodeId) {
+  const set = new Set([nodeId]);
+  for (const l of (allData?.links || [])) {
+    if (isSyntheticLink(l)) continue;
+    const s = linkSrcId(l), t = linkTgtId(l);
+    if (s === nodeId) set.add(t);
+    if (t === nodeId) set.add(s);
+  }
+  return set;
+}
+function recomputeDim() {
+  for (const n of (allData?.nodes || [])) {
+    n.dimmed = (searchQuery && !matchesNode(n, searchQuery)) || (hoverSet != null && !hoverSet.has(n.id));
+  }
+  refreshNodeVisuals();
+}
+function applyLinkHoverVisibility() {
+  if (!graphInstance || typeof graphInstance.linkVisibility !== 'function') return;
+  graphInstance.linkVisibility(l => {
+    if (hoverSet == null) return true;
+    if (isSyntheticLink(l)) return true;   // 结构背景保持
+    return hoverSet.has(linkSrcId(l)) && hoverSet.has(linkTgtId(l));
+  });
+}
+function onHoverNode(node) {
+  if (currentView !== 'star') return;
+  const isCore = !!node && (node.group === 'galaxy-core' || node.group === 'subgalaxy-core');
+  hoveredNodeId = (node && !isCore) ? node.id : null;
+  hoverSet = (node && !isCore) ? oneHopNeighbors(node.id) : null;
+  recomputeDim();
+  applyLinkHoverVisibility();
 }
 
 /* ═══════════════════ 统计宫格 ═══════════════════ */
@@ -617,6 +751,7 @@ function onStarNodeClick(node) {
 
 function renderStar(data) {
   window.__galaxyMode = true;
+  hoverSet = null; hoveredNodeId = null;   // 重渲染时清空悬停状态
   /* 清理上一次追加的合成边(renderStar 会被多次调用,避免重复) */
   data.links = (data.links || []).filter(l =>
     l.type !== 'galaxy-bridge' && l.type !== 'subgalaxy-spoke' && l.type !== 'subgalaxy-bridge');
@@ -800,14 +935,19 @@ function renderStar(data) {
       if (l.type === 'subgalaxy-bridge') return 'rgba(190,200,235,0.5)';
       if (l.type === 'subgalaxy-spoke') return 'rgba(150,160,185,0.22)';
       if (l.type === 'similarity') return 'rgba(100,100,120,0.12)';
+      const tc = linkTypeColor(l);
+      if (tc) return tc;
       return 'rgba(0,168,154,0.25)';
     })
     .linkWidth(l => {
       if (l.type === 'galaxy-bridge') return (l.width || 1.2);
       if (l.type === 'subgalaxy-bridge') return (l.width || 0.8);
       if (l.type === 'subgalaxy-spoke') return 0.4;
-      if (l.type === 'similarity') return 0.3;
-      return 0.8;
+      if (l.type === 'similarity') return 0.15;
+      if (isWarmLinkType(l.type)) return 0.7;
+      if (l.type === 'same_subject') return 0.3;
+      if (l.type === 'related_to' || l.type === 'context' || l.type === 'part_of' || l.type === 'same_event') return 0.45;
+      return 0.5;
     })
     .linkDirectionalParticles(l => {
       // 星系桥:双向=两方向粒子流动;单向=单方向粒子 + 箭头(指向读取方 reflect)
@@ -815,12 +955,16 @@ function renderStar(data) {
       if (l.type === 'subgalaxy-bridge') return 1;
       if (l.type === 'subgalaxy-spoke') return 0;
       if (l.type === 'similarity') return 0;
-      return 2;
+      const n = Math.round(linkStrength(l) * 8);   // V1:按强度 0-8 粒子
+      return n > 0 ? n : 1;
     })
     .linkDirectionalParticleWidth(0.06)
     .linkDirectionalParticleSpeed(0.004)
-    // 单向桥:粒子从子节点流向 reflect,并加箭头标注方向
-    .linkDirectionalParticleColor(l => l.type === 'galaxy-bridge' ? '#ffd678' : undefined)
+    // 单向桥:粒子从子节点流向 reflect,并加箭头标注方向;语义边按类型上色
+    .linkDirectionalParticleColor(l => {
+      if (l.type === 'galaxy-bridge') return '#ffd678';
+      return linkTypeColor(l) || undefined;
+    })
     .linkDirectionalArrowLength(l => (l.type === 'galaxy-bridge' && l.dir === 'oneway') ? 6 : 0)
     .linkDirectionalArrowColor(() => 'rgba(255,214,120,0.9)')
     .linkDirectionalArrowRelPos(0.5)
@@ -828,7 +972,8 @@ function renderStar(data) {
       if (l.type === 'galaxy-bridge') return 0.7;
       if (l.type === 'subgalaxy-bridge') return 0.55;
       if (l.type === 'subgalaxy-spoke') return 0.2;
-      return 0.4;
+      if (l.type === 'similarity') return 0.3;
+      return 0.5;
     })
     .showNavInfo(false)
     .onNodeClick(node => {
@@ -836,7 +981,16 @@ function renderStar(data) {
       if (node.group === 'subgalaxy-core') return onSubGalaxyCoreClick(node);
       onStarNodeClick(node);
     })
-    .onNodeHover(node => { document.body.style.cursor = node ? 'pointer' : 'default'; });
+    .onNodeHover(node => {
+      document.body.style.cursor = node ? 'pointer' : 'default';
+      onHoverNode(node);
+    })
+    .onLinkClick(l => {
+      if (l && graphInstance && typeof graphInstance.emitParticle === 'function') graphInstance.emitParticle(l);
+    });
+  addStarField();
+  startOrbit();
+  bindInteraction();
   /* 力模拟:
    *  - subgalaxy-attract:个体节点聚拢到各自 memType 小核心(强)
    *  - galaxy-attract:个体节点再被较弱地拉向项目核心(维持星系整体内聚)
@@ -888,7 +1042,7 @@ function renderStarLegend(data) {
     const cnt = data.nodes.filter(n => (n.project || n.lib) === p).length;
     return { color: GALAXY_COLORS[p] || '#fbbf24', label: p.toUpperCase() + ' 星系', count: cnt };
   });
-  setLegend('星系与记忆类型', items.concat(galItems), '⭐ 双向互联 · ➤ 单向读取 · ━ 关系 ┄ 相似度');
+  setLegend('星系与记忆类型', items.concat(galItems), '⭐ 双向互联 · ➤ 单向读取 · 🔶 因果/时序 · 🔷 同主题/相关 · ┄ 相似度');
 }
 
 function renderAssembly(data) {
@@ -1168,9 +1322,8 @@ function matchesNode(n, q) {
 
 function applySearchVisuals() {
   if (!allData || !allData.nodes) return;
-  const q = (document.getElementById('search-input').value || '').trim().toLowerCase();
-  for (const n of allData.nodes) n.dimmed = !!q && !matchesNode(n, q);
-  refreshNodeVisuals();
+  searchQuery = (document.getElementById('search-input').value || '').trim().toLowerCase();
+  recomputeDim();
 }
 
 document.getElementById('search-input').addEventListener('input', () => {
