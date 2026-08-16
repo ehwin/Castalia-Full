@@ -2,8 +2,11 @@
 
 你是 Castalia 记忆体系统的开发代理。任务：给 viz 3D 可视化加"总成视图"——**软件节点一团、库节点一团、中间显示归属连线**（二分图）。主开发仓库：`/path\ai-memory`（当前工作目录）。
 
+**模型指令：本任务必须使用 pro 模型（deepseek-v4-pro）执行**——用户明确指定 3D 视图开发交给 pro 模型。
+
 ## 环境事实（必须遵守）
 
+- 完全权限已开启（danger-full-access）：允许写工作区外目录（如 `/path/to/castalia-run\viz`），但**只写任务需要的文件，其余一概不动**
 - node 用 137：`D:\system\New Folder\node.exe`（native 模块 ABI）
 - viz = `web/server.mjs`（Express，无静态中间件，页面需显式路由）+ `web/public/index.html`（ForceGraph3D 单页）
 - server.mjs 已有 `/api/aggregate/overview|search|recent|projects` 和 `AGGREGATE_DIRS`（默认 Hermes/LobeHub/AIRI/当前实例 memory 目录，按目录去重）、`openLibDb(file, readonly)`、`libFiles()`（返回 [{instance, project, file}]）

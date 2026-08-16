@@ -419,6 +419,30 @@ app.get('/api/aggregate/overview', (req, res) => {
   res.json({ ok: true, libraries: libs, totals });
 });
 
+// 总成视图:二分图(software 实例 ↔ library 库),只读
+app.get('/api/aggregate/graph', (req, res) => {
+  const instTotal = {};  // instance -> 记忆总数
+  const projTotal = {};  // project  -> 记忆总数(跨实例同名库合并)
+  const links = [];
+  for (const l of libFiles()) {
+    let db = null;
+    let count = 0;
+    try {
+      db = openLibDb(l.file);
+      if (db) count = db.prepare('SELECT COUNT(*) c FROM memory WHERE is_active=1').get().c;
+    } catch { count = 0; }
+    finally { if (db) db.close(); }
+    instTotal[l.instance] = (instTotal[l.instance] || 0) + count;
+    projTotal[l.project] = (projTotal[l.project] || 0) + count;
+    links.push({ source: `software:${l.instance}`, target: `library:${l.project}`, value: count });
+  }
+  const nodes = [
+    ...AGGREGATE_DIRS.map(c => ({ id: `software:${c.name}`, group: 'software', label: c.name, value: instTotal[c.name] || 0 })),
+    ...Object.keys(projTotal).sort().map(p => ({ id: `library:${p}`, group: 'library', label: p, value: projTotal[p] })),
+  ];
+  res.json({ ok: true, nodes, links });
+});
+
 // 聚合搜索(文本模式,只读,按库分组)
 app.get('/api/aggregate/search', (req, res) => {
   const q = String(req.query.q || '').trim();

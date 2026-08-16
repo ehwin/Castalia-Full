@@ -35,6 +35,9 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 #admin-btn { pointer-events: auto; margin-left: auto; background: rgba(31,34,41,0.8); border: 1px solid var(--border); color: var(--t-primary); padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: .8rem; transition: .2s; backdrop-filter: blur(10px); }
 #admin-btn:hover { border-color: var(--accent-light); color: var(--accent-light); }
 #admin-btn.active { border-color: var(--accent-hi); color: var(--accent-hi); background: rgba(126,232,216,0.15); }
+#view-btn { pointer-events: auto; margin-left: 10px; background: rgba(31,34,41,0.8); border: 1px solid var(--border); color: var(--t-primary); padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: .8rem; transition: .2s; backdrop-filter: blur(10px); }
+#view-btn:hover { border-color: var(--accent-light); color: var(--accent-light); }
+#view-btn.active { border-color: var(--accent-hi); color: var(--accent-hi); background: rgba(126,232,216,0.15); }
 #search-bar { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); width: 340px; z-index: 10; }
 #search-input { width: 100%; background: var(--panel); border: 1px solid var(--border); color: var(--t-primary); padding: 10px 16px; border-radius: 24px; font-size: .85rem; outline: none; backdrop-filter: blur(14px); }
 #search-input:focus { border-color: rgba(122,232,216,0.55); }
@@ -110,6 +113,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
   <span class="stat-pill">记忆 <b id="stat-nodes">—</b></span>
   <span class="stat-pill">连线 <b id="stat-links">—</b></span>
   <button id="admin-btn" onclick="toggleAdmin()">⚙ 管理</button>
+  <button id="view-btn" onclick="toggleView()">🗂 总成视图</button>
   <a href="/aggregate.html" style="color:var(--t-primary);font-size:.85rem;margin-left:10px;text-decoration:none;border:1px solid var(--t-border);padding:4px 10px;border-radius:8px;">🗂 记忆总成</a>
 </div>
 
@@ -264,74 +268,188 @@ function toggleEmbedMode() {
   document.getElementById('embedApiFields').style.display = mode === 'api' ? '' : 'none';
 }
 
+let currentView = 'star';
+const SOFTWARE_COLOR = '#00A89A';
+const LIBRARY_COLOR = '#7c6ff7';
+
+function updateStats(nodes, links) {
+  document.getElementById('stat-nodes').textContent = nodes;
+  document.getElementById('stat-links').textContent = links;
+}
+
+function setLegend(title, items, linkText) {
+  const legendEl = document.getElementById('legend-items');
+  legendEl.innerHTML = '';
+  const titleEl = document.querySelector('#legend .legend-title');
+  if (titleEl) titleEl.textContent = title;
+  for (const it of items) {
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    item.innerHTML = `<span class="legend-dot" style="background:${it.color}"></span> ${it.label} <span class="legend-count">${it.count}</span>`;
+    legendEl.appendChild(item);
+  }
+  const linkEl = document.querySelector('#legend .legend-link');
+  if (linkEl) linkEl.textContent = linkText || '';
+}
+
+// 记忆星图视图(现有 /api/graph 逻辑)
+function renderStar(data) {
+  const categories = [...new Set(data.nodes.map(n => n.category))];
+  const anchorPos = {};
+  categories.forEach((cat, i) => {
+    const phi = Math.acos(1 - 2 * (i + 0.5) / categories.length);
+    const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+    const r = 120;
+    anchorPos[cat] = {
+      x: r * Math.sin(phi) * Math.cos(theta),
+      y: r * Math.sin(phi) * Math.sin(theta),
+      z: r * Math.cos(phi),
+    };
+  });
+  data.nodes.forEach(node => {
+    node.fx = null; node.fy = null; node.fz = null;
+    const a = anchorPos[node.category];
+    if (a) {
+      node.x = a.x + (Math.random() - 0.5) * 30;
+      node.y = a.y + (Math.random() - 0.5) * 30;
+      node.z = a.z + (Math.random() - 0.5) * 30;
+    } else {
+      node.x = node.y = node.z = 0;
+    }
+  });
+
+  graphInstance = (graphInstance || new ForceGraph3D(document.getElementById('graph')))
+    .graphData(data)
+    .backgroundColor('#15161B')
+    .nodeColor(n => (CATEGORY_COLORS[n.category] || {color:'#90A4AE'}).color)
+    .nodeVal(n => n.importance * 6 + 4)
+    .nodeOpacity(0.9)
+    .nodeLabel(n => {
+      const c = CATEGORY_COLORS[n.category] || {label: n.category};
+      return `<div style="background:rgba(10,10,14,0.92);backdrop-filter:blur(8px);padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);font-size:0.8rem;max-width:320px;"><div style="color:${(CATEGORY_COLORS[n.category]||{color:'#aaa'}).color};font-size:0.65rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">${c.label}</div>${n.label}</div>`;
+    })
+    .linkColor(l => l.type === 'similarity' ? 'rgba(100,100,120,0.12)' : 'rgba(0,168,154,0.25)')
+    .linkWidth(l => l.type === 'similarity' ? 0.3 : 0.8)
+    .linkDirectionalParticles(l => l.type === 'similarity' ? 0 : 2)
+    .linkDirectionalParticleWidth(0.03)
+    .linkDirectionalParticleSpeed(0.002)
+    .linkOpacity(0.4)
+    .showNavInfo(false)
+    .onNodeClick(node => {
+      showPanel(node);
+      graphInstance.cameraPosition(
+        { x: node.x * 1.8, y: node.y * 1.8, z: node.z * 1.8 },
+        { x: node.x, y: node.y, z: node.z },
+        1000
+      );
+    })
+    .onNodeHover(node => { document.body.style.cursor = node ? 'pointer' : 'default'; });
+}
+
+function renderStarLegend(data) {
+  const catCounts = {};
+  data.nodes.forEach(n => { catCounts[n.category] = (catCounts[n.category] || 0) + 1; });
+  const items = Object.keys(CATEGORY_COLORS)
+    .filter(cat => catCounts[cat])
+    .map(cat => ({ color: CATEGORY_COLORS[cat].color, label: CATEGORY_COLORS[cat].label, count: catCounts[cat] }));
+  setLegend('记忆分类', items, '━ 关系 \u00a0 ┄ 相似度');
+}
+
+// 总成视图(二分图:software 左团 / library 右团 / 归属连线)
+function renderAssembly(data) {
+  data.nodes.forEach(n => {
+    n.fx = n.group === 'software' ? -250 : 250;
+    n.fy = null; n.fz = null;
+    n.x = n.fx;
+    n.y = (Math.random() - 0.5) * 260;
+    n.z = (Math.random() - 0.5) * 260;
+  });
+
+  graphInstance = (graphInstance || new ForceGraph3D(document.getElementById('graph')))
+    .graphData({ nodes: data.nodes, links: data.links || [] })
+    .backgroundColor('#15161B')
+    .nodeColor(n => n.group === 'software' ? SOFTWARE_COLOR : LIBRARY_COLOR)
+    .nodeVal(n => 4 + Math.sqrt(n.value || 0) * 2)
+    .nodeOpacity(0.95)
+    .nodeLabel(n => {
+      const c = n.group === 'software' ? SOFTWARE_COLOR : LIBRARY_COLOR;
+      return `<div style="background:rgba(10,10,14,0.92);backdrop-filter:blur(8px);padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);font-size:0.8rem;max-width:320px;"><div style="color:${c};font-size:0.65rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">${n.group}</div>${n.label} · <b style="color:${c}">${n.value || 0}</b> 条</div>`;
+    })
+    .linkColor(() => 'rgba(0,168,154,0.32)')
+    .linkWidth(l => 0.6 + Math.sqrt(l.value || 0) * 0.18)
+    .linkDirectionalParticles(0)
+    .linkDirectionalParticleWidth(0)
+    .linkOpacity(0.45)
+    .showNavInfo(false)
+    .onNodeClick(node => {
+      graphInstance.cameraPosition(
+        { x: node.x * 1.8, y: node.y * 1.8, z: node.z * 1.8 },
+        { x: node.x, y: node.y, z: node.z },
+        1000
+      );
+    })
+    .onNodeHover(node => { document.body.style.cursor = node ? 'pointer' : 'default'; });
+}
+
+function renderAssemblyLegend(data) {
+  const sw = data.nodes.filter(n => n.group === 'software').length;
+  const lb = data.nodes.filter(n => n.group === 'library').length;
+  setLegend('总成视图', [
+    { color: SOFTWARE_COLOR, label: '软件实例', count: sw },
+    { color: LIBRARY_COLOR, label: '记忆库', count: lb },
+  ], '━ 归属连线');
+}
+
+function toggleView() {
+  const btn = document.getElementById('view-btn');
+  if (currentView === 'star') {
+    btn.disabled = true;
+    fetch('/api/aggregate/graph')
+      .then(r => r.json())
+      .then(d => {
+        if (d.error || !Array.isArray(d.nodes)) throw new Error(d.error || '总成数据解析失败');
+        if (!d.nodes.length) {
+          loading.textContent = '📭 总成视图暂无数据(各实例 memory 目录下没有 project-*.sqlite)';
+          loading.classList.add('error');
+          loading.style.display = '';
+          return;
+        }
+        loading.style.display = 'none';
+        loading.classList.remove('error');
+        renderAssembly(d);
+        renderAssemblyLegend(d);
+        updateStats(d.nodes.length, d.links.length);
+        currentView = 'assembly';
+        btn.textContent = '✦ 记忆星图';
+        btn.classList.add('active');
+      })
+      .catch(err => {
+        loading.textContent = '❌ 总成视图加载失败: ' + err.message;
+        loading.classList.add('error');
+        loading.style.display = '';
+      })
+      .finally(() => { btn.disabled = false; });
+  } else {
+    closePanel();
+    renderStar(allData);
+    renderStarLegend(allData);
+    updateStats(allData.nodes.length, allData.stats ? allData.stats.totalLinks : allData.links.length);
+    currentView = 'star';
+    btn.textContent = '🗂 总成视图';
+    btn.classList.remove('active');
+    loading.style.display = 'none';
+    loading.classList.remove('error');
+  }
+}
+
 fetch('/api/graph')
   .then(r => r.json())
   .then(data => {
     if (data.error || !data.nodes) throw new Error(data.error || '无法读取记忆库');
     allData = data;
-    document.getElementById('stat-nodes').textContent = data.nodes.length;
-    document.getElementById('stat-links').textContent = data.stats.totalLinks;
-
-    const legendEl = document.getElementById('legend-items');
-    const catCounts = {};
-    data.nodes.forEach(n => { catCounts[n.category] = (catCounts[n.category] || 0) + 1; });
-    Object.keys(CATEGORY_COLORS).forEach(cat => {
-      if (!catCounts[cat]) return;
-      const c = CATEGORY_COLORS[cat];
-      const item = document.createElement('div');
-      item.className = 'legend-item';
-      item.innerHTML = `<span class="legend-dot" style="background:${c.color}"></span> ${c.label} <span class="legend-count">${catCounts[cat]}</span>`;
-      legendEl.appendChild(item);
-    });
-
-    const categories = [...new Set(data.nodes.map(n => n.category))];
-    const anchorPos = {};
-    categories.forEach((cat, i) => {
-      const phi = Math.acos(1 - 2 * (i + 0.5) / categories.length);
-      const theta = Math.PI * (1 + Math.sqrt(5)) * i;
-      const r = 120;
-      anchorPos[cat] = {
-        x: r * Math.sin(phi) * Math.cos(theta),
-        y: r * Math.sin(phi) * Math.sin(theta),
-        z: r * Math.cos(phi),
-      };
-    });
-    data.nodes.forEach(node => {
-      const a = anchorPos[node.category];
-      if (a) {
-        node.x = a.x + (Math.random() - 0.5) * 30;
-        node.y = a.y + (Math.random() - 0.5) * 30;
-        node.z = a.z + (Math.random() - 0.5) * 30;
-      }
-    });
-
-    graphInstance = new ForceGraph3D(document.getElementById('graph'))
-      .graphData(data)
-      .backgroundColor('#15161B')
-      .nodeColor(n => (CATEGORY_COLORS[n.category] || {color:'#90A4AE'}).color)
-      .nodeVal(n => n.importance * 6 + 4)
-      .nodeOpacity(0.9)
-      .nodeLabel(n => {
-        const c = CATEGORY_COLORS[n.category] || {label: n.category};
-        return `<div style="background:rgba(10,10,14,0.92);backdrop-filter:blur(8px);padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);font-size:0.8rem;max-width:320px;"><div style="color:${(CATEGORY_COLORS[n.category]||{color:'#aaa'}).color};font-size:0.65rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">${c.label}</div>${n.label}</div>`;
-      })
-      .linkColor(l => l.type === 'similarity' ? 'rgba(100,100,120,0.12)' : 'rgba(0,168,154,0.25)')
-      .linkWidth(l => l.type === 'similarity' ? 0.3 : 0.8)
-      .linkDirectionalParticles(l => l.type === 'similarity' ? 0 : 2)
-      .linkDirectionalParticleWidth(0.03)
-      .linkDirectionalParticleSpeed(0.002)
-      .linkOpacity(0.4)
-      .showNavInfo(false)
-      .onNodeClick(node => {
-        showPanel(node);
-        graphInstance.cameraPosition(
-          { x: node.x * 1.8, y: node.y * 1.8, z: node.z * 1.8 },
-          { x: node.x, y: node.y, z: node.z },
-          1000
-        );
-      })
-      .onNodeHover(node => { document.body.style.cursor = node ? 'pointer' : 'default'; });
-
+    updateStats(data.nodes.length, data.stats.totalLinks);
+    renderStarLegend(data);
+    renderStar(data);
     loading.style.display = 'none';
     return fetch('/api/status').then(r => r.json());
   })
@@ -403,6 +521,7 @@ function showPanel(node) {
 function closePanel() { sidePanel.classList.remove('open'); }
 
 document.getElementById('search-input').addEventListener('input', (e) => {
+  if (currentView !== 'star') return;
   const q = e.target.value.trim().toLowerCase();
   if (!graphInstance || !allData) return;
   if (!q) {

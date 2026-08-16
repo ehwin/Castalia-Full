@@ -3,6 +3,19 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.12.2] — 2026-08-16 3D 总成视图(二分图:软件团 ↔ 库团)
+
+> 用户拍板"全权交给 dsh + pro 模型"独立开发(完全权限 danger-full-access),Hermes 独立复验后上线。
+
+### Added
+- `GET /api/aggregate/graph`(只读):二分图数据——software 节点=AGGREGATE_DIRS 各实例(value=该实例记忆总数),library 节点=跨实例去重 project(value=跨实例总数),links=实例拥有库(value=该实例该库记忆数);复用 libFiles()+openLibDb() 只读计数,单库异常降级 0,库文件即开即关
+- `index.html`「🗂 总成视图」切换按钮:software 左团(fx=-250,青绿 #00A89A)/library 右团(fx=+250,紫 #7c6ff7),节点大小 4+√value×2、连线粗细按 value、label 显示 `group · value 条`;图例/统计随视图切换;空库提示不崩;搜索框总成视图下失效保护;切回「记忆星图」完整恢复(清 fx/fy/fz 重算分类锚点,复用同一 graphInstance)
+
+### Verified(独立复验)
+- git status 仅 3 目标文件;node --check(137) exit 0;SHA256 主仓库 vs castalia-run/lobehub-run 四文件全 MATCH
+- 临时 3347 实测:8 节点 8 边,AIRI/default=110,原 /api/graph 与静态页不受影响
+- 3345(castalia-run viz)已重启加载新代码(7 节点);lobehub-run viz 文件已同步(未启动服务)
+
 ## [v1.12.1] — 2026-08-16 末端反思模块 reflect_all(跨库反思 → reflect 总库)
 
 > 用户拍板"末端互通":日常各库隔离,反思时全量聚合。实现经 dsh(DeepSeek Harness)编写 + Hermes 独立复验。
