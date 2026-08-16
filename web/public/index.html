@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Castalia — Memory Console</title>
+<title>Castalia — Memory Constellation</title>
 <style>
 :root {
   --bg: #15161B;
@@ -22,6 +22,14 @@
   --accent-hi: #A0F8E8;
   --red: #f4554f;
   --green: #57E6C4;
+  --rose: #f43f5e;
+  --gold: #fbbf24;
+  /* mem_type 五色 */
+  --c-user: #14b8a6;
+  --c-feedback: #f59e0b;
+  --c-project: #8b5cf6;
+  --c-reference: #3b82f6;
+  --c-general: #64748b;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; }
@@ -32,12 +40,11 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 #top-bar .logo { font-weight: 600; color: var(--t-bright); letter-spacing: 1px; font-size: .95rem; }
 #top-bar .stat-pill { margin-left: 16px; font-size: .75rem; color: var(--t-secondary); }
 #top-bar .stat-pill b { color: var(--t-primary); font-weight: 500; }
-#admin-btn { pointer-events: auto; margin-left: auto; background: rgba(31,34,41,0.8); border: 1px solid var(--border); color: var(--t-primary); padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: .8rem; transition: .2s; backdrop-filter: blur(10px); }
-#admin-btn:hover { border-color: var(--accent-light); color: var(--accent-light); }
-#admin-btn.active { border-color: var(--accent-hi); color: var(--accent-hi); background: rgba(126,232,216,0.15); }
-#view-btn { pointer-events: auto; margin-left: 10px; background: rgba(31,34,41,0.8); border: 1px solid var(--border); color: var(--t-primary); padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: .8rem; transition: .2s; backdrop-filter: blur(10px); }
-#view-btn:hover { border-color: var(--accent-light); color: var(--accent-light); }
-#view-btn.active { border-color: var(--accent-hi); color: var(--accent-hi); background: rgba(126,232,216,0.15); }
+.tool-btn { pointer-events: auto; margin-left: 10px; background: rgba(31,34,41,0.8); border: 1px solid var(--border); color: var(--t-primary); padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: .8rem; transition: .2s; backdrop-filter: blur(10px); }
+.tool-btn:hover { border-color: var(--accent-light); color: var(--accent-light); }
+.tool-btn.active { border-color: var(--accent-hi); color: var(--accent-hi); background: rgba(126,232,216,0.15); }
+.tool-btn:disabled { opacity: .4; cursor: not-allowed; }
+#admin-btn { margin-left: auto; }
 #search-bar { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); width: 340px; z-index: 10; }
 #search-input { width: 100%; background: var(--panel); border: 1px solid var(--border); color: var(--t-primary); padding: 10px 16px; border-radius: 24px; font-size: .85rem; outline: none; backdrop-filter: blur(14px); }
 #search-input:focus { border-color: rgba(122,232,216,0.55); }
@@ -48,22 +55,43 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 .legend-count { margin-left: auto; opacity: .6; }
 .legend-divider { border-top: 1px solid var(--border); margin: 8px 0; }
 #controls-hint { position: fixed; bottom: 16px; right: 16px; font-size: .7rem; color: rgba(255,255,255,0.3); z-index: 10; }
-#side-panel { position: fixed; right: 16px; top: 64px; bottom: 56px; width: 360px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; transform: translateX(420px); transition: transform .3s ease; overflow-y: auto; backdrop-filter: blur(24px) saturate(1.4); z-index: 20; }
+
+/* ─── 统计宫格 (MNEMO MemoryStats) ─── */
+#stats-bar { position: fixed; top: 52px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; z-index: 9; }
+#stats-grid { display: flex; gap: 8px; flex-wrap: nowrap; }
+.stat-cell { background: rgba(0,0,0,0.4); border: 1px solid; border-radius: 10px; padding: 8px 14px; text-align: center; min-width: 76px; backdrop-filter: blur(10px); }
+.stat-num { font-size: 1.4rem; font-weight: 800; line-height: 1; }
+.stat-label { font-size: 0.55rem; color: var(--t-secondary); font-weight: 600; letter-spacing: 1px; margin-top: 4px; }
+#stats-toggle { pointer-events: auto; background: rgba(31,34,41,0.8); border: 1px solid var(--border); color: var(--t-secondary); width: 26px; height: 26px; border-radius: 6px; cursor: pointer; }
+#stats-bar.collapsed #stats-grid { display: none; }
+
+/* ─── Auto-Tour 指示器 ─── */
+#tour-indicator { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); display: none; align-items: center; gap: 8px; background: rgba(20,184,166,0.15); border: 1px solid rgba(20,184,166,0.3); padding: 6px 12px; border-radius: 20px; z-index: 9; }
+#tour-indicator.on { display: flex; }
+#tour-indicator .dot { width: 8px; height: 8px; border-radius: 50%; background: #14b8a6; animation: breathe 2s ease-in-out infinite; display: inline-block; }
+#tour-indicator .label { font-size: 0.6rem; color: #14b8a6; font-family: 'JetBrains Mono', Consolas, monospace; font-weight: 600; letter-spacing: 1px; }
+@keyframes breathe { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+/* ─── 详情卡片 (MNEMO MemoryDetail) ─── */
+#side-panel { position: fixed; right: 16px; top: 64px; bottom: 56px; width: 360px; background: rgba(0,0,0,0.5); border: 1px solid var(--border); border-left: 2px solid #14b8a6; border-radius: 14px; padding: 18px; transform: translateX(420px); transition: transform .45s cubic-bezier(.22,1.2,.36,1); overflow-y: auto; backdrop-filter: blur(20px) saturate(1.2); z-index: 20; box-shadow: -8px 0 32px rgba(0,0,0,0.5); }
 #side-panel.open { transform: translateX(0); }
-.panel-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-.close-btn { background: none; border: 1px solid var(--border); color: var(--t-secondary); width: 26px; height: 26px; border-radius: 6px; cursor: pointer; }
-.close-btn:hover { color: var(--t-bright); border-color: var(--b-hover); }
-.panel-type { font-size: .72rem; text-transform: uppercase; letter-spacing: 1px; }
-.panel-category { font-size: .8rem; color: var(--t-primary); }
-.panel-text { font-size: .92rem; line-height: 1.6; color: var(--t-primary); margin: 12px 0; white-space: pre-wrap; }
+.panel-header { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 12px; }
+.panel-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; margin-top: 3px; }
+.panel-badge { font-size: .65rem; letter-spacing: 2px; font-weight: 600; flex: 1; }
+.panel-actions { display: flex; gap: 6px; align-items: center; }
+.panel-actions button { background: transparent; border: none; color: var(--t-secondary); cursor: pointer; font-size: 1.05rem; line-height: 1; padding: 2px 4px; }
+.panel-actions button:hover { color: var(--t-bright); }
+.panel-actions .close-btn { background: none; border: 1px solid var(--border); color: var(--t-secondary); width: 26px; height: 26px; border-radius: 6px; cursor: pointer; font-size: .9rem; }
+.panel-actions .close-btn:hover { color: var(--t-bright); border-color: var(--b-hover); }
+.panel-actions #panel-star-btn.on { color: var(--rose); }
+.panel-text { font-size: .95rem; line-height: 1.7; color: var(--t-primary); margin-bottom: 14px; white-space: pre-wrap; word-break: break-word; }
 .panel-section { margin-top: 12px; }
-.panel-section-label { font-size: .68rem; color: var(--t-secondary); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+.panel-section-label { font-size: .6rem; color: var(--t-secondary); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
+.panel-value { font-size: .78rem; color: var(--t-primary); }
 .tag { display: inline-block; background: rgba(0,168,154,0.15); color: var(--accent-light); border-radius: 6px; padding: 2px 8px; font-size: .72rem; margin: 2px 4px 2px 0; }
 .importance-bar { background: rgba(255,255,255,0.08); border-radius: 4px; height: 6px; overflow: hidden; }
 .importance-fill { background: linear-gradient(90deg, var(--accent-deep), var(--accent-light)); height: 100%; border-radius: 4px; transition: width .4s; }
-.meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
-.meta-item { font-size: .75rem; color: var(--t-secondary); }
-.meta-item b { color: var(--t-primary); font-weight: 500; }
+.panel-importance-val { font-size: .7rem; color: var(--t-secondary); margin-top: 4px; }
 
 /* ─── 管理抽屉 ─── */
 #admin-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 420px; background: #1F2229; border-left: 1px solid var(--border); transform: translateX(100%); transition: transform .3s ease; z-index: 30; overflow-y: auto; padding: 16px; }
@@ -112,42 +140,60 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
   <span class="logo">✦ Castalia</span>
   <span class="stat-pill">记忆 <b id="stat-nodes">—</b></span>
   <span class="stat-pill">连线 <b id="stat-links">—</b></span>
-  <button id="admin-btn" onclick="toggleAdmin()">⚙ 管理</button>
-  <button id="view-btn" onclick="toggleView()">🗂 总成视图</button>
-  <a href="/aggregate.html" style="color:var(--t-primary);font-size:.85rem;margin-left:10px;text-decoration:none;border:1px solid var(--t-border);padding:4px 10px;border-radius:8px;">🗂 记忆总成</a>
+  <button id="tour-btn" class="tool-btn" onclick="toggleTour()" disabled>▶ 自动导览</button>
+  <button id="fs-btn" class="tool-btn" onclick="toggleFullscreen()">⛶ 全屏</button>
+  <button id="view-btn" class="tool-btn" onclick="toggleView()">🗂 总成视图</button>
+  <button id="admin-btn" class="tool-btn" onclick="toggleAdmin()">⚙ 管理</button>
+  <a href="/aggregate.html" style="pointer-events:auto;color:var(--t-primary);font-size:.85rem;margin-left:10px;text-decoration:none;border:1px solid var(--border);padding:4px 10px;border-radius:8px;">🗂 记忆总成</a>
 </div>
+
+<div id="stats-bar">
+  <div id="stats-grid"></div>
+  <button id="stats-toggle" onclick="toggleStats()" title="折叠/展开统计">▾</button>
+</div>
+
+<div id="tour-indicator"><span class="dot"></span><span class="label" id="tour-indicator-label">AUTO-TOUR</span></div>
 
 <div id="search-bar">
   <input type="text" id="search-input" placeholder="搜索记忆..." />
 </div>
 
 <div id="legend">
-  <div class="legend-title">记忆分类</div>
+  <div class="legend-title">记忆类型</div>
   <div id="legend-items"></div>
   <div class="legend-divider"></div>
   <div class="legend-link">━ 关系 &nbsp; ┄ 相似度</div>
 </div>
 
-<div id="controls-hint">拖拽旋转 · 滚轮缩放 · 点击查看</div>
+<div id="controls-hint">拖拽旋转 · 滚轮缩放 · 点击查看 · ▶ 自动导览 · ⛶ 全屏</div>
 
 <div id="side-panel">
   <div class="panel-header">
-    <button class="close-btn" onclick="closePanel()">×</button>
-    <div class="panel-type" id="panel-type"></div>
-    <div class="panel-category" id="panel-category"></div>
+    <span class="panel-dot" id="panel-dot"></span>
+    <span class="panel-badge" id="panel-badge"></span>
+    <div class="panel-actions">
+      <button id="panel-star-btn" onclick="toggleStar()" title="星标">⭐</button>
+      <button id="panel-del-btn" onclick="deletePanelNode()" title="删除">🗑</button>
+      <button class="close-btn" onclick="closePanel()">×</button>
+    </div>
   </div>
   <div class="panel-text" id="panel-text"></div>
+  <div class="panel-section">
+    <div class="panel-section-label">时间</div>
+    <div class="panel-value" id="panel-time"></div>
+  </div>
+  <div class="panel-section">
+    <div class="panel-section-label">来源</div>
+    <div class="panel-value" id="panel-source"></div>
+  </div>
+  <div class="panel-section">
+    <div class="panel-section-label">重要度</div>
+    <div class="importance-bar"><div class="importance-fill" id="panel-importance"></div></div>
+    <div class="panel-importance-val" id="panel-importance-val"></div>
+  </div>
   <div class="panel-section" id="panel-tags-section">
     <div class="panel-section-label">标签</div>
     <div id="panel-tags"></div>
-  </div>
-  <div class="panel-section">
-    <div class="panel-section-label">重要性</div>
-    <div class="importance-bar"><div class="importance-fill" id="panel-importance"></div></div>
-  </div>
-  <div class="panel-section">
-    <div class="panel-section-label">详情</div>
-    <div class="meta-grid" id="panel-meta"></div>
   </div>
 </div>
 
@@ -234,44 +280,206 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
   </div>
 </div>
 
-<script src="//cdn.jsdelivr.net/npm/3d-force-graph"></script>
+<script src="//cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="//cdn.jsdelivr.net/npm/3d-force-graph@1.80.0/dist/3d-force-graph.min.js"></script>
 <script>
-const CATEGORY_COLORS = {
-  milestone:     { color: '#FFA726', label: '里程碑' },
-  identity:      { color: '#66BB6A', label: '身份设定' },
-  relationship:  { color: '#42A5F5', label: '核心关系' },
-  emotional:     { color: '#FF6B6B', label: '情绪积淀' },
-  mood_snapshot: { color: '#FFD54F', label: '情绪快照' },
-  knowledge:     { color: '#26A69A', label: '知识/事实' },
-  preference:    { color: '#EC407A', label: '偏好' },
-  conversation:  { color: '#26C6DA', label: '对话片段' },
-  decision:      { color: '#FFA726', label: '决策' },
-  mistake:       { color: '#EF5350', label: '错误教训' },
-  general:       { color: '#78909C', label: '其他' },
+/* ═══════════════════ MNEMO 风格常量 ═══════════════════ */
+const MEM_TYPE_COLORS = {
+  user: '#14b8a6',
+  feedback: '#f59e0b',
+  project: '#8b5cf6',
+  reference: '#3b82f6',
+  general: '#64748b',
 };
+const MEM_TYPE_LABELS = {
+  user: '用户画像',
+  feedback: '反馈纠偏',
+  project: '项目上下文',
+  reference: '外部引用',
+  general: '通用',
+};
+const TYPE_FALLBACK_COLORS = { episodic: '#f59e0b', semantic: '#8b5cf6', working: '#14b8a6' };
+const SOFTWARE_COLOR = '#00A89A';
+const LIBRARY_COLOR = '#7c6ff7';
+const MEM_TYPE_ORDER = ['user', 'feedback', 'project', 'reference', 'general'];
 
 const sidePanel = document.getElementById('side-panel');
 const loading = document.getElementById('loading');
 const adminDrawer = document.getElementById('admin-drawer');
 let graphInstance = null;
 let allData = null;
-
-function toggleAdmin() {
-  const open = adminDrawer.classList.toggle('open');
-  document.getElementById('admin-btn').classList.toggle('active', open);
-  if (open) { loadConfig(); loadMems(); }
-}
-
-function toggleEmbedMode() {
-  const mode = document.getElementById('embedMode').value;
-  document.getElementById('embedOllamaFields').style.display = mode === 'ollama' ? '' : 'none';
-  document.getElementById('embedApiFields').style.display = mode === 'api' ? '' : 'none';
-}
-
+let assemblyData = null;
 let currentView = 'star';
-const SOFTWARE_COLOR = '#00A89A';
-const LIBRARY_COLOR = '#7c6ff7';
+let selectedNodeId = null;
+let panelNode = null;
+let autoTourActive = false;
+let autoTourTimer = null;
+let autoTargetId = null;
 
+/* ═══════════════════ 节点渲染 (THREE.Group = 核心球 + 光晕 + 文字 Sprite) ═══════════════════ */
+const _geoCache = new Map();
+const _texCache = new Map();
+
+function sphereGeo(radius) {
+  const key = Math.round(radius * 100);
+  if (!_geoCache.has(key)) _geoCache.set(key, new THREE.SphereGeometry(radius, 24, 24));
+  return _geoCache.get(key);
+}
+
+function makeLabelTexture(text, color) {
+  const key = text + '|' + color;
+  if (_texCache.has(key)) return _texCache.get(key);
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  const maxChars = 22;
+  const displayText = text.length > maxChars ? text.substring(0, maxChars) + '…' : text;
+  ctx.font = 'bold 24px "JetBrains Mono", Consolas, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0,0,0,0.8)';
+  ctx.shadowBlur = 6;
+  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.85;
+  ctx.fillText(displayText, 256, 32);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  if (_texCache.size > 800) { const first = _texCache.keys().next().value; _texCache.delete(first); }
+  _texCache.set(key, texture);
+  return texture;
+}
+
+function memColor(node) {
+  if (node.group === 'software') return SOFTWARE_COLOR;
+  if (node.group === 'library') return LIBRARY_COLOR;
+  if (node.memType && MEM_TYPE_COLORS[node.memType]) return MEM_TYPE_COLORS[node.memType];
+  if (node.type && TYPE_FALLBACK_COLORS[node.type]) return TYPE_FALLBACK_COLORS[node.type];
+  return '#64748b';
+}
+
+function buildNode(node) {
+  if (typeof THREE === 'undefined') return null; // CDN 失败时回退默认球体
+  const size = node.size || 6;
+  const color = memColor(node);
+  const group = new THREE.Group();
+
+  const coreMesh = new THREE.Mesh(sphereGeo(size * 0.5), new THREE.MeshBasicMaterial({ color }));
+  group.add(coreMesh);
+  const glowMesh = new THREE.Mesh(sphereGeo(size * 0.85), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.25 }));
+  group.add(glowMesh);
+
+  let labelSprite = null, labelMat = null;
+  const labelText = node.group ? (node.group + '·' + (node.label || '')) : (node.fullText || node.label || '');
+  if (labelText) {
+    labelMat = new THREE.SpriteMaterial({ map: makeLabelTexture(labelText, color), transparent: true, depthTest: false, sizeAttenuation: true });
+    labelSprite = new THREE.Sprite(labelMat);
+    labelSprite.scale.set(size * 6, size * 0.9, 1);
+    labelSprite.position.set(0, -(size + 4), 0);
+    group.add(labelSprite);
+  }
+
+  let starMesh = null;
+  if (node.starred) {
+    starMesh = new THREE.Mesh(sphereGeo(size * 0.2), new THREE.MeshBasicMaterial({ color: 0xf43f5e }));
+    starMesh.position.set(0, size + 2, 0);
+    group.add(starMesh);
+  }
+
+  node.__group = group;
+  node.__coreMesh = coreMesh;
+  node.__glowMesh = glowMesh;
+  node.__coreMat = coreMesh.material;
+  node.__glowMat = glowMesh.material;
+  node.__labelSprite = labelSprite;
+  node.__labelMat = labelMat;
+  node.__starMesh = starMesh;
+  node.__baseColor = color;
+
+  return group;
+}
+
+/* 单节点视觉状态刷新(选中/导览金高亮/搜索变灰) — 直接改材质,不重建几何/纹理 */
+function applyNodeVisual(node) {
+  if (!node.__glowMat) return;
+  const isDim = !!node.dimmed;
+  const isTour = autoTargetId != null && node.id === autoTargetId;
+  const isSel = selectedNodeId != null && node.id === selectedNodeId;
+  const base = node.__baseColor || '#64748b';
+  const glowColor = isDim ? '#3c3c46' : (isTour ? '#fbbf24' : base);
+  const glowOpacity = isDim ? 0.04 : (isTour ? 0.85 : (isSel ? 0.7 : 0.25));
+  node.__glowMat.color.set(glowColor);
+  node.__glowMat.opacity = glowOpacity;
+  if (node.__coreMat) node.__coreMat.color.set(isDim ? '#3c3c46' : (isTour ? '#fbbf24' : base));
+  if (node.__labelMat) node.__labelMat.opacity = isDim ? 0.15 : 0.85;
+}
+
+function refreshNodeVisuals() {
+  if (!allData || !allData.nodes) return;
+  for (const n of allData.nodes) applyNodeVisual(n);
+}
+
+/* 星标切换 → 重设尺寸/星标小球(保留相机视角) */
+function applyNodeSizeAndStar(node) {
+  if (typeof THREE === 'undefined') return;
+  const size = node.size || 6;
+  if (node.__coreMesh) node.__coreMesh.geometry = sphereGeo(size * 0.5);
+  if (node.__glowMesh) node.__glowMesh.geometry = sphereGeo(size * 0.85);
+  if (node.__labelSprite) {
+    node.__labelSprite.position.set(0, -(size + 4), 0);
+    node.__labelSprite.scale.set(size * 6, size * 0.9, 1);
+  }
+  if (node.starred && !node.__starMesh) {
+    node.__starMesh = new THREE.Mesh(sphereGeo(size * 0.2), new THREE.MeshBasicMaterial({ color: 0xf43f5e }));
+    node.__starMesh.position.set(0, size + 2, 0);
+    node.__group.add(node.__starMesh);
+  } else if (!node.starred && node.__starMesh) {
+    node.__group.remove(node.__starMesh);
+    node.__starMesh = null;
+  }
+}
+
+function flyTo(node, ms) {
+  const nx = node.x || 0, ny = node.y || 0, nz = node.z || 0;
+  const distance = 120;
+  const d = Math.hypot(nx, ny, nz) || 1;
+  const distRatio = 1 + distance / d;
+  graphInstance.cameraPosition({ x: nx * distRatio, y: ny * distRatio, z: nz * distRatio }, { x: nx, y: ny, z: nz }, ms);
+}
+
+/* ═══════════════════ 统计宫格 ═══════════════════ */
+function addStatCell(grid, value, label, color) {
+  const cell = document.createElement('div');
+  cell.className = 'stat-cell';
+  cell.style.borderColor = color + '55';
+  cell.innerHTML = `<div class="stat-num" style="color:${color};text-shadow:0 2px 8px ${color}30">${value}</div><div class="stat-label">${label}</div>`;
+  grid.appendChild(cell);
+}
+
+function renderStats() {
+  const grid = document.getElementById('stats-grid');
+  grid.innerHTML = '';
+  if (currentView === 'assembly' && assemblyData) {
+    const sw = assemblyData.nodes.filter(n => n.group === 'software').length;
+    const lb = assemblyData.nodes.filter(n => n.group === 'library').length;
+    addStatCell(grid, sw, 'SOFTWARE', SOFTWARE_COLOR);
+    addStatCell(grid, lb, 'LIBRARY', LIBRARY_COLOR);
+  } else if (allData) {
+    const byMemType = {};
+    allData.nodes.forEach(n => { const mt = n.memType || 'general'; byMemType[mt] = (byMemType[mt] || 0) + 1; });
+    addStatCell(grid, allData.nodes.length, 'TOTAL', '#14b8a6');
+    for (const mt of MEM_TYPE_ORDER) {
+      addStatCell(grid, byMemType[mt] || 0, mt.toUpperCase(), MEM_TYPE_COLORS[mt] || '#64748b');
+    }
+  }
+}
+
+function toggleStats() {
+  const bar = document.getElementById('stats-bar');
+  bar.classList.toggle('collapsed');
+}
+
+/* ═══════════════════ 视图渲染 ═══════════════════ */
 function updateStats(nodes, links) {
   document.getElementById('stat-nodes').textContent = nodes;
   document.getElementById('stat-links').textContent = links;
@@ -292,7 +500,15 @@ function setLegend(title, items, linkText) {
   if (linkEl) linkEl.textContent = linkText || '';
 }
 
-// 记忆星图视图(现有 /api/graph 逻辑)
+function onStarNodeClick(node) {
+  if (!node) return;
+  stopAutoTour();
+  selectedNodeId = node.id;
+  refreshNodeVisuals();
+  showPanel(node);
+  flyTo(node, 1500);
+}
+
 function renderStar(data) {
   const categories = [...new Set(data.nodes.map(n => n.category))];
   const anchorPos = {};
@@ -308,6 +524,8 @@ function renderStar(data) {
   });
   data.nodes.forEach(node => {
     node.fx = null; node.fy = null; node.fz = null;
+    node.size = (node.importance || 0.5) * 6 + 4;
+    node.starred = (node.importance || 0.5) >= 0.9;
     const a = anchorPos[node.category];
     if (a) {
       node.x = a.x + (Math.random() - 0.5) * 30;
@@ -320,14 +538,11 @@ function renderStar(data) {
 
   graphInstance = (graphInstance || new ForceGraph3D(document.getElementById('graph')))
     .graphData(data)
-    .backgroundColor('#15161B')
-    .nodeColor(n => (CATEGORY_COLORS[n.category] || {color:'#90A4AE'}).color)
-    .nodeVal(n => n.importance * 6 + 4)
-    .nodeOpacity(0.9)
-    .nodeLabel(n => {
-      const c = CATEGORY_COLORS[n.category] || {label: n.category};
-      return `<div style="background:rgba(10,10,14,0.92);backdrop-filter:blur(8px);padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);font-size:0.8rem;max-width:320px;"><div style="color:${(CATEGORY_COLORS[n.category]||{color:'#aaa'}).color};font-size:0.65rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">${c.label}</div>${n.label}</div>`;
-    })
+    .backgroundColor(document.fullscreenElement ? '#000000' : '#15161B')
+    .nodeThreeObject(node => buildNode(node))
+    .nodeVal(n => n.size || 4)
+    .nodeColor(n => memColor(n))
+    .nodeLabel(null)
     .linkColor(l => l.type === 'similarity' ? 'rgba(100,100,120,0.12)' : 'rgba(0,168,154,0.25)')
     .linkWidth(l => l.type === 'similarity' ? 0.3 : 0.8)
     .linkDirectionalParticles(l => l.type === 'similarity' ? 0 : 2)
@@ -335,27 +550,19 @@ function renderStar(data) {
     .linkDirectionalParticleSpeed(0.002)
     .linkOpacity(0.4)
     .showNavInfo(false)
-    .onNodeClick(node => {
-      showPanel(node);
-      graphInstance.cameraPosition(
-        { x: node.x * 1.8, y: node.y * 1.8, z: node.z * 1.8 },
-        { x: node.x, y: node.y, z: node.z },
-        1000
-      );
-    })
+    .onNodeClick(onStarNodeClick)
     .onNodeHover(node => { document.body.style.cursor = node ? 'pointer' : 'default'; });
 }
 
 function renderStarLegend(data) {
-  const catCounts = {};
-  data.nodes.forEach(n => { catCounts[n.category] = (catCounts[n.category] || 0) + 1; });
-  const items = Object.keys(CATEGORY_COLORS)
-    .filter(cat => catCounts[cat])
-    .map(cat => ({ color: CATEGORY_COLORS[cat].color, label: CATEGORY_COLORS[cat].label, count: catCounts[cat] }));
-  setLegend('记忆分类', items, '━ 关系 \u00a0 ┄ 相似度');
+  const counts = {};
+  data.nodes.forEach(n => { const mt = n.memType || 'general'; counts[mt] = (counts[mt] || 0) + 1; });
+  const items = MEM_TYPE_ORDER
+    .filter(mt => counts[mt])
+    .map(mt => ({ color: MEM_TYPE_COLORS[mt], label: MEM_TYPE_LABELS[mt] || mt, count: counts[mt] }));
+  setLegend('记忆类型', items, '━ 关系 \u00a0 ┄ 相似度');
 }
 
-// 总成视图(二分图:software 左团 / library 右团 / 归属连线)
 function renderAssembly(data) {
   data.nodes.forEach(n => {
     n.fx = n.group === 'software' ? -250 : 250;
@@ -363,18 +570,17 @@ function renderAssembly(data) {
     n.x = n.fx;
     n.y = (Math.random() - 0.5) * 260;
     n.z = (Math.random() - 0.5) * 260;
+    n.size = 4 + Math.sqrt(n.value || 0) * 2;
+    n.starred = false;
   });
 
   graphInstance = (graphInstance || new ForceGraph3D(document.getElementById('graph')))
     .graphData({ nodes: data.nodes, links: data.links || [] })
-    .backgroundColor('#15161B')
-    .nodeColor(n => n.group === 'software' ? SOFTWARE_COLOR : LIBRARY_COLOR)
-    .nodeVal(n => 4 + Math.sqrt(n.value || 0) * 2)
-    .nodeOpacity(0.95)
-    .nodeLabel(n => {
-      const c = n.group === 'software' ? SOFTWARE_COLOR : LIBRARY_COLOR;
-      return `<div style="background:rgba(10,10,14,0.92);backdrop-filter:blur(8px);padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);font-size:0.8rem;max-width:320px;"><div style="color:${c};font-size:0.65rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">${n.group}</div>${n.label} · <b style="color:${c}">${n.value || 0}</b> 条</div>`;
-    })
+    .backgroundColor(document.fullscreenElement ? '#000000' : '#15161B')
+    .nodeThreeObject(node => buildNode(node))
+    .nodeVal(n => n.size || 4)
+    .nodeColor(n => memColor(n))
+    .nodeLabel(null)
     .linkColor(() => 'rgba(0,168,154,0.32)')
     .linkWidth(l => 0.6 + Math.sqrt(l.value || 0) * 0.18)
     .linkDirectionalParticles(0)
@@ -382,10 +588,11 @@ function renderAssembly(data) {
     .linkOpacity(0.45)
     .showNavInfo(false)
     .onNodeClick(node => {
+      if (!node) return;
       graphInstance.cameraPosition(
         { x: node.x * 1.8, y: node.y * 1.8, z: node.z * 1.8 },
         { x: node.x, y: node.y, z: node.z },
-        1000
+        1500
       );
     })
     .onNodeHover(node => { document.body.style.cursor = node ? 'pointer' : 'default'; });
@@ -404,6 +611,7 @@ function toggleView() {
   const btn = document.getElementById('view-btn');
   if (currentView === 'star') {
     btn.disabled = true;
+    stopAutoTour();
     fetch('/api/aggregate/graph')
       .then(r => r.json())
       .then(d => {
@@ -416,12 +624,17 @@ function toggleView() {
         }
         loading.style.display = 'none';
         loading.classList.remove('error');
+        assemblyData = d;
+        closePanel();
+        selectedNodeId = null;
         renderAssembly(d);
         renderAssemblyLegend(d);
         updateStats(d.nodes.length, d.links.length);
         currentView = 'assembly';
         btn.textContent = '✦ 记忆星图';
         btn.classList.add('active');
+        document.getElementById('tour-btn').disabled = true;
+        renderStats();
       })
       .catch(err => {
         loading.textContent = '❌ 总成视图加载失败: ' + err.message;
@@ -431,17 +644,211 @@ function toggleView() {
       .finally(() => { btn.disabled = false; });
   } else {
     closePanel();
+    selectedNodeId = null;
     renderStar(allData);
     renderStarLegend(allData);
     updateStats(allData.nodes.length, allData.stats ? allData.stats.totalLinks : allData.links.length);
     currentView = 'star';
     btn.textContent = '🗂 总成视图';
     btn.classList.remove('active');
+    document.getElementById('tour-btn').disabled = false;
     loading.style.display = 'none';
     loading.classList.remove('error');
+    renderStats();
+    setTimeout(applySearchVisuals, 0);
   }
 }
 
+/* ═══════════════════ Auto-Tour 自动导览 ═══════════════════ */
+function toggleTour() {
+  if (currentView !== 'star') return;
+  if (autoTourActive) stopAutoTour();
+  else startAutoTour();
+}
+
+function startAutoTour() {
+  if (!allData || !allData.nodes || !allData.nodes.length) return;
+  autoTourActive = true;
+  const btn = document.getElementById('tour-btn');
+  btn.classList.add('active');
+  btn.textContent = '⏸ 停止导览';
+  document.getElementById('tour-indicator').classList.add('on');
+  flyToRandomNode();
+  autoTourTimer = setInterval(flyToRandomNode, 60000);
+}
+
+function flyToRandomNode() {
+  if (!allData || !allData.nodes || !allData.nodes.length || !graphInstance) return;
+  const visible = allData.nodes.filter(n => !n.dimmed);
+  const pool = visible.length ? visible : allData.nodes;
+  const node = pool[Math.floor(Math.random() * pool.length)];
+  autoTargetId = node.id;
+  document.getElementById('tour-indicator-label').textContent = 'AUTO-TOUR • ' + ((node.fullText || node.label || '').substring(0, 25));
+  refreshNodeVisuals();
+  const nx = node.x || 0, ny = node.y || 0, nz = node.z || 0;
+  const distance = 80;
+  const d = Math.hypot(nx, ny, nz) || 1;
+  const distRatio = 1 + distance / d;
+  graphInstance.cameraPosition({ x: nx * distRatio, y: ny * distRatio, z: nz * distRatio }, { x: nx, y: ny, z: nz }, 2500);
+}
+
+function stopAutoTour() {
+  if (autoTourTimer) { clearInterval(autoTourTimer); autoTourTimer = null; }
+  autoTourActive = false;
+  autoTargetId = null;
+  const btn = document.getElementById('tour-btn');
+  if (btn) { btn.classList.remove('active'); btn.textContent = '▶ 自动导览'; }
+  document.getElementById('tour-indicator').classList.remove('on');
+  refreshNodeVisuals();
+}
+
+/* ═══════════════════ 沉浸全屏 ═══════════════════ */
+function toggleFullscreen() {
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else {
+    const el = document.body;
+    const fn = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+    if (fn) { try { fn.call(el); } catch (e) {} }
+  }
+}
+
+document.addEventListener('fullscreenchange', () => {
+  const fs = !!document.fullscreenElement;
+  const btn = document.getElementById('fs-btn');
+  btn.textContent = fs ? '⛶ 退出全屏' : '⛶ 全屏';
+  btn.classList.toggle('active', fs);
+  if (graphInstance) graphInstance.backgroundColor(fs ? '#000000' : '#15161B');
+  document.body.style.background = fs ? '#000' : '';
+});
+
+/* ═══════════════════ 详情卡片 ═══════════════════ */
+function showPanel(node) {
+  panelNode = node;
+  const color = memColor(node);
+  const starred = !!(node.starred);
+  const panel = sidePanel;
+  panel.style.borderLeftColor = color;
+  panel.style.borderLeftWidth = starred ? '2px' : '1px';
+  panel.style.borderLeftStyle = 'solid';
+
+  document.getElementById('panel-dot').style.background = color;
+  document.getElementById('panel-badge').textContent = `${(node.memType || node.type || 'general').toUpperCase()} · ${(node.type || '').toUpperCase()}`;
+  document.getElementById('panel-badge').style.color = color;
+  document.getElementById('panel-text').textContent = node.fullText || node.text || '';
+  document.getElementById('panel-time').textContent = node.createdAt ? new Date(node.createdAt).toLocaleString('zh-CN') : '—';
+
+  const srcParts = [];
+  if (node.source) srcParts.push('来源: ' + node.source);
+  if (node.project) srcParts.push('项目: ' + node.project);
+  document.getElementById('panel-source').textContent = srcParts.join(' · ') || '—';
+
+  document.getElementById('panel-importance').style.width = ((node.importance || 0) * 100) + '%';
+  document.getElementById('panel-importance-val').textContent = Math.round((node.importance || 0) * 100) + '%';
+
+  const tagsEl = document.getElementById('panel-tags');
+  tagsEl.innerHTML = '';
+  document.getElementById('panel-tags-section').style.display = '';
+  if (node.tags && node.tags.length) {
+    for (const t of node.tags) {
+      const span = document.createElement('span');
+      span.className = 'tag';
+      span.textContent = t;
+      tagsEl.appendChild(span);
+    }
+  } else {
+    document.getElementById('panel-tags-section').style.display = 'none';
+  }
+
+  updateStarButton();
+  panel.classList.add('open');
+}
+
+function updateStarButton() {
+  const btn = document.getElementById('panel-star-btn');
+  if (!panelNode) return;
+  btn.classList.toggle('on', !!panelNode.starred);
+}
+
+async function toggleStar() {
+  if (!panelNode) return;
+  const id = panelNode.id;
+  try {
+    const r = await fetch('/api/memory/toggle_important', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id })
+    });
+    const d = await r.json();
+    if (!d.ok) return;
+    panelNode.importance = d.importance;
+    panelNode.starred = d.starred;
+    panelNode.size = (d.importance || 0.5) * 6 + 4;
+    const inAll = allData && allData.nodes ? allData.nodes.find(n => n.id === id) : null;
+    if (inAll) { inAll.importance = d.importance; inAll.starred = d.starred; inAll.size = panelNode.size; }
+    applyNodeSizeAndStar(panelNode);
+    refreshNodeVisuals();
+    updateStarButton();
+    document.getElementById('panel-importance').style.width = (d.importance * 100) + '%';
+    document.getElementById('panel-importance-val').textContent = Math.round(d.importance * 100) + '%';
+    sidePanel.style.borderLeftWidth = d.starred ? '2px' : '1px';
+  } catch (e) { /* ignore */ }
+}
+
+async function deletePanelNode() {
+  if (!panelNode) return;
+  const id = panelNode.id;
+  if (!confirm('删除这条记忆?')) return;
+  try {
+    const r = await fetch('/api/memory/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id })
+    });
+    const d = await r.json();
+    if (d.deleted) {
+      allData.nodes = allData.nodes.filter(n => n.id !== id);
+      allData.links = (allData.links || []).filter(l => {
+        const s = typeof l.source === 'object' ? l.source.id : l.source;
+        const t = typeof l.target === 'object' ? l.target.id : l.target;
+        return s !== id && t !== id;
+      });
+      allData.stats = allData.stats || {};
+      allData.stats.totalLinks = allData.links.length;
+      closePanel();
+      renderStar(allData);
+      renderStarLegend(allData);
+      updateStats(allData.nodes.length, allData.links.length);
+      renderStats();
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function closePanel() {
+  sidePanel.classList.remove('open');
+  selectedNodeId = null;
+  panelNode = null;
+  refreshNodeVisuals();
+}
+
+/* ═══════════════════ 搜索过滤(直接改材质) ═══════════════════ */
+function matchesNode(n, q) {
+  return (n.fullText || '').toLowerCase().includes(q) ||
+    (n.tags || []).some(t => (t || '').toLowerCase().includes(q)) ||
+    (n.category || '').toLowerCase().includes(q) ||
+    (n.type || '').toLowerCase().includes(q) ||
+    (n.memType || '').toLowerCase().includes(q);
+}
+
+function applySearchVisuals() {
+  if (!allData || !allData.nodes) return;
+  const q = (document.getElementById('search-input').value || '').trim().toLowerCase();
+  for (const n of allData.nodes) n.dimmed = !!q && !matchesNode(n, q);
+  refreshNodeVisuals();
+}
+
+document.getElementById('search-input').addEventListener('input', () => {
+  if (currentView !== 'star') return;
+  applySearchVisuals();
+});
+
+/* ═══════════════════ 初始加载 ═══════════════════ */
 fetch('/api/graph')
   .then(r => r.json())
   .then(data => {
@@ -450,7 +857,9 @@ fetch('/api/graph')
     updateStats(data.nodes.length, data.stats.totalLinks);
     renderStarLegend(data);
     renderStar(data);
+    renderStats();
     loading.style.display = 'none';
+    document.getElementById('tour-btn').disabled = false;
     return fetch('/api/status').then(r => r.json());
   })
   .then(s => {
@@ -476,69 +885,19 @@ fetch('/api/graph')
     });
   });
 
-function showPanel(node) {
-  const c = CATEGORY_COLORS[node.category] || {label: node.category};
-  document.getElementById('panel-type').textContent = `${node.type} · ${node.subject || ''}`;
-  document.getElementById('panel-type').style.color = c.color;
-  const tierLabel = node.tier === 'critical' ? '🔴 核心' : node.tier === 'temporary' ? '🟡 临时' : '🔵 标准';
-  document.getElementById('panel-category').textContent = c.label + ' · ' + tierLabel;
-  document.getElementById('panel-text').textContent = node.fullText;
-
-  const tagsEl = document.getElementById('panel-tags');
-  tagsEl.innerHTML = '';
-  document.getElementById('panel-tags-section').style.display = '';
-  if (node.tags && node.tags.length) {
-    for (const t of node.tags) {
-      const span = document.createElement('span');
-      span.className = 'tag';
-      span.textContent = t;
-      tagsEl.appendChild(span);
-    }
-  } else {
-    document.getElementById('panel-tags-section').style.display = 'none';
-  }
-
-  document.getElementById('panel-importance').style.width = (node.importance * 100) + '%';
-
-  const meta = document.getElementById('panel-meta');
-  meta.innerHTML = '';
-  const addMeta = (label, value) => {
-    const div = document.createElement('div');
-    div.className = 'meta-item';
-    div.innerHTML = `${label}: <b>${value}</b>`;
-    meta.appendChild(div);
-  };
-  addMeta('重要性', node.importance);
-  addMeta('分级', tierLabel);
-  if (node.tier === 'temporary' && node.expiresAt) addMeta('过期', new Date(node.expiresAt).toLocaleString('zh-CN'));
-  addMeta('创建', new Date(node.createdAt).toLocaleString('zh-CN'));
-  addMeta('访问', node.accessedCount + ' 次');
-  if (node.source) addMeta('来源', node.source);
-
-  sidePanel.classList.add('open');
+/* ═══════════════════ 管理抽屉逻辑 ═══════════════════ */
+function toggleAdmin() {
+  const open = adminDrawer.classList.toggle('open');
+  document.getElementById('admin-btn').classList.toggle('active', open);
+  if (open) { loadConfig(); loadMems(); }
 }
 
-function closePanel() { sidePanel.classList.remove('open'); }
+function toggleEmbedMode() {
+  const mode = document.getElementById('embedMode').value;
+  document.getElementById('embedOllamaFields').style.display = mode === 'ollama' ? '' : 'none';
+  document.getElementById('embedApiFields').style.display = mode === 'api' ? '' : 'none';
+}
 
-document.getElementById('search-input').addEventListener('input', (e) => {
-  if (currentView !== 'star') return;
-  const q = e.target.value.trim().toLowerCase();
-  if (!graphInstance || !allData) return;
-  if (!q) {
-    allData.nodes.forEach(n => { n.color = (CATEGORY_COLORS[n.category] || {color:'#90A4AE'}).color; });
-  } else {
-    allData.nodes.forEach(n => {
-      const match = n.fullText.toLowerCase().includes(q) ||
-                    (n.tags || []).some(t => t.toLowerCase().includes(q)) ||
-                    n.category.includes(q) ||
-                    n.type.includes(q);
-      n.color = match ? (CATEGORY_COLORS[n.category] || {color:'#fff'}).color : 'rgba(60,60,70,0.15)';
-    });
-  }
-  graphInstance.graphData(allData);
-});
-
-// ═══════════════════ 管理抽屉逻辑 ═══════════════════
 function log(msg, cls='log-info') {
   const el = document.getElementById('log');
   const time = new Date().toLocaleTimeString();
@@ -687,9 +1046,13 @@ async function delMem(id) {
 function refreshGraph() {
   fetch('/api/graph').then(r => r.json()).then(data => {
     allData = data;
-    document.getElementById('stat-nodes').textContent = data.nodes.length;
-    document.getElementById('stat-links').textContent = data.stats.totalLinks;
-    if (graphInstance) graphInstance.graphData(data);
+    updateStats(data.nodes.length, data.stats ? data.stats.totalLinks : data.links.length);
+    if (currentView === 'star') {
+      renderStar(data);
+      renderStarLegend(data);
+      renderStats();
+      setTimeout(applySearchVisuals, 0);
+    }
   }).catch(() => {});
 }
 </script>

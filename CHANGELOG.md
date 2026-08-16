@@ -3,6 +3,29 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.12.3] — 2026-08-16 3D 可视化全面改造(MNEMO 外貌:星座节点+Auto-Tour+全屏+详情卡+统计宫格)
+
+> 用户指定:以 mnemo-memory-os 为设计外貌、supermemory 为架构思维。实现经 dsh(pro 模型)编写 + Hermes 独立复验。
+
+### Added(前端 web/public/index.html)
+- **节点渲染升级**:THREE.Group 自定义节点(核心球+半透明光晕+3D 空间文字 Sprite 标签),按 mem_type 五色着色(user 青/feedback 琥珀/project 紫/reference 蓝/general 灰,type 回退);星标红球;选中光晕 0.7;几何/纹理缓存(球体按半径、标签按 text|color,cap 800)防内存泄漏;THREE CDN 失败回退默认球体不崩
+- **Auto-Tour 自动导览**:60s 随机飞近 + 金色高亮 + 顶部指示条显示当前记忆;手动点击节点即停;仅星图生效(总成视图禁用)
+- **沉浸全屏**:document.body Fullscreen API(工具栏保持可用),全屏背景转黑
+- **详情卡片升级**:右侧滑出(mnemo 风:类型色左边框 星标 2px/普通 1px、blur 背景);类型徽章/全文/时间/来源·项目/重要度条/标签;「⭐ 星标」与「🗑 删除」按钮
+- **统计宫格**:星图 6 宫格(TOTAL+五类 mem_type)/总成 2 宫格(SOFTWARE/LIBRARY),可折叠
+- 搜索过滤改为直接改材质(dimmed 变灰)不重建;图例切换为 mem_type 五色
+
+### Added(后端 web/server.mjs)
+- `/api/graph` 节点新增 `project/memType/starred(importance≥0.9)` 字段;stats 新增 `byMemType`
+- `POST /api/memory/toggle_important`:importance 1.0↔0.5 切换星标(带 id 校验/不存在处理)
+- 依赖:`three@0.160.0`(最后带 UMD 版)+ `3d-force-graph@1.80.0` 锁定 CDN
+
+### Verified(独立复验)
+- git status 仅 2 目标文件;node --check(137) exit 0;三处 SHA256 全 MATCH(主仓库/castalia-run/lobehub-run)
+- 实测(3347+anima-run 库):/api/graph 110 nodes/118 links,byMemType={general:51,project:16,user:43},节点字段齐全;aggregate 7/7;页面 200
+- 真实库零改动(仅下午自检软删记忆,WAL 痕迹非本次);toggle_important 在副本库测过三态
+- 8 个新元素 id 齐全;THREE 守卫;代码审查通过(缓存/材质直改/不每帧重建)
+
 ## [v1.12.2] — 2026-08-16 3D 总成视图(二分图:软件团 ↔ 库团)
 
 > 用户拍板"全权交给 dsh + pro 模型"独立开发(完全权限 danger-full-access),Hermes 独立复验后上线。

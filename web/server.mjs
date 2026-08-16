@@ -147,10 +147,10 @@ function mcpCall(toolName, args = {}) {
 // ═══ API: GET /api/graph ═══
 app.get('/api/graph', (req, res) => {
   const db = openDb(true);
-  if (!db) return res.json({ nodes: [], links: [], stats: { totalNodes: 0, totalLinks: 0, byType: {}, byCategory: {}, byTier: {} } });
+  if (!db) return res.json({ nodes: [], links: [], stats: { totalNodes: 0, totalLinks: 0, byType: {}, byCategory: {}, byTier: {}, byMemType: {} } });
   try {
     const memories = db.prepare(`
-      SELECT id, text, type, category, subcategory, tags,
+      SELECT id, text, project, type, mem_type, category, subcategory, tags,
              importance, character_id, source,
              subject, tier, expires_at, created_at, accessed_count
       FROM memory WHERE is_active = 1 ORDER BY created_at ASC
@@ -175,10 +175,12 @@ app.get('/api/graph', (req, res) => {
         id: m.id,
         label: m.text.length > 60 ? m.text.slice(0, 60) + '...' : m.text,
         fullText: m.text,
-        type: m.type, category: m.category, subcategory: m.subcategory,
+        project: m.project || 'default',
+        type: m.type, memType: m.mem_type || 'general', category: m.category, subcategory: m.subcategory,
         tags, importance: m.importance,
         source: m.source, subject: m.subject, tier: m.tier || 'standard',
         expiresAt: m.expires_at, createdAt: m.created_at, accessedCount: m.accessed_count,
+        starred: (m.importance || 0.5) >= 0.9,
         valence: isCritical ? (m.importance * 12 + 5) : isTemporary ? (m.importance * 5 + 2) : (m.importance * 8 + 3),
         color: categoryColors[m.category] || '#90A4AE',
         isTemporary, isCritical,
@@ -227,11 +229,12 @@ app.get('/api/graph', (req, res) => {
       } catch (e) { console.error('Similarity links failed:', e.message); }
     }
 
-    const stats = { totalNodes: nodes.length, totalLinks: links.length, byType: {}, byCategory: {}, byTier: {} };
+    const stats = { totalNodes: nodes.length, totalLinks: links.length, byType: {}, byCategory: {}, byTier: {}, byMemType: {} };
     for (const n of nodes) {
       stats.byType[n.type] = (stats.byType[n.type] || 0) + 1;
       stats.byCategory[n.category] = (stats.byCategory[n.category] || 0) + 1;
       stats.byTier[n.tier] = (stats.byTier[n.tier] || 0) + 1;
+      stats.byMemType[n.memType] = (stats.byMemType[n.memType] || 0) + 1;
     }
     db.close();
     res.json({ nodes, links, stats });
@@ -321,6 +324,22 @@ app.post('/api/memory/delete', (req, res) => {
     try { db.prepare('DELETE FROM vec_memory WHERE rowid = (SELECT rowid FROM memory WHERE id = ?)').run(req.body.id); } catch {}
     db.close();
     res.json({ deleted: r.changes > 0 });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/memory/toggle_important', (req, res) => {
+  try {
+    const id = req.body && req.body.id;
+    if (!id) return res.json({ ok: false, error: 'id 必填' });
+    const db = openDb();
+    if (!db) return res.json({ ok: false, error: 'db not found' });
+    const row = db.prepare('SELECT importance FROM memory WHERE id = ?').get(id);
+    if (!row) { db.close(); return res.json({ ok: false, error: 'memory not found' }); }
+    const starred = (row.importance || 0) < 0.9;
+    const nextImportance = starred ? 1.0 : 0.5;
+    db.prepare('UPDATE memory SET importance = ?, updated_at = ? WHERE id = ?').run(nextImportance, new Date().toISOString(), id);
+    db.close();
+    res.json({ ok: true, id, importance: nextImportance, starred });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
