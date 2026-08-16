@@ -12,7 +12,7 @@
  * 事件驱动：有新对话才跑，间隔 ≥ 1 分钟
  */
 
-import { DatabaseManager } from './db.js';
+import { DatabaseManager, listMemTypeDirs } from './db.js';
 import { cleanupExpiredMemories } from './store.js';
 import { normalizeProject } from './env.js';
 
@@ -28,7 +28,6 @@ export interface DigestResult {
 }
 
 export async function runDigest(characterId: string = 'default', project?: string): Promise<DigestResult> {
-  const db = DatabaseManager.getInstance(project);
   const result: DigestResult = {
     success: true,
     cleaned: 0,
@@ -36,18 +35,22 @@ export async function runDigest(characterId: string = 'default', project?: strin
     errors: [],
   };
 
-  // 1. 清理过期临时记忆
+  // 1. 清理过期临时记忆(memdir:遍历项目全部分类库)
   result.cleaned = cleanupExpiredMemories(project);
 
-  // 2. 恢复被误标记的 critical 记忆
-  try {
-    const lostCritical = db.prepare(`
-      UPDATE memory SET is_active = 1
-      WHERE tier = 'critical' AND is_active = 0
-    `).run();
-    result.restored = lostCritical.changes;
-  } catch (e: any) {
-    result.errors.push('restore critical: ' + e.message);
+  // 2. 恢复被误标记的 critical 记忆(memdir:遍历项目全部分类库)
+  const proj = normalizeProject(project);
+  for (const mt of listMemTypeDirs(proj)) {
+    try {
+      const db = DatabaseManager.getInstance(proj, mt);
+      const lostCritical = db.prepare(`
+        UPDATE memory SET is_active = 1
+        WHERE tier = 'critical' AND is_active = 0
+      `).run();
+      result.restored += lostCritical.changes;
+    } catch (e: any) {
+      result.errors.push('restore critical: ' + e.message);
+    }
   }
 
   return result;

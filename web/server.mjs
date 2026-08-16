@@ -90,6 +90,7 @@ app.use(express.json({ limit: '2mb' }));
 function openDb(readonly = false) {
   if (!existsSync(DB_PATH)) return null;
   const db = new Database(DB_PATH, readonly ? { readonly: true } : {});
+  try { db.pragma('busy_timeout = 5000'); } catch {}
   try { sqliteVec.load(db); } catch (e) { console.error('sqlite-vec load failed:', e.message); }
   return db;
 }
@@ -143,11 +144,9 @@ function mcpCall(toolName, args = {}, timeoutMs = 120000) {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     // 子进程 stderr 落盘(排障):<DB_DIR>/mcp_call_stderr.log
-    try {
-      const fsmod = require('node:fs');
-      const logPath = join(DB_DIR, 'mcp_call_stderr.log');
-      child.stderr.on('data', (d) => { try { fsmod.appendFileSync(logPath, `[${toolName}] ${d.toString()}`); } catch {} });
-    } catch {}
+    // 注意:ESM 无 require,直接用顶层已导入的 appendFileSync(原 require('node:fs') 会抛 ReferenceError 被静默吞掉)
+    const logPath = join(DB_DIR, 'mcp_call_stderr.log');
+    child.stderr.on('data', (d) => { try { appendFileSync(logPath, `[${toolName}] ${d.toString()}`); } catch {} });
     let buf = '';
     let id = 0;
     const pending = {};
@@ -165,7 +164,6 @@ function mcpCall(toolName, args = {}, timeoutMs = 120000) {
         } catch {}
       }
     });
-    child.stderr.on('data', () => {});  // 日志忽略
     child.on('exit', () => { clearTimeout(timer); });
 
     const initId = ++id;
@@ -579,6 +577,7 @@ const AGGREGATE_DIRS = (() => {
 function openLibDb(file, readonly = true) {
   if (!existsSync(file)) return null;
   const db = new Database(file, readonly ? { readonly: true } : {});
+  try { db.pragma('busy_timeout = 5000'); } catch {}
   try { sqliteVec.load(db); } catch (e) { console.error('sqlite-vec load failed:', e.message); }
   return db;
 }
@@ -651,8 +650,9 @@ function safeFilePart(name) {
   return String(name || '').replace(/[^a-zA-Z0-9._-]/g, '_') || 'default';
 }
 
-function libFilePath(project) {
-  return join(DB_DIR, `project-${safeFilePart(project)}.sqlite`);
+function libFilePath(project, memType) {
+  // memdir 结构: <DB_DIR>/<project>/<memType>/memory.sqlite(memType 缺省 → general)
+  return join(DB_DIR, safeFilePart(project), safeFilePart(memType || 'general'), 'memory.sqlite');
 }
 
 /** 按 instance+project 定位库;只按 project 也能兜底匹配(同名跨实例时以 instance 优先) */
@@ -943,7 +943,7 @@ app.get('/api/manage/memories', (req, res) => {
   }
 });
 
-// 跨库移动记忆:源库可在任意实例,目标恒为当前实例 <DB_DIR>/project-<toProject>.sqlite
+// 跨库移动记忆:源库可在任意实例,目标恒为当前实例 memdir <DB_DIR>/<toProject>/<memType>/memory.sqlite
 app.post('/api/memory/move', (req, res) => {
   try {
     const body = req.body || {};
@@ -953,7 +953,6 @@ app.post('/api/memory/move', (req, res) => {
     if (!toProject) return res.json({ ok: false, error: 'toProject 必填', moved: 0, failed: [] });
     const fromProject = body.fromProject ? String(body.fromProject).trim() : '';
     const fromInstance = body.fromInstance ? String(body.fromInstance).trim() : '';
-    const targetFile = libFilePath(toProject);
 
     const moved = [];
     const failed = [];
@@ -965,13 +964,16 @@ app.post('/api/memory/move', (req, res) => {
       try {
         const srcFile = resolveSourceFile(id, fromInstance, fromProject);
         if (!srcFile) { failed.push({ id, error: 'not found in any library' }); continue; }
-        if (srcFile === targetFile) { skipped.push({ id, error: 'same library (toProject == fromProject)' }); continue; }
 
         srcDb = openLibDb(srcFile, false);
         if (!srcDb) { failed.push({ id, error: 'open source failed' }); continue; }
 
         const srcMem = srcDb.prepare('SELECT rowid, * FROM memory WHERE id = ?').get(id);
         if (!srcMem) { failed.push({ id, error: 'source row missing' }); continue; }
+
+        // 目标库:memdir 按 mem_type 路由(保留源 mem_type;缺省 → general)
+        const targetFile = libFilePath(toProject, srcMem.mem_type);
+        if (srcFile === targetFile) { skipped.push({ id, error: 'same library (toProject == fromProject)' }); continue; }
 
         if (!existsSync(targetFile)) {
           mkdirSync(dirname(targetFile), { recursive: true });
@@ -1090,7 +1092,7 @@ app.get('/manage.html', (req, res) => {
   res.send(readFileSync(join(__dirname, 'public', 'manage.html'), 'utf-8'));
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, '127.0.0.1', () => {
   console.log(`
   ╔══════════════════════════════════════════╗
   ║   Castalia Web Console                  ║
