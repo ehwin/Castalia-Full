@@ -3,6 +3,15 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.12.9] — 2026-08-16 星图联邦化(记忆星图显示全机记忆)
+
+> 用户反馈:星图没有记忆要素。根因:星图原只读当前实例 default 库(0 条),记忆实际分散在 hermes/reflect/airi 库。
+
+- `/api/graph` 联邦化:聚合 AGGREGATE_DIRS 下所有实例所有库的活跃记忆(只读),节点 id `project:rawId` 唯一化(带库前缀),edges/库内相似度链接保留,stats 跨库汇总
+- 新增 `openDbByProject(project)`:按库定位可写连接;delete/toggle_important/update 支持 `project` 参数(缺省回退当前实例 default 库)
+- 前端 toggleStar/deletePanelNode 传 `rawId + lib` 跨库路由;节点查找改用完整 id
+- 实测:121 节点/224 边(hermes 12 + reflect 11 + airi 98),总成视图不受影响
+
 ## [v1.12.8] — 2026-08-16 viz 布局修正:搜索框入顶栏,统计宫格挪右上角
 
 > 用户反馈:搜索框与统计宫格悬浮在 3D 图上方遮挡视图。

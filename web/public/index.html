@@ -797,17 +797,18 @@ function updateStarButton() {
 
 async function toggleStar() {
   if (!panelNode) return;
-  const id = panelNode.id;
+  const id = panelNode.rawId !== undefined ? panelNode.rawId : panelNode.id;
+  const lib = panelNode.lib;
   try {
     const r = await fetch('/api/memory/toggle_important', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id })
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, project: lib })
     });
     const d = await r.json();
     if (!d.ok) return;
     panelNode.importance = d.importance;
     panelNode.starred = d.starred;
     panelNode.size = (d.importance || 0.5) * 6 + 4;
-    const inAll = allData && allData.nodes ? allData.nodes.find(n => n.id === id) : null;
+    const inAll = allData && allData.nodes ? allData.nodes.find(n => n.id === panelNode.id) : null;
     if (inAll) { inAll.importance = d.importance; inAll.starred = d.starred; inAll.size = panelNode.size; }
     applyNodeSizeAndStar(panelNode);
     refreshNodeVisuals();
@@ -820,11 +821,12 @@ async function toggleStar() {
 
 async function deletePanelNode() {
   if (!panelNode) return;
-  const id = panelNode.id;
+  const id = panelNode.rawId !== undefined ? panelNode.rawId : panelNode.id;
+  const lib = panelNode.lib;
   if (!confirm('删除这条记忆?')) return;
   try {
     const r = await fetch('/api/memory/delete', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id })
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, project: lib })
     });
     const d = await r.json();
     if (d.deleted) {

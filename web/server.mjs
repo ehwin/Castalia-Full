@@ -189,101 +189,112 @@ function mcpCall(toolName, args = {}, timeoutMs = 120000) {
 
 // ═══ API: GET /api/graph ═══
 app.get('/api/graph', (req, res) => {
-  const db = openDb(true);
-  if (!db) return res.json({ nodes: [], links: [], stats: { totalNodes: 0, totalLinks: 0, byType: {}, byCategory: {}, byTier: {}, byMemType: {} } });
-  try {
-    const memories = db.prepare(`
-      SELECT id, text, project, type, mem_type, category, subcategory, tags,
-             importance, character_id, source,
-             subject, tier, expires_at, created_at, accessed_count
-      FROM memory WHERE is_active = 1 ORDER BY created_at ASC
-    `).all();
+  // 联邦星图: 聚合 AGGREGATE_DIRS 下所有实例所有库的记忆(节点 id 带 project 前缀唯一化)
+  const libs = libFiles();
+  const nodes = [];
+  const links = [];
+  let totalMemories = 0;
+  const categoryColors = {
+    emotional: '#FF6B6B', milestone: '#FFA726', identity: '#66BB6A',
+    relationship: '#42A5F5', mood_snapshot: '#FFD54F', conversation: '#AB47BC',
+    knowledge: '#26A69A', preference: '#EC407A', decision: '#FFA726',
+    mistake: '#EF5350', general: '#78909C',
+  };
+  for (const lib of libs) {
+    let db = null;
+    try {
+      db = openLibDb(lib.file);
+      if (!db) continue;
+      const memories = db.prepare(`
+        SELECT id, text, project, type, mem_type, category, subcategory, tags,
+               importance, character_id, source,
+               subject, tier, expires_at, created_at, accessed_count
+        FROM memory WHERE is_active = 1 ORDER BY created_at ASC
+      `).all();
+      totalMemories += memories.length;
 
-    let edges = [];
-    try { edges = db.prepare('SELECT source_id, target_id, relation_type FROM edges').all(); } catch {}
+      let edges = [];
+      try { edges = db.prepare('SELECT source_id, target_id, relation_type FROM edges').all(); } catch {}
 
-    const categoryColors = {
-      emotional: '#FF6B6B', milestone: '#FFA726', identity: '#66BB6A',
-      relationship: '#42A5F5', mood_snapshot: '#FFD54F', conversation: '#AB47BC',
-      knowledge: '#26A69A', preference: '#EC407A', decision: '#FFA726',
-      mistake: '#EF5350', general: '#78909C',
-    };
-
-    const nodes = memories.map(m => {
-      let tags = [];
-      try { tags = JSON.parse(m.tags || '[]'); } catch {}
-      const isTemporary = m.tier === 'temporary';
-      const isCritical = m.tier === 'critical';
-      return {
-        id: m.id,
-        label: m.text.length > 60 ? m.text.slice(0, 60) + '...' : m.text,
-        fullText: m.text,
-        project: m.project || 'default',
-        type: m.type, memType: m.mem_type || 'general', category: m.category, subcategory: m.subcategory,
-        tags, importance: m.importance,
-        source: m.source, subject: m.subject, tier: m.tier || 'standard',
-        expiresAt: m.expires_at, createdAt: m.created_at, accessedCount: m.accessed_count,
-        starred: (m.importance || 0.5) >= 0.9,
-        valence: isCritical ? (m.importance * 12 + 5) : isTemporary ? (m.importance * 5 + 2) : (m.importance * 8 + 3),
-        color: categoryColors[m.category] || '#90A4AE',
-        isTemporary, isCritical,
-      };
-    });
-
-    const nodeIds = new Set(nodes.map(n => n.id));
-    const links = edges
-      .filter(e => nodeIds.has(e.source_id) && nodeIds.has(e.target_id))
-      .map(e => ({ source: e.source_id, target: e.target_id, type: e.relation_type }));
-
-    // 相似度链接(<=100 节点时)
-    if (memories.length <= 100) {
-      try {
-        const vecRows = db.prepare(`
-          SELECT m.id, v.embedding FROM memory m
-          JOIN vec_memory v ON m.rowid = v.rowid WHERE m.is_active = 1
-        `).all();
-        const embeddings = vecRows.map(r => ({
-          id: r.id,
-          vec: Array.from(new Float32Array(r.embedding.buffer, r.embedding.byteOffset, r.embedding.byteLength / 4)),
-        }));
-        const cosSim = (a, b) => {
-          let dot = 0, ma = 0, mb = 0;
-          for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; ma += a[i] * a[i]; mb += b[i] * b[i]; }
-          return dot / (Math.sqrt(ma) * Math.sqrt(mb));
+      const libNodes = memories.map(m => {
+        let tags = [];
+        try { tags = JSON.parse(m.tags || '[]'); } catch {}
+        const isTemporary = m.tier === 'temporary';
+        const isCritical = m.tier === 'critical';
+        return {
+          id: `${lib.project}:${m.id}`,
+          rawId: m.id,
+          lib: lib.project,
+          label: m.text.length > 60 ? m.text.slice(0, 60) + '...' : m.text,
+          fullText: m.text,
+          project: m.project || lib.project,
+          type: m.type, memType: m.mem_type || 'general', category: m.category, subcategory: m.subcategory,
+          tags, importance: m.importance,
+          source: m.source, subject: m.subject, tier: m.tier || 'standard',
+          expiresAt: m.expires_at, createdAt: m.created_at, accessedCount: m.accessed_count,
+          starred: (m.importance || 0.5) >= 0.9,
+          valence: isCritical ? (m.importance * 12 + 5) : isTemporary ? (m.importance * 5 + 2) : (m.importance * 8 + 3),
+          color: categoryColors[m.category] || '#90A4AE',
+          isTemporary, isCritical,
         };
-        const SIM_THRESHOLD = 0.65;
-        const existing = new Set(links.map(l => `${l.source}|${l.target}`));
-        for (let i = 0; i < embeddings.length; i++) {
-          const sims = [];
-          for (let j = 0; j < embeddings.length; j++) {
-            if (i === j) continue;
-            sims.push({ id: embeddings[j].id, sim: cosSim(embeddings[i].vec, embeddings[j].vec) });
-          }
-          sims.sort((a, b) => b.sim - a.sim);
-          for (const s of sims.slice(0, 2)) {
-            if (s.sim < SIM_THRESHOLD) break;
-            const k1 = `${embeddings[i].id}|${s.id}`, k2 = `${s.id}|${embeddings[i].id}`;
-            if (!existing.has(k1) && !existing.has(k2)) {
-              links.push({ source: embeddings[i].id, target: s.id, type: 'similarity', similarity: Math.round(s.sim * 100) / 100 });
-              existing.add(k1);
+      });
+
+      const idSet = new Set(libNodes.map(n => n.id));
+      for (const e of edges) {
+        const s = `${lib.project}:${e.source_id}`, t = `${lib.project}:${e.target_id}`;
+        if (idSet.has(s) && idSet.has(t)) links.push({ source: s, target: t, type: e.relation_type });
+      }
+
+      // 库内相似度链接(该库 <=100 节点时)
+      if (libNodes.length > 0 && libNodes.length <= 100) {
+        try {
+          const vecRows = db.prepare(`
+            SELECT m.id, v.embedding FROM memory m
+            JOIN vec_memory v ON m.rowid = v.rowid WHERE m.is_active = 1
+          `).all();
+          const embeddings = vecRows.map(r => ({
+            id: `${lib.project}:${r.id}`,
+            vec: Array.from(new Float32Array(r.embedding.buffer, r.embedding.byteOffset, r.embedding.byteLength / 4)),
+          }));
+          const cosSim = (a, b) => {
+            let dot = 0, ma = 0, mb = 0;
+            for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; ma += a[i] * a[i]; mb += b[i] * b[i]; }
+            return dot / (Math.sqrt(ma) * Math.sqrt(mb));
+          };
+          const SIM_THRESHOLD = 0.65;
+          const existing = new Set(links.map(l => `${l.source}|${l.target}`));
+          for (let i = 0; i < embeddings.length; i++) {
+            const sims = [];
+            for (let j = 0; j < embeddings.length; j++) {
+              if (i === j) continue;
+              sims.push({ id: embeddings[j].id, sim: cosSim(embeddings[i].vec, embeddings[j].vec) });
+            }
+            sims.sort((a, b) => b.sim - a.sim);
+            for (const s of sims.slice(0, 2)) {
+              if (s.sim < SIM_THRESHOLD) break;
+              const k1 = `${embeddings[i].id}|${s.id}`, k2 = `${s.id}|${embeddings[i].id}`;
+              if (!existing.has(k1) && !existing.has(k2)) {
+                links.push({ source: embeddings[i].id, target: s.id, type: 'similarity', similarity: Math.round(s.sim * 100) / 100 });
+                existing.add(k1);
+              }
             }
           }
-        }
-      } catch (e) { console.error('Similarity links failed:', e.message); }
-    }
+        } catch (e) { console.error('Similarity links failed:', e.message); }
+      }
 
-    const stats = { totalNodes: nodes.length, totalLinks: links.length, byType: {}, byCategory: {}, byTier: {}, byMemType: {} };
-    for (const n of nodes) {
-      stats.byType[n.type] = (stats.byType[n.type] || 0) + 1;
-      stats.byCategory[n.category] = (stats.byCategory[n.category] || 0) + 1;
-      stats.byTier[n.tier] = (stats.byTier[n.tier] || 0) + 1;
-      stats.byMemType[n.memType] = (stats.byMemType[n.memType] || 0) + 1;
-    }
-    db.close();
-    res.json({ nodes, links, stats });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+      nodes.push(...libNodes);
+    } catch (e) { console.error(`graph lib ${lib.file} failed:`, e.message); }
+    finally { if (db) db.close(); }
   }
+
+  const stats = { totalNodes: nodes.length, totalLinks: links.length, byType: {}, byCategory: {}, byTier: {}, byMemType: {} };
+  for (const n of nodes) {
+    stats.byType[n.type] = (stats.byType[n.type] || 0) + 1;
+    stats.byCategory[n.category] = (stats.byCategory[n.category] || 0) + 1;
+    stats.byTier[n.tier] = (stats.byTier[n.tier] || 0) + 1;
+    stats.byMemType[n.memType] = (stats.byMemType[n.memType] || 0) + 1;
+  }
+  res.json({ nodes, links, stats });
 });
 
 // ═══ API: GET /api/stats ═══
@@ -360,7 +371,7 @@ function safeTags(raw) {
 }
 
 app.post('/api/memory/delete', (req, res) => {
-  const db = openDb();
+  const db = openDbByProject(req.body.project);
   if (!db) return res.json({ deleted: false });
   try {
     const r = db.prepare('UPDATE memory SET is_active = 0 WHERE id = ?').run(req.body.id);
@@ -374,7 +385,7 @@ app.post('/api/memory/toggle_important', (req, res) => {
   try {
     const id = req.body && req.body.id;
     if (!id) return res.json({ ok: false, error: 'id 必填' });
-    const db = openDb();
+    const db = openDbByProject(req.body.project);
     if (!db) return res.json({ ok: false, error: 'db not found' });
     const row = db.prepare('SELECT importance FROM memory WHERE id = ?').get(id);
     if (!row) { db.close(); return res.json({ ok: false, error: 'memory not found' }); }
@@ -402,7 +413,7 @@ app.post('/api/memory/update', (req, res) => {
     sets.push('updated_at = ?');
     vals.push(new Date().toISOString());
     vals.push(id);
-    const db = openDb();
+    const db = openDbByProject(req.body.project);
     if (!db) return res.json({ updated: false });
     const r = db.prepare(`UPDATE memory SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
     db.close();
@@ -548,6 +559,16 @@ function libFiles() {
     } catch {}
   }
   return out;
+}
+
+// 按 project 定位库文件(联邦:从 AGGREGATE_DIRS 找),返回可写 db;project 缺省回退当前实例 default 库
+function openDbByProject(project, readonly = false) {
+  if (!project) return openDb(readonly);
+  const lib = libFiles().find(l => l.project === project);
+  if (!lib || !existsSync(lib.file)) return null;
+  const db = new Database(lib.file, readonly ? { readonly: true } : {});
+  try { sqliteVec.load(db); } catch (e) { console.error('sqlite-vec load failed:', e.message); }
+  return db;
 }
 
 // ═══ 库管理(手动调整记忆归属)═══
