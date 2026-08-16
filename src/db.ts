@@ -17,6 +17,12 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { normalizeProject } from './env.js';
+import { normalizeMemType } from './memType.js';
+
+/** memdir 分类文件夹名(memType → 目录名,general 为默认/元数据) */
+export function memTypeDir(memType?: string): string {
+  return normalizeMemType(memType);
+}
 
 export const VEC_DIM = 1024; // Yuan-EB 2.0-zh
 
@@ -46,13 +52,35 @@ function isLegacyMode(): boolean {
   return !!legacyDbPath();
 }
 
-/** 扫描 memory 目录下已有的项目库文件名(project-<name>.sqlite),返回项目名 */
+/** 扫描 memory 目录下已有的项目(目录或旧 project-<name>.sqlite),返回项目名 */
 export function listProjectNames(): string[] {
   const dir = memDir();
   if (isLegacyMode() || !fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir)
-    .filter(f => f.startsWith('project-') && f.endsWith('.sqlite'))
-    .map(f => f.slice('project-'.length, -'.sqlite'.length));
+  const names = new Set<string>();
+  for (const f of fs.readdirSync(dir)) {
+    const p = path.join(dir, f);
+    try { if (fs.statSync(p).isDirectory()) names.add(f); } catch { /* skip */ }
+  }
+  // 兼容旧结构 project-<name>.sqlite(迁移脚本运行前仍可识别)
+  for (const f of fs.readdirSync(dir)) {
+    if (f.startsWith('project-') && f.endsWith('.sqlite')) {
+      names.add(f.slice('project-'.length, -'.sqlite'.length));
+    }
+  }
+  return [...names];
+}
+
+/** 项目下的分类文件夹(memdir:user/feedback/project/reference/general),不存在则返回默认四类+general */
+export function listMemTypeDirs(project: string): string[] {
+  const dir = path.join(memDir(), safeFilePart(project));
+  const base = ['general', 'user', 'feedback', 'project', 'reference'];
+  if (!fs.existsSync(dir)) return base;
+  const found = fs.readdirSync(dir).filter(f => {
+    try { return fs.statSync(path.join(dir, f)).isDirectory() && base.includes(f); } catch { return false; }
+  });
+  // 旧结构 project-<name>.sqlite 存在时视为单库(全部在 general 语义下)
+  const legacy = fs.existsSync(path.join(memDir(), `project-${safeFilePart(project)}.sqlite`));
+  return legacy ? ['general'] : (found.length ? found : base);
 }
 
 /** 当前实例的 memory 目录(供联邦搜索/聚合层使用) */
@@ -288,11 +316,12 @@ export class DatabaseManager {
   private static connections = new Map<string, Database.Database>();
 
   /**
-   * 项目库(project-<name>.sqlite):project 为空 → 默认项目(project-default.sqlite)。
+   * memdir 分库(memory/<project>/<memType>/memory.sqlite):memType 缺省 → general(默认/元数据库)。
+   * 四分类:user/feedback/project/reference。project 为空 → 默认项目(default)。
    * 首次访问某项目时懒加载创建,并登记进 global.sqlite 的 projects 表。
    * 兼容模式(MEMORY_DB_PATH 显式设置):所有 project 落到同一个单库,行为不变。
    */
-  public static getInstance(project?: string): Database.Database {
+  public static getInstance(project?: string, memType?: string): Database.Database {
     const proj = normalizeProject(project);
     if (isLegacyMode()) {
       if (!warnedLegacy) {
@@ -301,9 +330,10 @@ export class DatabaseManager {
       }
       return DatabaseManager.open('__legacy__', legacyDbPath()!, initProjectSchema);
     }
+    const mt = normalizeMemType(memType);
     const db = DatabaseManager.open(
-      `project:${proj}`,
-      path.join(memDir(), `project-${safeFilePart(proj)}.sqlite`),
+      `project:${proj}:${mt}`,
+      path.join(memDir(), safeFilePart(proj), memTypeDir(mt), 'memory.sqlite'),
       initProjectSchema,
     );
     // 项目注册表(global.sqlite):懒加载登记

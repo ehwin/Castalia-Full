@@ -21,7 +21,7 @@ import * as sqliteVec from 'sqlite-vec';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join, basename } from 'path';
-import { readFileSync, existsSync, writeFileSync, appendFileSync, mkdirSync, readdirSync } from 'fs';
+import { readFileSync, existsSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, statSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -371,7 +371,7 @@ function safeTags(raw) {
 }
 
 app.post('/api/memory/delete', (req, res) => {
-  const db = openDbByProject(req.body.project);
+  const db = openDbByProject(req.body.project, false, req.body.id);
   if (!db) return res.json({ deleted: false });
   try {
     const r = db.prepare('UPDATE memory SET is_active = 0 WHERE id = ?').run(req.body.id);
@@ -385,7 +385,7 @@ app.post('/api/memory/toggle_important', (req, res) => {
   try {
     const id = req.body && req.body.id;
     if (!id) return res.json({ ok: false, error: 'id 必填' });
-    const db = openDbByProject(req.body.project);
+    const db = openDbByProject(req.body.project, false, req.body.id);
     if (!db) return res.json({ ok: false, error: 'db not found' });
     const row = db.prepare('SELECT importance FROM memory WHERE id = ?').get(id);
     if (!row) { db.close(); return res.json({ ok: false, error: 'memory not found' }); }
@@ -413,7 +413,7 @@ app.post('/api/memory/update', (req, res) => {
     sets.push('updated_at = ?');
     vals.push(new Date().toISOString());
     vals.push(id);
-    const db = openDbByProject(req.body.project);
+    const db = openDbByProject(req.body.project, false, req.body.id);
     if (!db) return res.json({ updated: false });
     const r = db.prepare(`UPDATE memory SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
     db.close();
@@ -552,19 +552,58 @@ function libFiles() {
   for (const c of AGGREGATE_DIRS) {
     try {
       for (const f of readdirSync(c.dir)) {
+        // 旧结构 project-<name>.sqlite
         if (f.startsWith('project-') && f.endsWith('.sqlite')) {
           out.push({ instance: c.name, project: f.slice('project-'.length, -'.sqlite'.length), file: join(c.dir, f) });
+          continue;
         }
+        // memdir 新结构 <project>/<memType>/memory.sqlite
+        const p = join(c.dir, f);
+        try {
+          if (statSync(p).isDirectory()) {
+            for (const sub of readdirSync(p)) {
+              const sp = join(p, sub);
+              try {
+                if (statSync(sp).isDirectory()) {
+                  const mp = join(sp, 'memory.sqlite');
+                  if (existsSync(mp)) out.push({ instance: c.name, project: f, memType: sub, file: mp });
+                } else if (sub.endsWith('.sqlite')) {
+                  out.push({ instance: c.name, project: f, file: sp });
+                }
+              } catch {}
+            }
+          }
+        } catch {}
       }
     } catch {}
   }
   return out;
 }
 
+// 按 project+memType 定位库文件;memType 缺省 → general(默认/元数据)
+function libFileByProject(project, memType) {
+  const lib = libFiles().find(l => l.project === project && (!memType || l.memType === memType));
+  return lib || null;
+}
+
 // 按 project 定位库文件(联邦:从 AGGREGATE_DIRS 找),返回可写 db;project 缺省回退当前实例 default 库
-function openDbByProject(project, readonly = false) {
+// id 提供时:遍历项目全部分类库,返回含该 id 的库(memdir 跨分类定位)
+function openDbByProject(project, readonly = false, id = null) {
   if (!project) return openDb(readonly);
-  const lib = libFiles().find(l => l.project === project);
+  const candidates = libFiles().filter(l => l.project === project);
+  if (!candidates.length) return null;
+  let lib = null;
+  if (id) {
+    for (const cand of candidates) {
+      try {
+        const db = new Database(cand.file, { readonly: true });
+        const hit = db.prepare('SELECT id FROM memory WHERE id = ?').get(id);
+        db.close();
+        if (hit) { lib = cand; break; }
+      } catch { /* skip */ }
+    }
+  }
+  lib = lib || candidates.find(l => l.memType === 'general') || candidates[0];
   if (!lib || !existsSync(lib.file)) return null;
   const db = new Database(lib.file, readonly ? { readonly: true } : {});
   try { sqliteVec.load(db); } catch (e) { console.error('sqlite-vec load failed:', e.message); }

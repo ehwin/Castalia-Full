@@ -3,6 +3,25 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.13.0] — 2026-08-16 memdir 存储架构(项目 → 四分类文件夹)
+
+> 用户拍板 B 方案:以项目为最外层,内部 user/feedback/project/reference 四个分类文件夹(memdir 风格)。
+> 反思按分类填入,总反思(reflect_all)从全部分类库提炼。AIRI 侧同一架构特化为人格维度。
+
+### Changed
+- **存储结构**:`memory/<项目>/<memType>/memory.sqlite`(user/feedback/project/reference/general 五文件夹),替代旧 `project-<name>.sqlite`
+- `DatabaseManager.getInstance(project, memType)` 双维度路由;`listMemTypeDirs()` 分类扫描;兼容旧结构读取
+- **写路由**:`saveMemory`/`promoteToProject`(反思晋升)按 memType 落对应分类库;`updateMemory` 改 memType 时跨库搬移(含向量)
+- **读聚合**:`searchMemory`/`getRecentMemories`/`listAllMemories`/`stats_get`/`project_list` 聚合项目全部分类库(指定 memType 时单分类)
+- **按 id 操作**:`memory_get`/`forget`/`restore`/`update` 遍历分类库定位
+- **联邦**:`resolveFedLibraries` 扫描新结构;viz libFiles/openDbByProject 适配
+- **迁移脚本** `scripts/migrate_memdir.py`:旧库按 mem_type 拆入新结构(显式 rowid 保 vec 关联;vec0 虚拟表由引擎重建 + batch_embed 补嵌入)
+- 三仓库同步(Anima/主系统锚点补丁保留情感层)+ 三实例 + 桥 + viz 全链路
+
+### Verified
+- 存量 121 条全迁移(hermes 12/reflect 11/airi 98 按分类落位)
+- viz 联邦 121 节点纯新结构;project_list 聚合 11 条;联邦搜索 50 库;memType=user 写入精确落 hermes/user/
+
 ## [v1.12.9] — 2026-08-16 星图联邦化(记忆星图显示全机记忆)
 
 > 用户反馈:星图没有记忆要素。根因:星图原只读当前实例 default 库(0 条),记忆实际分散在 hermes/reflect/airi 库。

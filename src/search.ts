@@ -7,10 +7,11 @@
  *
  * 权重全部可经环境变量调整，适用于通用 agent 记忆场景。
  */
-import { DatabaseManager, listProjectNames } from './db.js';
+import { DatabaseManager, listProjectNames, listMemTypeDirs } from './db.js';
 import { embed } from './ollama.js';
 import { normalizeProject, isEmbedEnabled } from './env.js';
-import { MemType } from './memType.js';
+import { MemType, normalizeMemType } from './memType.js';
+import type Database from 'better-sqlite3';
 
 // 中性评分权重(可配)
 const WEIGHT_CONSISTENCY = parseFloat(process.env.WEIGHT_CONSISTENCY || '0.65');  // 语义/标签匹配
@@ -86,7 +87,31 @@ function computeScore(similarity: number, row: any): number {
  * 标签优先搜索 → 不足时回退向量 KNN
  */
 export async function searchMemory(options: SearchOptions): Promise<SearchResult[]> {
-  const db = DatabaseManager.getInstance(options.project);
+  const proj = normalizeProject(options.project);
+  const topK = options.topK ?? 10;
+  // memdir:memType 指定 → 单分类库;未指定 → 聚合项目全部分类库
+  const mtFilter = options.memType ? normalizeMemType(options.memType) : null;
+  const dirs = mtFilter ? [mtFilter] : listMemTypeDirs(proj);
+  const all: SearchResult[] = [];
+  for (const mt of dirs) {
+    try {
+      const db = DatabaseManager.getInstance(proj, mt);
+      const r = await searchInDb(db, { ...options, project: proj });
+      all.push(...r);
+    } catch { /* 单分类库失败不影响其他 */ }
+  }
+  all.sort((a, b) => b.score - a.score);
+  const seen = new Set<string>();
+  const unique: SearchResult[] = [];
+  for (const r of all) {
+    if (!seen.has(r.id)) { seen.add(r.id); unique.push(r); }
+    if (unique.length >= topK) break;
+  }
+  return unique.slice(0, topK);
+}
+
+/** 单库搜索主体(标签 → 向量 KNN → 文本回退),按分类库调用 */
+async function searchInDb(db: Database.Database, options: SearchOptions): Promise<SearchResult[]> {
   const profile = options.profile ? SEARCH_PROFILES[options.profile] : null;
   const topK = options.topK ?? profile?.topK ?? 10;
   const minScore = options.minScore ?? profile?.minScore ?? 0;
@@ -359,35 +384,41 @@ function updateAccessed(db: any, results: SearchResult[]) {
  * 不做向量搜索，直接按时间+importance 捞
  */
 export function getRecentMemories(characterId: string, limit: number = 5, hoursBack: number = 24, project?: string, memType?: MemType): SearchResult[] {
-  const db = DatabaseManager.getInstance(project);
-  const since = new Date(Date.now() - hoursBack * 3600000).toISOString();
   const proj = normalizeProject(project);
-
-  const conds: string[] = ['is_active = 1', 'character_id = ?', 'project = ?', 'created_at > ?'];
-  const params: any[] = [characterId, proj, since];
-  if (memType) { conds.push('mem_type = ?'); params.push(memType); }
-  params.push(limit);
-
-  const rows = db.prepare(`
-    SELECT id, text, project, type, mem_type, category, subcategory, tags,
-           importance, character_id, source, subject, tier,
-           created_at, last_accessed_at, accessed_count
-    FROM memory
-    WHERE ${conds.join(' AND ')}
-    ORDER BY importance DESC, created_at DESC
-    LIMIT ?
-  `).all(...params) as any[];
-
-  return rows.map(row => ({
-    id: row.id, text: row.text, project: row.project || 'default', type: row.type, memType: row.mem_type || 'general', category: row.category,
-    subcategory: row.subcategory, tags: JSON.parse(row.tags || '[]'),
-    importance: row.importance,
-    characterId: row.character_id, source: row.source, subject: row.subject || 'user',
-    tier: row.tier || 'standard',
-    score: row.importance, similarity: 0,
-    createdAt: row.created_at, lastAccessedAt: row.last_accessed_at,
-    accessedCount: row.accessed_count,
-  }));
+  // memdir:memType 指定 → 单分类库;未指定 → 聚合项目全部分类库
+  const dirs = memType ? [normalizeMemType(memType)] : listMemTypeDirs(proj);
+  const all: SearchResult[] = [];
+  const since = new Date(Date.now() - hoursBack * 3600000).toISOString();
+  for (const mt of dirs) {
+    try {
+      const db = DatabaseManager.getInstance(proj, mt);
+      const conds: string[] = ['is_active = 1', 'character_id = ?', 'project = ?', 'created_at > ?'];
+      const params: any[] = [characterId, proj, since];
+      if (memType) { conds.push('mem_type = ?'); params.push(memType); }
+      params.push(limit);
+      const rows = db.prepare(`
+        SELECT id, text, project, type, mem_type, category, subcategory, tags,
+               importance, character_id, source, subject, tier,
+               created_at, last_accessed_at, accessed_count
+        FROM memory
+        WHERE ${conds.join(' AND ')}
+        ORDER BY importance DESC, created_at DESC
+        LIMIT ?
+      `).all(...params) as any[];
+      all.push(...rows.map(row => ({
+        id: row.id, text: row.text, project: row.project || 'default', type: row.type, memType: row.mem_type || 'general', category: row.category,
+        subcategory: row.subcategory, tags: JSON.parse(row.tags || '[]'),
+        importance: row.importance,
+        characterId: row.character_id, source: row.source, subject: row.subject || 'user',
+        tier: row.tier || 'standard',
+        score: row.importance, similarity: 0,
+        createdAt: row.created_at, lastAccessedAt: row.last_accessed_at,
+        accessedCount: row.accessed_count,
+      })));
+    } catch { /* 单分类库失败不影响其他 */ }
+  }
+  all.sort((a, b) => (b.importance - a.importance) || String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  return all.slice(0, limit);
 }
 
 // ═══════════════════════════════════════════════════════════════════
