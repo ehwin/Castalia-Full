@@ -136,9 +136,18 @@ function mcpCall(toolName, args = {}, timeoutMs = 120000) {
         ...(LEGACY_DB_PATH ? { MEMORY_DB_PATH: LEGACY_DB_PATH } : {}),
         MEMORY_CONFIG: CONFIG_PATH,
         MCP_TOOLS: process.env.MCP_TOOLS || 'all',
+        // 密钥文件:子进程 configLoader 靠它解密 keys.enc 注入 LLM/嵌入 key(否则反思/嵌入无 key)
+        CASTALIA_KEYS_FILE: join(DB_DIR, 'keys.enc'),
+        CASTALIA_KEY_FILE: join(DB_DIR, 'keys.key'),
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    // 子进程 stderr 落盘(排障):<DB_DIR>/mcp_call_stderr.log
+    try {
+      const fsmod = require('node:fs');
+      const logPath = join(DB_DIR, 'mcp_call_stderr.log');
+      child.stderr.on('data', (d) => { try { fsmod.appendFileSync(logPath, `[${toolName}] ${d.toString()}`); } catch {} });
+    } catch {}
     let buf = '';
     let id = 0;
     const pending = {};

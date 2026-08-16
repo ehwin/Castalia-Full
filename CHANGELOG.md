@@ -3,24 +3,29 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
-## [v1.12.5] — 2026-08-16 全项目优化(嵌入补全/联邦去重/配置加固)
+## [v1.12.5] — 2026-08-16 全项目优化(嵌入补全/联邦去重/配置加固) + 反思面板
 
-> 用户要求整体优化。Hermes 实施(避开 dsh 任务 5 并发区 web/)。
+> 用户要求整体优化。反思面板经 dsh(pro 模型)开发,优化项 Hermes 实施(避开并发区)。
+
+### Added(反思面板,3345/3346 库管理页)
+- `POST /api/reflect/run`:mode=all(总反思)/project(项目级)+dryRun 预演+maxTotal/maxPerLib;调 reflect_all(mcpCall 超时放宽 300s);结果附历史
+- `GET /api/reflect/history`:反思历史倒序(时间/模式/洞察全文/来源/dryRun 标记),存 `<DB_DIR>/reflect_history.jsonl` 上限 200 条——**防误提交可回看**
+- manage.html「🧠 反思」面板:模式选择+dryRun 默认勾选(取消红字警告)+文本框输出洞察全文+历史列表展开
+- **mcpCall 子进程补 CASTALIA_KEYS_FILE/KEY_FILE**(此前缺失致 keys.enc 不解密→反思/嵌入无 key)+**stderr 落盘** `mcp_call_stderr.log`(排障)
 
 ### Fixed / Improved
-- **reflect_batch_embed 加 characterId 参数**('any' = 不过滤角色):修复 reflect 库(character_id NULL)与跨角色记忆无法补嵌入的问题;Anima/主系统保留 charFor(project) 人格映射(默认值)
-- **resolveFedLibraries 按目录去重**:ownDir 与 FEDERATION_DIRS 同目录时不再重复扫描(之前 local/airi 与 AIRI/airi 重复)
-- **FEDERATION_DIRS 统一正斜杠路径**(托盘 viz+桥、unified-proxy config.py):反斜杠 JSON 在 env 传递中减半导致 JSON.parse 失败静默回退的隐患(与 08-16 误移事故同根因)
-- **anima-run keys.enc 补 embedding.api_key**(从 lobehub-run 复制硅基 key):AIRI 嵌入通道此前缺 key 走 Ollama 分支 → 硅基 404,AIRI 记忆无法嵌入
+- **reflect_batch_embed 加 characterId 参数**('any' 不过滤角色):reflect 库(character_id NULL)与跨角色记忆可补嵌入;Anima/主系统保留 charFor(project)
+- **resolveFedLibraries 按目录去重**(ownDir 与 FEDERATION_DIRS 同目录不重复扫描)
+- **reflect_all 支持 REFLECT_DIR env**:统一多实例总库位置(托盘 3345/3346 配 /path/to/run/memory → 所有反思写同一总库,不再分叉);db.ts export initProjectSchema
+- **FEDERATION_DIRS 统一正斜杠**(托盘 viz+桥、unified-proxy):反斜杠 JSON env 传递减半致 JSON.parse 失败静默回退(与误移事故同根因)
+- **anima-run keys.enc 补 embedding.api_key**:AIRI 嵌入通道此前缺 key 走 Ollama 分支 → 硅基 404
 
-### Data(补嵌入,硅基 API)
-- reflect 总库 9/9 洞察补嵌入(此前 0,向量搜索/3D 图不可见)
-- hermes 库 3 条非对话记忆补嵌入(9 条 conversation_log 按设计不嵌入)
-- airi 库 4 条补嵌入(其余 conversation_log 不嵌入);AIRI 嵌入通道修复后新记忆可正常嵌入
+### Data
+- 补嵌入(reflect 9/hermes 3/airi 4,conversation_log 按设计不嵌入);AIRI 嵌入通道修复
+- 反思面板真实提交 1 次(hermes 12 条→3 洞察,2 新写入统一总库);总库现 11 条洞察
 
 ### Verified
-- 三仓库 build exit 0;dist 三实例同步(store/index/federation 含新逻辑);服务全重启
-- 补嵌入实测:reflect embedded=9 / hermes 3 / airi 4,errors 空
+- 三仓库 build exit 0 + dist 同步;服务全重启;3345 API dryRun/真实提交/历史实测全过;REFLECT_DIR 生效(lobehub 总库 9→11,castalia/anima 无分叉);anima 空壳 reflect 库清理
 
 ## [v1.12.4] — 2026-08-16 库管理设置页 + reflect_all projects 参数 + 首次人工分拣
 
