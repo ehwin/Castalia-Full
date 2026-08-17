@@ -399,10 +399,10 @@ register(
       const cognitiveCats = ['decision', 'mistake'];
       const cognitives = db.prepare(`
         SELECT text, category, importance, created_at FROM memory
-        WHERE is_active = 1 AND character_id = ? AND project = ?
+        WHERE is_active = 1 AND project = ?
           AND (category IN ('decision','mistake') OR tags LIKE '%pattern%')
         ORDER BY created_at DESC LIMIT 9
-      `).all(CHAR_ID, proj) as any[];
+      `).all(proj) as any[];
 
       // 4. 关键事实(高置信度)
       const facts = db.prepare(`
@@ -415,11 +415,11 @@ register(
       const indexRows = db.prepare(`
         SELECT id, mem_type, substr(text, 1, 150) AS summary, length(text) AS full_len
         FROM memory
-        WHERE is_active = 1 AND character_id = ? AND project = ?
+        WHERE is_active = 1 AND project = ?
           AND mem_type IN ('user','feedback','project','reference')
         ORDER BY updated_at DESC
         LIMIT 10
-      `).all(CHAR_ID, proj) as any[];
+      `).all(proj) as any[];
       const indexLayer = indexRows.map((row: any) => {
         const s = row.summary || '';
         return {
@@ -534,14 +534,14 @@ register(
       const byMemType: Record<string, number> = {};
       for (const mt of listMemTypeDirs(proj)) {
         const db = DatabaseManager.getInstance(proj, mt);
-        total += (db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? AND project=?').get(CHAR_ID, proj) as any).c;
-        for (const r of db.prepare('SELECT category,COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? AND project=? GROUP BY category').all(CHAR_ID, proj) as any[]) {
+        total += (db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1 AND project=?').get(proj) as any).c;
+        for (const r of db.prepare('SELECT category,COUNT(*) as c FROM memory WHERE is_active=1 AND project=? GROUP BY category').all(proj) as any[]) {
           byCategory[r.category] = (byCategory[r.category] || 0) + r.c;
         }
-        for (const r of db.prepare('SELECT source,COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? AND project=? GROUP BY source').all(CHAR_ID, proj) as any[]) {
+        for (const r of db.prepare('SELECT source,COUNT(*) as c FROM memory WHERE is_active=1 AND project=? GROUP BY source').all(proj) as any[]) {
           bySource[r.source] = (bySource[r.source] || 0) + r.c;
         }
-        for (const r of db.prepare('SELECT mem_type,COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? AND project=? GROUP BY mem_type').all(CHAR_ID, proj) as any[]) {
+        for (const r of db.prepare('SELECT mem_type,COUNT(*) as c FROM memory WHERE is_active=1 AND project=? GROUP BY mem_type').all(proj) as any[]) {
           byMemType[r.mem_type] = (byMemType[r.mem_type] || 0) + r.c;
         }
       }
@@ -715,8 +715,8 @@ register(
       const db = DatabaseManager.getInstance(args.project);
       const proj = normalizeProject(args.project);
       const limit = Math.min(args.limit ?? 20, 100);
-      const conds = ['is_active = 1', 'character_id = ?', 'project = ?'];
-      const params: any[] = [CHAR_ID, proj];
+      const conds = ['is_active = 1', 'project = ?'];
+      const params: any[] = [proj];
       if (args.memType) { conds.push('mem_type = ?'); params.push(args.memType); }
       params.push(limit);
       const rows = db.prepare(`
