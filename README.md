@@ -6,6 +6,8 @@ Independent, neutral, general-purpose memory component. No personality layer, no
 
 Designed after studying Claude Code's memory architecture (closed memory types, progressive session maintenance, consolidation) and engram / memory-os patterns.
 
+> **Full edition (this repo):** adds **cross-library federation** — `reflect_all` (LLM-driven cross-library reflection into the `reflect` project) + `memory_search_all` (federation search over `FEDERATION_DIRS`). For the single-instance lite edition see **[Castalia](https://github.com/ehwin/Castalia)**. For the emotional variant (agent state / bias layer / emotion-weighted search), see **[Castalia-Anima](https://github.com/ehwin/Castalia-Anima)**.
+
 > 📖 详细技术设计见 [docs/TECHNICAL.md](docs/TECHNICAL.md)(架构/数据模型/管线/决策记录)。
 
 
@@ -293,7 +295,8 @@ The 3D view is organized as a **three-layer fixed galaxy** (no force-simulation 
 
 Independent evolution of a memory system; design informed by:
 
-- **[Castalia Anima](https://github.com/ehwin/Castalia-Anima)** — the emotional variant of this project (personality layer on the same architecture); the two repos cross-pollinate — Anima feeds architecture back into Castalia, Castalia keeps the neutral core stable
+- **[Castalia](https://github.com/ehwin/Castalia)** — lite edition of this project (single-instance, no federation); same neutral core
+- **[Castalia-Anima](https://github.com/ehwin/Castalia-Anima)** — the emotional variant (personality layer on the same architecture); the repos cross-pollinate — Anima feeds architecture back into Castalia, Castalia keeps the neutral core stable
 - **Claude Code** (Anthropic) — closed memory types (user/feedback/project/reference), MEMORY.md index, progressive session maintenance, consolidation sub-agent, snapshot warnings (patterns re-implemented in SQLite)
 - **engram** — profile-gated tool exposure, setup script
 - **memory-os / cognitive-memory** — local vector storage patterns
