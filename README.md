@@ -266,12 +266,23 @@ node server.mjs        # → http://127.0.0.1:3345
 - Config saved to `memory/config.json` (embedding source + triage LLM + reflection LLM), applied on MCP server restart
 - Admin panel configures all **three channels** (embedding / triage / reflect)
 
+### 3D Star Map (v1.14 galaxy layout)
+
+The 3D view is organized as a **three-layer fixed galaxy** (no force-simulation drift):
+
+- **L0 project galaxies** — each project is its own galaxy on a sphere (R=210), with a core star
+- **L1 category mini-galaxies** — inside each project, memories group by memType (user/feedback/project/reference/general)
+- **L2 fixed orbit nodes** — Fibonacci sphere distribution around each mini-core; positions locked (`fx/fy/fz`), so nodes never collapse into a blob
+- **Directional bridges** — airi ↔ reflect bidirectional; reflect reads children one-way (arrow indicates direction)
+- **Semantic clusters** (v1.14) — BFS connected components over strong relation edges; same-cluster nodes share glow/edge color
+- Visual: typed edge colors (causal warm / thematic cool), important-node glow, starfield background, auto camera orbit, hover neighbor highlight, particle flow
+
 
 ---
 
 ## Storage
 
-- Per-project DB files under `memory/` (`global.sqlite` + `project-<name>.sqlite`); schema auto-created on first use, project DBs lazy-created
+- **memdir 分库**(v1.13):`memory/<project>/<memType>/memory.sqlite` — 项目为最外层,内部 user/feedback/project/reference/general 五个分类文件夹;兼容旧 `project-<name>.sqlite` 读取
 - Fixed **1024-dim** vectors; swap embedding models only if same dim (or rebuild the DB)
 - WAL mode; auto-checkpoint; expired temporaries cleaned periodically; consolidation on startup when >15 memories
 - DB files are fully portable (copy while stopped)
