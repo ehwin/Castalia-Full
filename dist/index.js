@@ -357,10 +357,10 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
         const cognitiveCats = ['decision', 'mistake'];
         const cognitives = db.prepare(`
         SELECT text, category, importance, created_at FROM memory
-        WHERE is_active = 1 AND character_id = ? AND project = ?
+        WHERE is_active = 1 AND project = ?
           AND (category IN ('decision','mistake') OR tags LIKE '%pattern%')
         ORDER BY created_at DESC LIMIT 9
-      `).all(CHAR_ID, proj);
+      `).all(proj);
         // 4. 关键事实(高置信度)
         const facts = db.prepare(`
         SELECT subject, predicate, object, confidence FROM facts
@@ -371,11 +371,11 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
         const indexRows = db.prepare(`
         SELECT id, mem_type, substr(text, 1, 150) AS summary, length(text) AS full_len
         FROM memory
-        WHERE is_active = 1 AND character_id = ? AND project = ?
+        WHERE is_active = 1 AND project = ?
           AND mem_type IN ('user','feedback','project','reference')
         ORDER BY updated_at DESC
         LIMIT 10
-      `).all(CHAR_ID, proj);
+      `).all(proj);
         const indexLayer = indexRows.map((row) => {
             const s = row.summary || '';
             return {
@@ -411,6 +411,35 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
             }
         }
         sections.push(`【当前记忆上下文】总记忆 ${stats.c} 条。请优先参考以下记忆,它们是之前会话沉淀的事实与经验:`);
+        // v1.15: 用户偏好段(带触发条件,score_priority 排序,最先展示)
+        const prefs = db.prepare(`
+        SELECT text, metadata, score_priority FROM memory
+        WHERE is_active = 1 AND project = ? AND type = 'preference' AND mem_type = 'user'
+        ORDER BY COALESCE(score_priority, 0) DESC, importance DESC LIMIT 8
+      `).all(proj);
+        if (prefs.length > 0) {
+            sections.push(`\n■ 用户偏好(跨会话行为指令,优先遵守):`);
+            prefs.forEach((p, i) => {
+                let ctxLine = '';
+                try {
+                    const meta = JSON.parse(p.metadata || '{}');
+                    const oc = meta.originContext;
+                    if (oc) {
+                        const parts = [];
+                        if (oc.trigger)
+                            parts.push(`触发:${oc.trigger}`);
+                        if (oc.applicableWhen)
+                            parts.push(`适用:${oc.applicableWhen}`);
+                        if (oc.notApplicableWhen)
+                            parts.push(`不适用:${oc.notApplicableWhen}`);
+                        if (parts.length)
+                            ctxLine = ` (${parts.join(';')})`;
+                    }
+                }
+                catch { /* metadata 非 JSON 忽略 */ }
+                sections.push(`${i + 1}. ${String(p.text || '').replace(/^# .*\n/, '')}${ctxLine}`);
+            });
+        }
         if (recent.length > 0) {
             sections.push(`\n■ 近期重要记忆(近 ${hoursBack} 小时):`);
             recent.forEach((m, i) => {
@@ -476,14 +505,14 @@ register('stats_get', 'admin', 'Get memory system statistics: total count, by ca
         const byMemType = {};
         for (const mt of listMemTypeDirs(proj)) {
             const db = DatabaseManager.getInstance(proj, mt);
-            total += db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? AND project=?').get(CHAR_ID, proj).c;
-            for (const r of db.prepare('SELECT category,COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? AND project=? GROUP BY category').all(CHAR_ID, proj)) {
+            total += db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active=1 AND project=?').get(proj).c;
+            for (const r of db.prepare('SELECT category,COUNT(*) as c FROM memory WHERE is_active=1 AND project=? GROUP BY category').all(proj)) {
                 byCategory[r.category] = (byCategory[r.category] || 0) + r.c;
             }
-            for (const r of db.prepare('SELECT source,COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? AND project=? GROUP BY source').all(CHAR_ID, proj)) {
+            for (const r of db.prepare('SELECT source,COUNT(*) as c FROM memory WHERE is_active=1 AND project=? GROUP BY source').all(proj)) {
                 bySource[r.source] = (bySource[r.source] || 0) + r.c;
             }
-            for (const r of db.prepare('SELECT mem_type,COUNT(*) as c FROM memory WHERE is_active=1 AND character_id=? AND project=? GROUP BY mem_type').all(CHAR_ID, proj)) {
+            for (const r of db.prepare('SELECT mem_type,COUNT(*) as c FROM memory WHERE is_active=1 AND project=? GROUP BY mem_type').all(proj)) {
                 byMemType[r.mem_type] = (byMemType[r.mem_type] || 0) + r.c;
             }
         }
@@ -648,8 +677,8 @@ register('memory_index', 'agent', 'Lightweight memory index (corresponds to Clau
         const db = DatabaseManager.getInstance(args.project);
         const proj = normalizeProject(args.project);
         const limit = Math.min(args.limit ?? 20, 100);
-        const conds = ['is_active = 1', 'character_id = ?', 'project = ?'];
-        const params = [CHAR_ID, proj];
+        const conds = ['is_active = 1', 'project = ?'];
+        const params = [proj];
         if (args.memType) {
             conds.push('mem_type = ?');
             params.push(args.memType);

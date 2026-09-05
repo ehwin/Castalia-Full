@@ -13,7 +13,7 @@
  *   POST /memory/reflect/apply   — 应用大模型的重构指令
  */
 import { DatabaseManager, listMemTypeDirs } from './db.js';
-import { saveFacts, saveMemory, batchEmbedPending } from './store.js';
+import { saveFacts, saveMemory, batchEmbedPending, applyIdentityActions } from './store.js';
 import { normalizeProject } from './env.js';
 import { isMemType, MEM_TYPES } from './memType.js';
 import fs from 'node:fs';
@@ -33,10 +33,10 @@ export function listAllMemories(characterId = 'airi', limit = 200, project) {
         SELECT id, text, type, mem_type, category, tags, importance,
                subject, source, tier, expires_at, created_at, last_accessed_at, accessed_count, reference_count, locked
         FROM memory
-        WHERE is_active = 1 AND character_id = ? AND project = ?
+        WHERE is_active = 1 AND project = ?
         ORDER BY importance DESC, created_at DESC
         LIMIT ?
-      `).all(characterId, proj, limit);
+      `).all(proj, limit);
             all.push(...rows);
         }
         catch { /* 单分类库失败不影响其他 */ }
@@ -336,6 +336,26 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                     result.details.push(`extract: from ${action.sourceId} → ${validType}/${validCat} (${tier})`);
                     break;
                 }
+                case 'identityUpdate': {
+                    // v1.15: 身份记忆 CRUD — add/update/remove,幻觉 id 由 applyIdentityActions 白名单校验拒绝
+                    if (!action.identityActions) {
+                        result.errors.push('identityUpdate: need identityActions');
+                        receipt.status = 'failed';
+                        receipt.reason = 'need identityActions';
+                        continue;
+                    }
+                    const r = await applyIdentityActions(action.identityActions, project);
+                    receipt.rowsAffected = r.applied;
+                    if (r.rejected.length > 0) {
+                        receipt.status = 'failed';
+                        receipt.reason = `rejected: ${r.rejected.join(', ')}`;
+                        result.errors.push(`identityUpdate: ${r.rejected.join(', ')}`);
+                    }
+                    if (receipt.status === 'applied')
+                        result.applied++;
+                    result.details.push(`identityUpdate: +${r.applied} applied, ${r.rejected.length} rejected`);
+                    break;
+                }
                 case 'delete': {
                     if (!action.targetId) {
                         result.errors.push('delete: need targetId');
@@ -506,9 +526,9 @@ limit = 30, project) {
     if (!since) {
         const lastReflect = db.prepare(`
       SELECT created_at FROM memory
-      WHERE source = 'reflect_summary' AND character_id = ? AND project = ?
+      WHERE source = 'reflect_summary' AND project = ?
       ORDER BY created_at DESC LIMIT 1
-    `).get(characterId, proj);
+    `).get(proj);
         since = lastReflect?.created_at || new Date(0).toISOString();
     }
     return db.prepare(`
@@ -516,12 +536,11 @@ limit = 30, project) {
     FROM memory
     WHERE is_active = 1
       AND source = 'conversation_log'
-      AND character_id = ?
       AND project = ?
       AND created_at > ?
     ORDER BY created_at ASC
     LIMIT ?
-  `).all(characterId, proj, since, limit);
+  `).all(proj, since, limit);
 }
 /**
  * 应用大模型反思结果

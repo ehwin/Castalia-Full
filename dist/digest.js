@@ -50,8 +50,8 @@ export function maybeDigest(characterId = 'default', project) {
     const unanalyzed = db.prepare(`
     SELECT COUNT(*) as c FROM memory
     WHERE is_active = 1 AND source = 'conversation_log'
-      AND character_id = ? AND last_accessed_at = created_at
-  `).get(characterId)?.c || 0;
+      AND last_accessed_at = created_at
+  `).get()?.c || 0;
     if (unanalyzed === 0)
         return null;
     lastDigestTime = now;
@@ -64,8 +64,8 @@ export function getRecentConversations(characterId, hoursBack = 24, limit = 50, 
     return db.prepare(`
     SELECT id, text, created_at, importance
     FROM memory WHERE is_active = 1
-      AND source = 'conversation_log' AND character_id = ? AND project = ?
+      AND source = 'conversation_log' AND project = ?
       AND created_at > ?
     ORDER BY created_at DESC LIMIT ?
-  `).all(characterId, proj, since, limit);
+  `).all(proj, since, limit);
 }
