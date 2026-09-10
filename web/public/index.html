@@ -4,19 +4,21 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Castalia — Memory Constellation</title>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <style>
 :root {
-  --bg: #15161B;
-  --panel: #1F2229;
-  --card: #2A2E38;
-  --border: #2A2E38;
-  --text: #e0e0e0;
-  --t-primary: #f0f0f0;
-  --t-secondary: #9aa3a8;
+  --bg: #07090D;
+  --panel: rgba(12, 16, 24, 0.72);
+  --card: #12171F;
+  --border: rgba(255,255,255,0.08);
+  --line-2: rgba(255,255,255,0.14);
+  --text: #E8EDF2;
+  --t-primary: #E8EDF2;
+  --t-secondary: #8A94A3;
   --t-bright: #fff;
   --b-hover: rgba(255,255,255,0.25);
-  --accent: #00A89A;
-  --accent-deep: #008880;
+  --accent: #3EE8C8;
+  --accent-deep: #1AAF98;
   --accent-mid: #45B9AC;
   --accent-light: #7AE8D8;
   --accent-hi: #A0F8E8;
@@ -24,42 +26,47 @@
   --green: #57E6C4;
   --rose: #f43f5e;
   --gold: #fbbf24;
-  /* mem_type 五色 */
-  --c-user: #14b8a6;
-  --c-feedback: #f59e0b;
-  --c-project: #8b5cf6;
-  --c-reference: #3b82f6;
-  --c-general: #64748b;
+  --c-user: #3EE8C8;
+  --c-feedback: #F5B942;
+  --c-project: #A78BFA;
+  --c-reference: #5B8CFF;
+  --c-general: #6B7585;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif; }
 #graph { position: fixed; inset: 0; }
-#loading { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); font-size: 1.1rem; color: var(--t-secondary); z-index: 5; }
-#loading.error { color: var(--red); }
-#top-bar { position: fixed; top: 0; left: 0; right: 0; height: 48px; display: flex; align-items: center; padding: 0 16px; background: linear-gradient(180deg, rgba(21,22,27,0.9), transparent); z-index: 10; pointer-events: none; }
-#top-bar .logo { font-weight: 600; color: var(--t-bright); letter-spacing: 1px; font-size: .95rem; }
-#top-bar .stat-pill { margin-left: 16px; font-size: .75rem; color: var(--t-secondary); }
-#top-bar .stat-pill b { color: var(--t-primary); font-weight: 500; }
-/* 记忆搜索框: 放进顶栏(最顶上),不再悬浮遮挡 3D 图 */
-#search-bar { flex: 1; max-width: 300px; margin: 0 16px 0 20px; pointer-events: auto; }
-#search-input { width: 100%; background: rgba(31,34,41,0.8); border: 1px solid var(--border); color: var(--t-primary); padding: 6px 14px; border-radius: 18px; font-size: .8rem; outline: none; backdrop-filter: blur(14px); }
-.tool-btn { pointer-events: auto; margin-left: 10px; background: rgba(31,34,41,0.8); border: 1px solid var(--border); color: var(--t-primary); padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: .8rem; transition: .2s; backdrop-filter: blur(10px); }
-.tool-btn:hover { border-color: var(--accent-light); color: var(--accent-light); }
-.tool-btn.active { border-color: var(--accent-hi); color: var(--accent-hi); background: rgba(126,232,216,0.15); }
+#vignette { position: fixed; inset: 0; pointer-events: none; z-index: 4;
+  background: radial-gradient(ellipse at 50% 45%, transparent 42%, rgba(0,0,0,0.55) 100%); }
+#loading { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); font-size: 1.05rem; color: var(--accent); letter-spacing: 0.12em; z-index: 5; text-shadow: 0 0 18px rgba(62,232,200,.45); }
+#loading.error { color: var(--red); text-shadow: none; }
+#top-bar { position: fixed; top: 0; left: 0; right: 0; height: 56px; display: flex; align-items: center; padding: 0 18px; background: linear-gradient(180deg, rgba(7,9,13,.92), rgba(7,9,13,0)); z-index: 10; pointer-events: none; }
+#top-bar .logo { font-weight: 650; color: var(--t-bright); letter-spacing: .4px; font-size: .95rem; }
+#top-bar .stat-pill { margin-left: 14px; font-size: .75rem; color: var(--t-secondary); }
+#top-bar .stat-pill b { color: var(--t-primary); font-weight: 600; }
+#search-bar { flex: 1; max-width: 280px; margin: 0 16px 0 18px; pointer-events: auto; }
+#search-input { width: 100%; background: rgba(255,255,255,.04); border: 1px solid var(--line-2); color: var(--t-primary); padding: 7px 14px; border-radius: 999px; font-size: .8rem; outline: none; backdrop-filter: blur(16px); }
+#search-input:focus { border-color: rgba(62,232,200,.45); }
+.tool-btn { pointer-events: auto; margin-left: 8px; background: rgba(255,255,255,.04); border: 1px solid var(--line-2); color: var(--t-primary); padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: .78rem; transition: .2s; backdrop-filter: blur(12px); }
+.tool-btn:hover { border-color: var(--accent); color: var(--accent); }
+.tool-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(62,232,200,0.12); }
 .tool-btn:disabled { opacity: .4; cursor: not-allowed; }
 #admin-btn { margin-left: auto; }
-#legend { position: fixed; left: 16px; bottom: 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; font-size: .72rem; color: var(--t-secondary); backdrop-filter: blur(14px); z-index: 10; min-width: 160px; }
-.legend-title { font-weight: 600; margin-bottom: 8px; color: var(--t-primary); }
+#top-bar a { pointer-events: auto; color: var(--t-primary); font-size: .78rem; margin-left: 8px; text-decoration: none; border: 1px solid var(--line-2); padding: 6px 12px; border-radius: 8px; background: rgba(255,255,255,.04); backdrop-filter: blur(12px); }
+#top-bar a:hover { border-color: var(--accent); color: var(--accent); }
+#legend { position: fixed; left: 16px; bottom: 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; font-size: .72rem; color: var(--t-secondary); backdrop-filter: blur(18px) saturate(1.2); z-index: 10; min-width: 188px; max-width: 240px; }
+.legend-title { font-weight: 650; margin-bottom: 6px; color: var(--t-primary); letter-spacing: 1.4px; font-size: .62rem; text-transform: uppercase; }
 .legend-item { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
-.legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.legend-item.child { padding-left: 14px; font-size: .66rem; opacity: .92; }
+.legend-item.parent { margin-top: 7px; color: var(--t-primary); font-weight: 650; }
+.legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; box-shadow: 0 0 6px currentColor; }
 .legend-count { margin-left: auto; opacity: .6; }
 .legend-divider { border-top: 1px solid var(--border); margin: 8px 0; }
-#controls-hint { position: fixed; bottom: 16px; right: 16px; font-size: .7rem; color: rgba(255,255,255,0.3); z-index: 10; }
+#controls-hint { position: fixed; bottom: 16px; right: 16px; font-size: .68rem; color: rgba(255,255,255,0.28); z-index: 10; letter-spacing: .04em; }
 
 /* ─── 统计宫格 (MNEMO MemoryStats) — 右上角,不挡 3D 图 ─── */
-#stats-bar { position: fixed; top: 52px; right: 16px; left: auto; transform: none; display: flex; align-items: center; gap: 8px; z-index: 9; }
+#stats-bar { position: fixed; top: 60px; right: 16px; left: auto; transform: none; display: flex; align-items: center; gap: 8px; z-index: 9; }
 #stats-grid { display: flex; gap: 8px; flex-wrap: nowrap; }
-.stat-cell { background: rgba(0,0,0,0.4); border: 1px solid; border-radius: 10px; padding: 8px 14px; text-align: center; min-width: 76px; backdrop-filter: blur(10px); }
+.stat-cell { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 8px 14px; text-align: center; min-width: 76px; backdrop-filter: blur(16px); }
 .stat-num { font-size: 1.4rem; font-weight: 800; line-height: 1; }
 .stat-label { font-size: 0.55rem; color: var(--t-secondary); font-weight: 600; letter-spacing: 1px; margin-top: 4px; }
 #stats-toggle { pointer-events: auto; background: rgba(31,34,41,0.8); border: 1px solid var(--border); color: var(--t-secondary); width: 26px; height: 26px; border-radius: 6px; cursor: pointer; }
@@ -73,7 +80,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 @keyframes breathe { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
 
 /* ─── 详情卡片 (MNEMO MemoryDetail) ─── */
-#side-panel { position: fixed; right: 16px; top: 64px; bottom: 56px; width: 360px; background: rgba(0,0,0,0.5); border: 1px solid var(--border); border-left: 2px solid #14b8a6; border-radius: 14px; padding: 18px; transform: translateX(420px); transition: transform .45s cubic-bezier(.22,1.2,.36,1); overflow-y: auto; backdrop-filter: blur(20px) saturate(1.2); z-index: 20; box-shadow: -8px 0 32px rgba(0,0,0,0.5); }
+#side-panel { position: fixed; right: 16px; top: 72px; bottom: 56px; width: 340px; background: var(--panel); border: 1px solid var(--border); border-left: 2px solid var(--accent); border-radius: 16px; padding: 18px; transform: translateX(400px); transition: transform .45s cubic-bezier(.22,1.2,.36,1); overflow-y: auto; backdrop-filter: blur(22px) saturate(1.25); z-index: 20; box-shadow: -12px 0 40px rgba(0,0,0,0.45); }
 #side-panel.open { transform: translateX(0); }
 .panel-header { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 12px; }
 .panel-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; margin-top: 3px; }
@@ -135,9 +142,10 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 <body>
 <div id="loading">✦ Castalia 记忆星图正在展开...</div>
 <div id="graph"></div>
+<div id="vignette"></div>
 
 <div id="top-bar">
-  <span class="logo">✦ Castalia</span>
+  <span class="logo" id="app-logo">✦ Castalia</span>
   <span class="stat-pill">记忆 <b id="stat-nodes">—</b></span>
   <span class="stat-pill">连线 <b id="stat-links">—</b></span>
   <div id="search-bar">
@@ -145,10 +153,10 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
   </div>
   <button id="tour-btn" class="tool-btn" onclick="toggleTour()" disabled>▶ 自动导览</button>
   <button id="fs-btn" class="tool-btn" onclick="toggleFullscreen()">⛶ 全屏</button>
-  <button id="view-btn" class="tool-btn" onclick="toggleView()">🗂 总成视图</button>
+  <a id="fed-link" href="http://127.0.0.1:3345/?scope=federation" style="pointer-events:auto;color:var(--t-primary);font-size:.85rem;margin-left:10px;text-decoration:none;border:1px solid var(--border);padding:4px 10px;border-radius:8px;">联邦总图</a>
   <button id="admin-btn" class="tool-btn" onclick="toggleAdmin()">⚙ 管理</button>
-  <a href="/aggregate.html" style="pointer-events:auto;color:var(--t-primary);font-size:.85rem;margin-left:10px;text-decoration:none;border:1px solid var(--border);padding:4px 10px;border-radius:8px;">🗂 记忆总成</a>
-  <a href="/manage.html" style="pointer-events:auto;color:var(--t-primary);font-size:.85rem;margin-left:10px;text-decoration:none;border:1px solid var(--border);padding:4px 10px;border-radius:8px;">🗂 库管理</a>
+  <a href="/aggregate.html" style="pointer-events:auto;color:var(--t-primary);font-size:.85rem;margin-left:10px;text-decoration:none;border:1px solid var(--border);padding:4px 10px;border-radius:8px;">记忆总成</a>
+  <a href="/manage.html" style="pointer-events:auto;color:var(--t-primary);font-size:.85rem;margin-left:10px;text-decoration:none;border:1px solid var(--border);padding:4px 10px;border-radius:8px;">库管理</a>
 </div>
 
 <div id="stats-bar">
@@ -159,13 +167,13 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 <div id="tour-indicator"><span class="dot"></span><span class="label" id="tour-indicator-label">AUTO-TOUR</span></div>
 
 <div id="legend">
-  <div class="legend-title">记忆类型</div>
-  <div id="legend-items"></div>
+  <div class="legend-title" id="legend-struct-title">结构</div>
+  <div id="legend-struct"></div>
   <div class="legend-divider"></div>
-  <div class="legend-link">━ 关系 &nbsp; ┄ 相似度</div>
+  <div class="legend-link">点击节点看记忆 · 图例筛选</div>
 </div>
 
-<div id="controls-hint">拖拽旋转 · 滚轮缩放 · 点击查看 · ▶ 自动导览 · ⛶ 全屏</div>
+<div id="controls-hint">搜索 / · 点击看记忆与连线 · 滚远成云 · 滚近是星</div>
 
 <div id="side-panel">
   <div class="panel-header">
@@ -194,6 +202,10 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
   <div class="panel-section" id="panel-tags-section">
     <div class="panel-section-label">标签</div>
     <div id="panel-tags"></div>
+  </div>
+  <div class="panel-section" id="panel-rel-section">
+    <div class="panel-section-label">相连记忆</div>
+    <div id="panel-rel"></div>
   </div>
 </div>
 
@@ -310,11 +322,11 @@ window.addEventListener('viz-libs-ready', function () {
 <script>
 /* ═══════════════════ MNEMO 风格常量 ═══════════════════ */
 const MEM_TYPE_COLORS = {
-  user: '#14b8a6',
-  feedback: '#f59e0b',
-  project: '#8b5cf6',
-  reference: '#3b82f6',
-  general: '#64748b',
+  user: '#5FF5D6',
+  feedback: '#FFD056',
+  project: '#C4A6FF',
+  reference: '#7EB0FF',
+  general: '#9AA6B8',
 };
 const MEM_TYPE_LABELS = {
   user: '用户画像',
@@ -327,6 +339,34 @@ const TYPE_FALLBACK_COLORS = { episodic: '#f59e0b', semantic: '#8b5cf6', working
 const SOFTWARE_COLOR = '#00A89A';
 const LIBRARY_COLOR = '#7c6ff7';
 const MEM_TYPE_ORDER = ['user', 'feedback', 'project', 'reference', 'general'];
+const GRAPH_SCOPE = (new URLSearchParams(location.search).get('scope') || 'local').toLowerCase();
+const IS_FED = GRAPH_SCOPE === 'federation' || GRAPH_SCOPE === 'all' || GRAPH_SCOPE === 'fed';
+const FED_GRAPH_URL = 'http://127.0.0.1:3345/?scope=federation';
+const STRUCT_COLORS = {
+  Hermes: '#5FF5D6', LobeHub: '#7EB0FF', AIRI: '#FF8FB8', 联邦: '#FFD056',
+  hermes: '#3EE8C8', lobehub: '#5B8CFF', airi: '#A78BFA',
+  reflect: '#F5B942', default: '#6B7585', shared: '#8A94A3', custom-project: '#E8A54B',
+};
+function structKey(n) {
+  if ((n.project || n.lib) === 'reflect') return '联邦';
+  if (IS_FED) return n.instance || '未知';
+  return n.project || n.lib || 'default';
+}
+
+function applyInstanceChrome(s) {
+  const logo = document.getElementById('app-logo');
+  const fedLink = document.getElementById('fed-link');
+  if (IS_FED) {
+    if (logo) logo.textContent = '✦ Castalia 联邦总图';
+    document.title = 'Castalia 联邦总图';
+    if (fedLink) fedLink.style.display = 'none';
+  } else {
+    const name = (s && s.instance) ? s.instance : '';
+    if (logo) logo.textContent = name ? ('✦ ' + name) : '✦ Castalia';
+    document.title = name ? (name + ' · 星图') : 'Castalia 星图';
+  }
+}
+applyInstanceChrome(null);
 
 /* ═══════════════════ 连线语义编码 (ContextOS / V1) ═══════════════════ */
 /* 关系边按类型着色:暖色=因果/时序,冷色=同主题/相关/跟随 */
@@ -416,11 +456,11 @@ function memColor(node) {
 function buildCoreNode(node, R, labelW) {
   const color = node.__galaxyColor || '#fbbf24';
   const group = new THREE.Group();
-  const core = new THREE.Mesh(sphereGeo(R), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 }));
+  const core = new THREE.Mesh(sphereGeo(R), new THREE.MeshBasicMaterial({ color, transparent: false, opacity: 1 }));
   group.add(core);
-  const glow1 = new THREE.Mesh(sphereGeo(R * 1.6), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.25 }));
+  const glow1 = new THREE.Mesh(sphereGeo(R * 2.1), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
   group.add(glow1);
-  const glow2 = new THREE.Mesh(sphereGeo(R * 2.6), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.08 }));
+  const glow2 = new THREE.Mesh(sphereGeo(R * 3.6), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false }));
   group.add(glow2);
   const name = (node.label || node.project || '').toUpperCase();
   if (name) {
@@ -437,8 +477,7 @@ function buildCoreNode(node, R, labelW) {
   return group;
 }
 
-/* 星系核心大星(项目级) */
-function buildGalaxyCore(node) { return buildCoreNode(node, 4.5, 7); }
+function buildGalaxyCore(node) { return buildCoreNode(node, 28, 11); }
 
 /* 小星系核心小星(分类级,memType 色) */
 function buildSubGalaxyCore(node) { return buildCoreNode(node, 2.4, 8); }
@@ -447,9 +486,12 @@ function buildSubGalaxyCore(node) { return buildCoreNode(node, 2.4, 8); }
 function onGalaxyCoreClick(node) {
   if (!node) return;
   stopAutoTour();
-  flyTo(node, 1200);
+  expandedKey = null;
+  selectedNodeId = node.id;
+  if (graphInstance) graphInstance.nodeVisibility(n => lodVisible(n));
+  flyTo(node, 1000);
   const p = node.project || node.lib || '';
-  const projNodes = (allData?.nodes || []).filter(n => (n.project || n.lib) === p);
+  const projNodes = (allData?.nodes || []).filter(n => structKey(n) === (node.__struct || p));
   const counts = {};
   projNodes.forEach(n => { const mt = n.memType || 'general'; counts[mt] = (counts[mt] || 0) + 1; });
   showPanel({
@@ -470,10 +512,16 @@ function onGalaxyCoreClick(node) {
 function onSubGalaxyCoreClick(node) {
   if (!node) return;
   stopAutoTour();
-  flyTo(node, 900);
-  const p = node.project || node.lib || '';
+  const p = node.__struct || node.project || node.lib || '';
   const mt = node.memType || 'general';
-  const subNodes = (allData?.nodes || []).filter(n => (n.project || n.lib) === p && (n.memType || 'general') === mt);
+  expandedKey = p + '::' + mt;
+  selectedNodeId = node.id;
+  if (graphInstance) {
+    graphInstance.nodeVisibility(n => lodVisible(n));
+    graphInstance.linkVisibility(l => lodLinkVisible(l));
+  }
+  flyTo(node, 900);
+  const subNodes = (allData?.nodes || []).filter(n => n.__clusterKey === expandedKey);
   showPanel({
     id: node.id,
     group: 'subgalaxy-core',
@@ -503,10 +551,28 @@ function buildNode(node) {
 
   const coreMesh = new THREE.Mesh(sphereGeo(size * 0.5), new THREE.MeshBasicMaterial({ color }));
   group.add(coreMesh);
-  // 簇成员:光晕用簇色(叠加语义扎堆);非簇成员保持原色
   const glowColor = clusterCol || color;
-  const glowMesh = new THREE.Mesh(sphereGeo(important ? size * 1.15 : size * 0.85), new THREE.MeshBasicMaterial({ color: glowColor, transparent: true, opacity: important ? 0.42 : 0.25 }));
+  const glowMesh = new THREE.Mesh(
+    sphereGeo(important ? size * 1.45 : size * 1.05),
+    new THREE.MeshBasicMaterial({
+      color: glowColor, transparent: true, opacity: important ? 0.55 : 0.32,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    })
+  );
   group.add(glowMesh);
+  const halo = new THREE.Mesh(
+    sphereGeo(important ? size * 2.2 : size * 1.6),
+    new THREE.MeshBasicMaterial({
+      color: glowColor, transparent: true, opacity: important ? 0.16 : 0.08,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    })
+  );
+  group.add(halo);
+  const hit = new THREE.Mesh(
+    sphereGeo(Math.max(size * 2.4, 10)),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, depthTest: false })
+  );
+  group.add(hit);
 
   let labelSprite = null, labelMat = null;
   // V3:文字标签默认隐藏(防密集),选中/悬停时才显示;星系/小星系核心始终显示
@@ -552,13 +618,13 @@ function applyNodeVisual(node) {
   // 簇成员:基础光晕色 = 簇色(非 dim/导览/选中/悬停态时显示簇色扎堆)
   const baseGlowColor = node.__cluster ? (CLUSTER_COLORS_GLOBAL[node.__clusterColorKey || 0] || base) : base;
   const glowColor = isDim ? '#3c3c46' : (isTour ? '#fbbf24' : baseGlowColor);
-  const baseGlow = node.__important ? 0.42 : 0.25;
-  const glowOpacity = isDim ? 0.04 : (isTour ? 0.85 : (isSel ? 0.7 : (isHover ? 0.6 : baseGlow)));
+  const baseGlow = node.__important ? 0.28 : 0.12;
+  const glowOpacity = isDim ? 0.03 : (isTour ? 0.88 : (isSel ? 0.78 : (isHover ? 0.58 : baseGlow)));
   node.__glowMat.color.set(glowColor);
   node.__glowMat.opacity = glowOpacity;
   if (node.__coreMat) node.__coreMat.color.set(isDim ? '#3c3c46' : (isTour ? '#fbbf24' : base));
   // 标签:选中/悬停才显示(dim 时隐藏)
-  if (node.__labelSprite) node.__labelSprite.visible = !isDim && (isSel || isHover);
+  if (node.__labelSprite) node.__labelSprite.visible = node.group === 'galaxy-core' ? !isDim : (!isDim && (isSel || isHover));
   if (node.__labelMat) node.__labelMat.opacity = isDim ? 0 : 0.95;
 }
 
@@ -587,12 +653,52 @@ function applyNodeSizeAndStar(node) {
   }
 }
 
+let flyingUntil = 0;
 function flyTo(node, ms) {
-  const nx = node.x || 0, ny = node.y || 0, nz = node.z || 0;
-  const distance = 120;
-  const d = Math.hypot(nx, ny, nz) || 1;
-  const distRatio = 1 + distance / d;
-  graphInstance.cameraPosition({ x: nx * distRatio, y: ny * distRatio, z: nz * distRatio }, { x: nx, y: ny, z: nz }, ms);
+  if (!graphInstance || !node) return;
+  markInteraction();
+  flyingUntil = Date.now() + (ms || 2000) + 100;
+  const distance = node.group === 'galaxy-core' ? 80 : 40;
+  const distRatio = 1 + distance / Math.hypot(node.x || 0, node.y || 0, node.z || 0);
+  const newPos = (node.x || node.y || node.z)
+    ? { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio }
+    : { x: 0, y: 0, z: distance };
+  graphInstance.cameraPosition(newPos, node, ms || 2000);
+  try { graphInstance.controls().target.set(node.x, node.y, node.z); } catch (e) {}
+}
+window.flyTo = flyTo;
+
+const LOD_DIST = 1600;
+let lodFar = null;
+function cameraDist() {
+  try {
+    const c = graphInstance.camera();
+    return Math.hypot(c.position.x, c.position.y, c.position.z);
+  } catch (e) { return 0; }
+}
+function lodVisible(n) {
+  if (n.group === 'galaxy-core') return true;
+  if (n.group === 'subgalaxy-core') return true;
+  if (expandedKey && (n.__clusterKey === expandedKey)) return true;
+  return false;
+}
+function lodLinkVisible(l) {
+  if (isSyntheticLink(l)) return false;
+  const focus = selectedNodeId || hoveredNodeId;
+  if (!focus) return false;
+  const s = linkSrcId(l), t = linkTgtId(l);
+  return s === focus || t === focus;
+}
+function applyLod() {
+  if (!graphInstance) return;
+  const far = cameraDist() > LOD_DIST;
+  if (lodFar === far) {
+    graphInstance.linkVisibility(l => lodLinkVisible(l));
+    return;
+  }
+  lodFar = far;
+  graphInstance.nodeVisibility(n => lodVisible(n));
+  graphInstance.linkVisibility(l => lodLinkVisible(l));
 }
 
 /* ═══════════════════ 星空背景 (V2) ═══════════════════ */
@@ -603,21 +709,32 @@ function addStarField() {
     const scene = graphInstance.scene();
     if (starField && starField.parent === scene) return;   // 已添加
     if (starField && starField.parent) starField.parent.remove(starField);
-    const N = 2000, R = 2000;
+    const N = 4200, R = 2400;
     const pos = new Float32Array(N * 3);
+    const col = new Float32Array(N * 3);
     for (let i = 0; i < N; i++) {
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(2 * Math.random() - 1);
-      const r = R * (0.4 + 0.6 * Math.random());
+      const r = R * (0.35 + 0.65 * Math.random());
       pos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
       pos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
       pos[i * 3 + 2] = r * Math.cos(phi);
+      const bright = 0.45 + Math.random() * 0.55;
+      col[i * 3] = 0.72 * bright;
+      col[i * 3 + 1] = 0.84 * bright;
+      col[i * 3 + 2] = 1.0 * bright;
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    const mat = new THREE.PointsMaterial({ color: 0x9fb4c8, size: 3.0, sizeAttenuation: true, transparent: true, opacity: 0.8, depthWrite: false });
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    const mat = new THREE.PointsMaterial({
+      vertexColors: true, size: 2.2, sizeAttenuation: true,
+      transparent: true, opacity: 0.9, depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
     starField = new THREE.Points(geo, mat);
     scene.add(starField);
+    if (!scene.fog) scene.fog = new THREE.FogExp2(0x07090D, 0.00055);
   } catch (e) { console.error('starfield:', e.message); }
 }
 
@@ -626,23 +743,27 @@ let orbitRAF = null;
 let orbitAngle = null;
 let lastInteraction = 0;
 let interactionBound = false;
-const ORBIT_RESUME_MS = 30000;
+const ORBIT_RESUME_MS = 8000;
 function markInteraction() { lastInteraction = Date.now(); }
+function strollMemories() {
+  if (currentView !== 'star' || !graphInstance) return;
+  const gd = graphInstance.graphData();
+  if (!gd || !gd.nodes) return;
+  const t = Date.now();
+  gd.nodes.forEach(n => {
+    if (!n.__subCenter || !n.__rest || n.group) return;
+    const c = n.__subCenter;
+    const ax = n.__rest.x - c.x, ay = n.__rest.y - c.y, az = n.__rest.z - c.z;
+    const ang = t * (n.__orbitSpeed || 0.00015);
+    const cos = Math.cos(ang), sin = Math.sin(ang);
+    n.x = n.fx = c.x + ax * cos - az * sin;
+    n.z = n.fz = c.z + ax * sin + az * cos;
+    n.y = n.fy = c.y + ay + Math.sin(ang * 0.7) * 1.6;
+  });
+}
 function orbitTick() {
   if (orbitRAF == null) return;
-  if (currentView === 'star' && graphInstance && !autoTourActive && selectedNodeId == null && (Date.now() - lastInteraction) > ORBIT_RESUME_MS) {
-    try {
-      const cam = graphInstance.camera();
-      const r = Math.hypot(cam.position.x, cam.position.z);
-      if (r > 10) {
-        if (orbitAngle == null) orbitAngle = Math.atan2(cam.position.z, cam.position.x);
-        orbitAngle += 0.0012;
-        graphInstance.cameraPosition({ x: r * Math.cos(orbitAngle), y: cam.position.y, z: r * Math.sin(orbitAngle) }, { x: 0, y: 0, z: 0 }, 0);
-      }
-    } catch (e) {}
-  } else {
-    orbitAngle = null;
-  }
+  applyLod();
   orbitRAF = requestAnimationFrame(orbitTick);
 }
 function startOrbit() {
@@ -656,12 +777,61 @@ function bindInteraction() {
   graphEl.addEventListener('pointerdown', markInteraction);
   graphEl.addEventListener('wheel', markInteraction, { passive: true });
   graphEl.addEventListener('touchstart', markInteraction);
+  graphEl.addEventListener('click', (ev) => {
+    if (!graphInstance) return;
+    const rect = graphEl.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const y = ev.clientY - rect.top;
+    const nodes = (graphInstance.graphData().nodes || []).filter(n => lodVisible(n));
+    let best = null, bestD = 72;
+    nodes.forEach(n => {
+      let s;
+      try { s = graphInstance.graph2ScreenCoords(n.x, n.y, n.z); } catch (e) { return; }
+      const hit = n.group === 'galaxy-core' ? 70 : (n.group === 'subgalaxy-core' ? 36 : 18);
+      const d = Math.hypot((s.x || 0) - x, (s.y || 0) - y);
+      if (d < hit && d < bestD) { best = n; bestD = d; }
+    });
+    if (best) onStarNodeClick(best);
+  }, true);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && !e.ctrlKey && !e.metaKey && (e.target.tagName || '') !== 'INPUT' && (e.target.tagName || '') !== 'TEXTAREA') {
+      e.preventDefault();
+      const inp = document.getElementById('search-input');
+      if (inp) inp.focus();
+      return;
+    }
+    if (e.key === 'Escape') {
+      selectedNodeId = null;
+      typeFilter = null;
+      projectFilter = null;
+      instanceFilter = null;
+      hoverSet = null;
+      closePanel();
+      recomputeDim();
+      if (allData) renderStarLegend(allData);
+    }
+  });
+}
+
+function softenControls() {
+  try {
+    const c = graphInstance && graphInstance.controls && graphInstance.controls();
+    if (!c) return;
+    if (c.rotateSpeed != null) c.rotateSpeed = 0.28;
+    if (c.zoomSpeed != null) c.zoomSpeed = 0.5;
+    if (c.panSpeed != null) c.panSpeed = 0.4;
+    if (c.dynamicDampingFactor != null) c.dynamicDampingFactor = 0.18;
+  } catch (e) {}
 }
 
 /* ═══════════════════ 悬停邻居高亮 (I1) ═══════════════════ */
 let hoverSet = null;
 let hoveredNodeId = null;
 let searchQuery = '';
+let typeFilter = null;
+let projectFilter = null;
+let instanceFilter = null;
+let expandedKey = null;
 function oneHopNeighbors(nodeId) {
   const set = new Set([nodeId]);
   for (const l of (allData?.links || [])) {
@@ -674,17 +844,31 @@ function oneHopNeighbors(nodeId) {
 }
 function recomputeDim() {
   for (const n of (allData?.nodes || [])) {
-    n.dimmed = (searchQuery && !matchesNode(n, searchQuery)) || (hoverSet != null && !hoverSet.has(n.id));
+    let dim = false;
+    if (searchQuery && !matchesNode(n, searchQuery)) dim = true;
+    if (hoverSet != null && !hoverSet.has(n.id) && n.group !== 'galaxy-core' && n.group !== 'subgalaxy-core') dim = true;
+    if (typeFilter) {
+      if (n.group === 'subgalaxy-core' && n.memType !== typeFilter) dim = true;
+      if (!n.group && (n.memType || 'general') !== typeFilter) dim = true;
+    }
+    if (instanceFilter) {
+      const inst = n.instance || n.__struct;
+      if (n.group === 'galaxy-core' && n.__struct !== instanceFilter) dim = true;
+      if (n.group !== 'galaxy-core' && inst !== instanceFilter) dim = true;
+    }
+    if (projectFilter) {
+      const p = n.project || n.lib;
+      if (n.group === 'galaxy-core' && n.__struct !== projectFilter) dim = true;
+      if (n.group !== 'galaxy-core' && p !== projectFilter) dim = true;
+    }
+    n.dimmed = dim;
   }
   refreshNodeVisuals();
+  applyLinkHoverVisibility();
 }
 function applyLinkHoverVisibility() {
   if (!graphInstance || typeof graphInstance.linkVisibility !== 'function') return;
-  graphInstance.linkVisibility(l => {
-    if (hoverSet == null) return true;
-    if (isSyntheticLink(l)) return true;   // 结构背景保持
-    return hoverSet.has(linkSrcId(l)) && hoverSet.has(linkTgtId(l));
-  });
+  graphInstance.linkVisibility(l => lodLinkVisible(l));
 }
 function onHoverNode(node) {
   if (currentView !== 'star') return;
@@ -713,11 +897,13 @@ function renderStats() {
     addStatCell(grid, sw, 'SOFTWARE', SOFTWARE_COLOR);
     addStatCell(grid, lb, 'LIBRARY', LIBRARY_COLOR);
   } else if (allData) {
-    const byMemType = {};
-    allData.nodes.forEach(n => { const mt = n.memType || 'general'; byMemType[mt] = (byMemType[mt] || 0) + 1; });
-    addStatCell(grid, allData.nodes.length, 'TOTAL', '#14b8a6');
-    for (const mt of MEM_TYPE_ORDER) {
-      addStatCell(grid, byMemType[mt] || 0, mt.toUpperCase(), MEM_TYPE_COLORS[mt] || '#64748b');
+    const real = allData.nodes.filter(n => !n.group);
+    addStatCell(grid, real.length, 'TOTAL', '#3EE8C8');
+    if (IS_FED) {
+      ['Hermes', 'LobeHub', 'AIRI', '联邦'].forEach(name => {
+        const c = real.filter(n => structKey(n) === name).length;
+        addStatCell(grid, c, name, STRUCT_COLORS[name]);
+      });
     }
   }
 }
@@ -733,28 +919,69 @@ function updateStats(nodes, links) {
   document.getElementById('stat-links').textContent = links;
 }
 
-function setLegend(title, items, linkText) {
-  const legendEl = document.getElementById('legend-items');
-  legendEl.innerHTML = '';
-  const titleEl = document.querySelector('#legend .legend-title');
-  if (titleEl) titleEl.textContent = title;
+function fillLegendList(el, items) {
+  if (!el) return;
+  el.innerHTML = '';
+  const anyFilter = !!(typeFilter || projectFilter || instanceFilter);
   for (const it of items) {
     const item = document.createElement('div');
-    item.className = 'legend-item';
+    item.className = 'legend-item' + (it.cls ? ' ' + it.cls : '');
+    const f = it.filter || {};
+    const active = (
+      (f.kind === 'type' && typeFilter === f.id && !instanceFilter && !projectFilter) ||
+      (f.kind === 'project' && projectFilter === f.id && !typeFilter) ||
+      (f.kind === 'instance' && instanceFilter === f.id && !typeFilter) ||
+      (f.kind === 'nested' && typeFilter === f.type && (instanceFilter === f.struct || projectFilter === f.struct))
+    );
+    item.style.cursor = it.filter ? 'pointer' : 'default';
+    item.style.opacity = (!anyFilter || active || (it.cls === 'parent' && (instanceFilter === f.id || projectFilter === f.id))) ? '1' : '0.38';
+    if (active) item.style.color = 'var(--t-primary)';
     item.innerHTML = `<span class="legend-dot" style="background:${it.color}"></span> ${it.label} <span class="legend-count">${it.count}</span>`;
-    legendEl.appendChild(item);
+    if (it.filter) {
+      item.title = '点击筛选，再点一次取消';
+      item.onclick = () => {
+        if (f.kind === 'type') { typeFilter = typeFilter === f.id ? null : f.id; instanceFilter = null; projectFilter = null; }
+        if (f.kind === 'project') { projectFilter = projectFilter === f.id ? null : f.id; typeFilter = null; instanceFilter = null; }
+        if (f.kind === 'instance') { instanceFilter = instanceFilter === f.id ? null : f.id; typeFilter = null; projectFilter = null; }
+        if (f.kind === 'nested') {
+          const same = typeFilter === f.type && (instanceFilter === f.struct || projectFilter === f.struct);
+          if (same) { typeFilter = null; instanceFilter = null; projectFilter = null; }
+          else {
+            typeFilter = f.type;
+            if (IS_FED) { instanceFilter = f.struct; projectFilter = null; }
+            else { projectFilter = f.struct; instanceFilter = null; }
+          }
+        }
+        recomputeDim();
+        if (allData) renderStarLegend(allData);
+      };
+    }
+    el.appendChild(item);
   }
+}
+
+function setLegend(title, items, linkText) {
+  fillLegendList(document.getElementById('legend-struct'), items);
+  const titleEl = document.getElementById('legend-struct-title');
+  if (titleEl) titleEl.textContent = title;
   const linkEl = document.querySelector('#legend .legend-link');
-  if (linkEl) linkEl.textContent = linkText || '';
+  if (linkEl) linkEl.textContent = linkText || '点击筛选 · Esc 清除';
 }
 
 function onStarNodeClick(node) {
   if (!node) return;
+  if (node.group === 'galaxy-core') return onGalaxyCoreClick(node);
+  if (node.group === 'subgalaxy-core') return onSubGalaxyCoreClick(node);
   stopAutoTour();
   selectedNodeId = node.id;
+  hoverSet = oneHopNeighbors(node.id);
   refreshNodeVisuals();
   showPanel(node);
-  flyTo(node, 1500);
+  if (graphInstance) {
+    graphInstance.linkVisibility(l => lodLinkVisible(l));
+    try { graphInstance.nodeColor(n => selectedNodeId === n.id ? '#ffffff' : memColor(n)); } catch (e) {}
+  }
+  flyTo(node, 900);
 }
 
 function renderStar(data) {
@@ -763,146 +990,190 @@ function renderStar(data) {
   /* 清理上一次追加的合成边(renderStar 会被多次调用,避免重复) */
   data.links = (data.links || []).filter(l =>
     l.type !== 'galaxy-bridge' && l.type !== 'subgalaxy-spoke' && l.type !== 'subgalaxy-bridge');
-  /* ── L0 项目星系:按 project 分组,每项目一个星系,球面分布中心 ── */
-  const projects = [...new Set(data.nodes.map(n => n.project || n.lib || 'default'))];
-  const GALAXY_COLORS = { airi: '#8b5cf6', hermes: '#14b8a6', reflect: '#f59e0b' };
-  const GALAXY_R = 210;
-  const galaxyCenter = {};
-  projects.forEach((p, i) => {
-    const phi = Math.acos(1 - 2 * (i + 0.5) / projects.length);
-    const theta = Math.PI * (1 + Math.sqrt(5)) * i;
-    galaxyCenter[p] = {
-      x: GALAXY_R * Math.sin(phi) * Math.cos(theta),
-      y: GALAXY_R * Math.sin(phi) * Math.sin(theta),
-      z: GALAXY_R * Math.cos(phi),
-    };
+  /* 布局:先社区再 pack。团心分开,团内 Vogel 螺旋,间距 ≥ 视觉半径,不用弹簧勒。 */
+  const memTypeOf = n => n.memType || 'general';
+  const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+  const visR = (n) => ((n.size || 6) * 0.9) + 5;
+  const packRof = (count, gap) => {
+    const n = Math.max(count, 1);
+    const nCore = Math.max(3, Math.floor(n * 0.22));
+    const halo = Math.max(0, n - nCore);
+    return gap * 0.55 * Math.sqrt(nCore) + (halo ? gap * 1.45 * Math.pow(halo, 0.72) : gap * 0.4);
+  };
+
+  data.nodes.forEach(n => {
+    n.size = 3.2 + (n.importance || 0.5) * 3.4;
+    n.starred = (n.importance || 0.5) >= 0.9;
   });
 
-  /* ── L1 分类小星系:项目内按 memType 细分,小核心围绕项目核心分布 ── */
-  const SUB_SHELL_R = 70;   // 小星系中心距项目核心的半径(拉大避免小星系互相重叠)
-  const SUB_SCATTER = 14;   // 个体节点初始散布半径(±)
-  const memTypeOf = n => n.memType || 'general';
-  const subCenter = {};     // key = project::memType → {x,y,z}
-  const subCoreNodes = [];  // 小星系核心代表节点(锁定位置)
-  projects.forEach(p => {
-    const mts = [...new Set(data.nodes.filter(n => (n.project || n.lib || 'default') === p).map(memTypeOf))].sort();
-    const g = galaxyCenter[p];
-    mts.forEach((mt, idx) => {
-      const count = mts.length;
-      const phi = Math.acos(1 - 2 * (idx + 0.5) / count);
-      const theta = Math.PI * (1 + Math.sqrt(5)) * idx;
-      const c = {
-        x: g.x + SUB_SHELL_R * Math.sin(phi) * Math.cos(theta),
-        y: g.y + SUB_SHELL_R * Math.sin(phi) * Math.sin(theta),
-        z: g.z + SUB_SHELL_R * Math.cos(phi),
-      };
-      const key = p + '::' + mt;
-      subCenter[key] = c;
-      const nCount = data.nodes.filter(n => (n.project || n.lib || 'default') === p && memTypeOf(n) === mt).length;
-      subCoreNodes.push({
-        id: 'subgalaxy:' + key,
-        rawId: 'subgalaxy:' + key,
-        lib: p,
-        project: p,
-        label: (MEM_TYPE_LABELS[mt] || mt).toUpperCase(),
-        fullText: `${p} · ${MEM_TYPE_LABELS[mt] || mt} 小星系 (${nCount} 条)`,
-        group: 'subgalaxy-core',
-        memType: mt,
-        category: 'subgalaxy',
-        size: 7,
-        importance: 0.6,
-        __galaxyColor: MEM_TYPE_COLORS[mt] || '#64748b',
-        x: c.x, y: c.y, z: c.z,
-        fx: c.x, fy: c.y, fz: c.z,
-      });
+  const groups = [...new Set(data.nodes.map(structKey))];
+  const clusters = [];
+  groups.forEach(p => {
+    MEM_TYPE_ORDER.forEach(mt => {
+      const ns = data.nodes.filter(n => structKey(n) === p && memTypeOf(n) === mt);
+      if (!ns.length) return;
+      const gap = Math.max(...ns.map(visR), 8) * 2.6 + 10;
+      clusters.push({ p, mt, nodes: ns, gap, packR: packRof(ns.length, gap) });
     });
   });
 
-  /* 星系核心代表节点(大星,点击查看项目详情) */
-  const coreNodes = projects.map(p => ({
+  const typeLocal = {};
+  const groupBound = {};
+  groups.forEach(p => {
+    const items = clusters.filter(c => c.p === p);
+    if (!items.length) { groupBound[p] = 40; return; }
+    if (items.length === 1) {
+      items[0].lx = 0; items[0].ly = 0; items[0].lz = 0;
+      groupBound[p] = items[0].packR + 24;
+      return;
+    }
+    let chord = 0;
+    for (let i = 0; i < items.length; i++) {
+      const a = items[i], b = items[(i + 1) % items.length];
+      chord = Math.max(chord, a.packR + b.packR + 32);
+    }
+    const ring = chord / (2 * Math.sin(Math.PI / items.length));
+    items.forEach((it, i) => {
+      const phi = Math.acos(1 - 2 * (i + 0.5) / items.length);
+      const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+      it.lx = ring * Math.sin(phi) * Math.cos(theta);
+      it.ly = ring * Math.sin(phi) * Math.sin(theta);
+      it.lz = ring * Math.cos(phi);
+    });
+    groupBound[p] = ring + Math.max(...items.map(it => it.packR)) + 28;
+  });
+
+  const galaxyCenter = {};
+  if (groups.length === 1) {
+    galaxyCenter[groups[0]] = { x: 0, y: 0, z: 0 };
+  } else if (groups.length === 2) {
+    const gap = groupBound[groups[0]] + groupBound[groups[1]] + 90;
+    galaxyCenter[groups[0]] = { x: -gap / 2, y: 50, z: -40 };
+    galaxyCenter[groups[1]] = { x: gap / 2, y: -50, z: 40 };
+  } else {
+    let chord = 0;
+    for (let i = 0; i < groups.length; i++) {
+      chord = Math.max(chord, groupBound[groups[i]] + groupBound[groups[(i + 1) % groups.length]] + 110);
+    }
+    const ring = chord / (2 * Math.sin(Math.PI / groups.length));
+    groups.forEach((p, i) => {
+      const phi = Math.acos(1 - 2 * (i + 0.5) / groups.length);
+      const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+      galaxyCenter[p] = {
+        x: ring * Math.sin(phi) * Math.cos(theta),
+        y: ring * Math.sin(phi) * Math.sin(theta) * 0.85,
+        z: ring * Math.cos(phi),
+      };
+    });
+  }
+
+  const subCenter = {};
+  const subCoreNodes = [];
+  clusters.forEach(cl => {
+    const g = galaxyCenter[cl.p];
+    const c = { x: g.x + (cl.lx || 0), y: g.y + (cl.ly || 0), z: g.z + (cl.lz || 0) };
+    const key = cl.p + '::' + cl.mt;
+    subCenter[key] = c;
+    cl.center = c;
+    cl.key = key;
+    subCoreNodes.push({
+      id: 'subgalaxy:' + key,
+      rawId: 'subgalaxy:' + key,
+      lib: cl.p,
+      project: cl.p,
+      instance: IS_FED ? cl.p : '',
+      __struct: cl.p,
+      __clusterKey: key,
+      label: (MEM_TYPE_LABELS[cl.mt] || cl.mt) + ' · ' + cl.nodes.length,
+      fullText: `${cl.p} · ${MEM_TYPE_LABELS[cl.mt] || cl.mt} · ${cl.nodes.length} 条`,
+      group: 'subgalaxy-core',
+      memType: cl.mt,
+      category: 'subgalaxy',
+      size: 12 + Math.log2(cl.nodes.length + 1) * 3,
+      importance: 0.8,
+      __galaxyColor: MEM_TYPE_COLORS[cl.mt] || '#64748b',
+      x: c.x, y: c.y, z: c.z,
+      fx: c.x, fy: c.y, fz: c.z,
+    });
+  });
+
+  /* 星系核心代表节点 */
+  const coreNodes = groups.map(p => ({
     id: 'galaxy:' + p,
     rawId: 'galaxy:' + p,
     lib: p,
     project: p,
-    label: p.toUpperCase(),
-    fullText: p + ' 项目星系',
+    instance: IS_FED ? p : '',
+    __struct: p,
+    label: p + ' · ' + data.nodes.filter(n => structKey(n) === p).length,
+    fullText: IS_FED ? (p + ' 实例') : (p + ' 项目'),
     group: 'galaxy-core',
     memType: 'general',
     category: 'galaxy',
-    size: 14,
+    size: 18 + Math.sqrt(data.nodes.filter(n => structKey(n) === p).length) * 0.7,
+    count: data.nodes.filter(n => structKey(n) === p).length,
     importance: 1,
-    __galaxyColor: GALAXY_COLORS[p] || '#fbbf24',
+    __galaxyColor: STRUCT_COLORS[p] || '#fbbf24',
     x: galaxyCenter[p].x, y: galaxyCenter[p].y, z: galaxyCenter[p].z,
     fx: galaxyCenter[p].x, fy: galaxyCenter[p].y, fz: galaxyCenter[p].z,
   }));
 
-  /* 个体节点:固定在小星系核心周围球壳上(斐波那契均匀分布,位置锁定,绝不被吸成团)
-   * 半径按小星系节点数自适应:节点越多球壳越大,保证不重叠 */
   const nodeById = {};
-  const subNodeCount = {};   // key = project::memType → 节点数
-  data.nodes.forEach(node => {
-    const p = node.project || node.lib || 'default';
-    const k = p + '::' + memTypeOf(node);
-    subNodeCount[k] = (subNodeCount[k] || 0) + 1;
-  });
-  const subOrbitR = {};      // key → 球壳半径
-  for (const k in subNodeCount) {
-    subOrbitR[k] = 16 + Math.sqrt(subNodeCount[k]) * 4;  // n=45→42.8 / n=12→29.9
-  }
-  const subIdx = {};         // key → 已分配索引
-  data.nodes.forEach(node => {
-    nodeById[node.id] = node;
-    node.fx = null; node.fy = null; node.fz = null;
-    node.size = (node.importance || 0.5) * 6 + 4;
-    node.starred = (node.importance || 0.5) >= 0.9;
-    const p = node.project || node.lib || 'default';
-    const g = galaxyCenter[p] || galaxyCenter[projects[0]];
-    const k = p + '::' + memTypeOf(node);
-    const c = subCenter[k] || g;
-    node.__galaxyCenter = g;
-    node.__subCenter = c;
-    if (c) {
-      // 斐波那契球面分布:第 i 个节点落在小核心周围固定半径球壳上
-      const n = subNodeCount[k] || 1;
-      const i = subIdx[k] || 0;
-      subIdx[k] = i + 1;
-      const r = subOrbitR[k] || 26;
-      const phi = Math.acos(1 - 2 * (i + 0.5) / n);
+  clusters.forEach(cl => {
+    const c = cl.center;
+    const g = galaxyCenter[cl.p];
+    const sorted = cl.nodes.slice().sort((a, b) => (b.importance || 0) - (a.importance || 0));
+    const shown = sorted.slice(0, 32);
+    const nAll = shown.length;
+    const nCore = Math.max(3, Math.floor(nAll * 0.22));
+    shown.forEach((node, i) => {
+      nodeById[node.id] = node;
+      node.__struct = cl.p;
+      node.__clusterKey = cl.p + '::' + cl.mt;
+      node.__galaxyCenter = g;
+      node.__subCenter = c;
+      let r;
+      if (i < nCore) r = cl.gap * 0.7 * Math.pow(i + 0.5, 0.42);
+      else r = cl.gap * 0.7 * Math.pow(nCore, 0.42) + cl.gap * 1.15 * Math.pow(i - nCore + 1, 0.55);
+      const phi = Math.acos(1 - 2 * (i + 0.5) / nAll);
       const theta = Math.PI * (1 + Math.sqrt(5)) * i;
-      const dx = r * Math.sin(phi) * Math.cos(theta);
-      const dy = r * Math.sin(phi) * Math.sin(theta);
-      const dz = r * Math.cos(phi);
-      node.x = c.x + dx; node.y = c.y + dy; node.z = c.z + dz;
-      node.fx = node.x; node.fy = node.y; node.fz = node.z;  // 锁定:力模拟不再移动
-    } else {
-      node.x = node.y = node.z = 0;
+      node.x = c.x + r * Math.sin(phi) * Math.cos(theta);
+      node.y = c.y + r * Math.sin(phi) * Math.sin(theta);
+      node.z = c.z + r * Math.cos(phi);
+      node.__rest = { x: node.x, y: node.y, z: node.z };
+      node.__orbitSpeed = 0;
       node.fx = node.x; node.fy = node.y; node.fz = node.z;
-    }
+    });
   });
+  data.nodes.forEach(n => { if (!nodeById[n.id]) nodeById[n.id] = n; });
+  (function fitLayout(nodes, target) {
+    let maxR = 1;
+    nodes.forEach(n => {
+      const r = Math.hypot(n.x || 0, n.y || 0, n.z || 0);
+      if (r > maxR) maxR = r;
+    });
+    const s = target / maxR;
+    nodes.forEach(n => {
+      n.x = (n.x || 0) * s; n.y = (n.y || 0) * s; n.z = (n.z || 0) * s;
+      if (n.fx != null) { n.fx = n.x; n.fy = n.y; n.fz = n.z; }
+      if (n.__rest) { n.__rest.x *= s; n.__rest.y *= s; n.__rest.z *= s; }
+      if (n.__subCenter) {
+        n.__subCenter = { x: n.__subCenter.x * s, y: n.__subCenter.y * s, z: n.__subCenter.z * s };
+      }
+      if (n.__galaxyCenter) {
+        n.__galaxyCenter = { x: n.__galaxyCenter.x * s, y: n.__galaxyCenter.y * s, z: n.__galaxyCenter.z * s };
+      }
+    });
+  })(coreNodes.concat(subCoreNodes).concat(data.nodes), 240);
 
-  /* ── 星系桥:方向规则(用户拍板 2026-08-16)
-   *  - 主节点 = {airi, reflect}:airi ↔ reflect 双向互联
-   *  - 子节点 = 其他项目(hermes 等):不与主节点互通,仅 reflect 单向读取子节点
-   *  - 子节点之间不连
-   *  视觉:双向 = 金色粗线双向粒子;单向 = 金色细线 + 箭头指向读取方(reflect) */
-  const MAIN_PROJECTS = ['airi', 'reflect'];
+  /* 星系桥:总图连实例核心;本图不再用 airi↔reflect 旧规则 */
   const bridges = [];
-  const isMain = p => MAIN_PROJECTS.includes(p);
-  // 1) 主节点之间:airi ↔ reflect 双向(两条反向 link → 双向粒子光流)
-  for (let i = 0; i < MAIN_PROJECTS.length; i++) {
-    for (let j = i + 1; j < MAIN_PROJECTS.length; j++) {
-      const pa = MAIN_PROJECTS[i], pb = MAIN_PROJECTS[j];
-      if (!projects.includes(pa) || !projects.includes(pb)) continue;
-      bridges.push({ source: 'galaxy:' + pa, target: 'galaxy:' + pb, type: 'galaxy-bridge', dir: 'both', width: 1.5 });
-      bridges.push({ source: 'galaxy:' + pb, target: 'galaxy:' + pa, type: 'galaxy-bridge', dir: 'both', width: 1.5 });
+  for (let i = 0; i < groups.length; i++) {
+    for (let j = i + 1; j < groups.length; j++) {
+      const pa = groups[i], pb = groups[j];
+      bridges.push({ source: 'galaxy:' + pa, target: 'galaxy:' + pb, type: 'galaxy-bridge', dir: 'both', width: IS_FED ? 1.6 : 1.1 });
     }
   }
-  // 2) reflect 单向读取子节点(箭头指向 reflect:source=子节点, target=reflect)
-  projects.forEach(p => {
-    if (isMain(p)) return;               // 主节点之间已处理
-    if (!projects.includes('reflect')) return;
-    bridges.push({ source: 'galaxy:' + p, target: 'galaxy:reflect', type: 'galaxy-bridge', dir: 'oneway', width: 1.0 });
-  });
 
   /* ── 小星系层级边:项目核心 ↔ 小核心(spoke)+ 同项目小核心之间(bridge)── */
   const linkSrc = l => (l.source && typeof l.source === 'object') ? l.source.id : l.source;
@@ -913,8 +1184,8 @@ function renderStar(data) {
     const s = linkSrc(l), t = linkTgt(l);
     const ns = nodeById[s], nt = nodeById[t];
     if (!ns || !nt) return;
-    const ps = ns.project || ns.lib, pt = nt.project || nt.lib;
-    if (ps !== pt) return;                    // 只统计同项目内的跨小星系边
+    const ps = structKey(ns), pt = structKey(nt);
+    if (ps !== pt) return;
     const ks = ps + '::' + memTypeOf(ns);
     const kt = pt + '::' + memTypeOf(nt);
     if (ks === kt) return;                    // 同小星系内不重复
@@ -927,7 +1198,7 @@ function renderStar(data) {
     return { source: 'subgalaxy:' + a, target: 'subgalaxy:' + b, type: 'subgalaxy-bridge', value: w, width: Math.min(0.5 + w * 0.18, 1.8) };
   });
 
-  data.links = (data.links || []).concat(bridges).concat(spokes).concat(subBridges);
+  data.links = data.links || [];
   const allNodes = coreNodes.concat(subCoreNodes).concat(data.nodes);
   const allLinks = data.links;
 
@@ -977,11 +1248,21 @@ function renderStar(data) {
 
   graphInstance = (graphInstance || new ForceGraph3D(document.getElementById('graph')))
     .graphData({ nodes: allNodes, links: allLinks })
-    .backgroundColor(document.fullscreenElement ? '#000000' : '#15161B')
-    .nodeThreeObject(node => buildNode(node))
-    .nodeVal(n => n.size || 4)
-    .nodeColor(n => memColor(n))
-    .nodeLabel(null)
+    .backgroundColor(document.fullscreenElement ? '#000000' : '#07090D')
+    .nodeRelSize(7)
+    .nodeVal(n => {
+      if (n.group === 'galaxy-core') return 180;
+      if (n.group === 'subgalaxy-core') return 42 + Math.min(n.size || 8, 24);
+      return 5 + (n.importance || 0.5) * 10;
+    })
+    .nodeColor(n => selectedNodeId === n.id ? '#ffffff' : memColor(n))
+    .nodeOpacity(1)
+    .nodeLabel(n => {
+      if (n.group === 'galaxy-core' || n.group === 'subgalaxy-core') return n.label || '';
+      return (n.fullText || n.label || '').slice(0, 80);
+    })
+    .enablePointerInteraction(true)
+    .enableNodeDrag(false)
     .linkColor(l => {
       if (l.type === 'galaxy-bridge') return 'rgba(255,214,120,0.55)';
       if (l.type === 'subgalaxy-bridge') return 'rgba(190,200,235,0.5)';
@@ -1003,16 +1284,16 @@ function renderStar(data) {
       return 0.5;
     })
     .linkDirectionalParticles(l => {
-      // 星系桥:双向=两方向粒子流动;单向=单方向粒子 + 箭头(指向读取方 reflect)
-      if (l.type === 'galaxy-bridge') return l.dir === 'both' ? 3 : 2;
-      if (l.type === 'subgalaxy-bridge') return 1;
-      if (l.type === 'subgalaxy-spoke') return 0;
-      if (l.type === 'similarity') return 0;
-      const n = Math.round(linkStrength(l) * 8);   // V1:按强度 0-8 粒子
-      return n > 0 ? n : 1;
+      if (l.type === 'subgalaxy-spoke' || l.type === 'similarity') return 0;
+      const s = linkSrcId(l), t = linkTgtId(l);
+      const focus = (selectedNodeId && (s === selectedNodeId || t === selectedNodeId))
+        || (hoverSet && hoverSet.has(s) && hoverSet.has(t));
+      if (focus) return l.type === 'galaxy-bridge' ? 4 : 5;
+      if (l.type === 'galaxy-bridge') return 1;
+      return 0;
     })
-    .linkDirectionalParticleWidth(0.06)
-    .linkDirectionalParticleSpeed(0.004)
+    .linkDirectionalParticleWidth(1.35)
+    .linkDirectionalParticleSpeed(0.0055)
     // 单向桥:粒子从子节点流向 reflect,并加箭头标注方向;语义边按类型上色
     .linkDirectionalParticleColor(l => {
       if (l.type === 'galaxy-bridge') return '#ffd678';
@@ -1021,17 +1302,10 @@ function renderStar(data) {
     .linkDirectionalArrowLength(l => (l.type === 'galaxy-bridge' && l.dir === 'oneway') ? 6 : 0)
     .linkDirectionalArrowColor(() => 'rgba(255,214,120,0.9)')
     .linkDirectionalArrowRelPos(0.5)
-    .linkOpacity(l => {
-      if (l.type === 'galaxy-bridge') return 0.7;
-      if (l.type === 'subgalaxy-bridge') return 0.55;
-      if (l.type === 'subgalaxy-spoke') return 0.2;
-      if (l.type === 'similarity') return 0.3;
-      return 0.5;
-    })
+    .linkOpacity(0.85)
+    .linkWidth(1.2)
     .showNavInfo(false)
     .onNodeClick(node => {
-      if (node.group === 'galaxy-core') return onGalaxyCoreClick(node);
-      if (node.group === 'subgalaxy-core') return onSubGalaxyCoreClick(node);
       onStarNodeClick(node);
     })
     .onNodeHover(node => {
@@ -1040,62 +1314,85 @@ function renderStar(data) {
     })
     .onLinkClick(l => {
       if (l && graphInstance && typeof graphInstance.emitParticle === 'function') graphInstance.emitParticle(l);
+    })
+    .onBackgroundClick(() => {
+      if (hoveredNodeId) {
+        const n = (allData.nodes || []).find(x => x.id === hoveredNodeId);
+        if (n) { onStarNodeClick(n); return; }
+      }
+      expandedKey = null;
+      selectedNodeId = null;
+      closePanel();
+      if (graphInstance) graphInstance.nodeVisibility(n => lodVisible(n));
     });
   addStarField();
   startOrbit();
   bindInteraction();
-  /* 力模拟:
-   *  - subgalaxy-attract:个体节点聚拢到各自 memType 小核心(强)
-   *  - galaxy-attract:个体节点再被较弱地拉向项目核心(维持星系整体内聚)
-   *  强度固定,不随 alpha 衰减 */
+  softenControls();
   try {
-    graphInstance.d3Force('subgalaxy-attract', () => {
-      const strength = 0.13;
-      data.nodes.forEach(n => {
-        const c = n.__subCenter;
-        if (!c) return;
-        n.vx += (c.x - n.x) * strength;
-        n.vy += (c.y - n.y) * strength;
-        n.vz += (c.z - n.z) * strength;
-      });
-    });
-    graphInstance.d3Force('galaxy-attract', () => {
-      const strength = 0.02;
-      data.nodes.forEach(n => {
-        const c = n.__galaxyCenter;
-        if (!c) return;
-        n.vx += (c.x - n.x) * strength;
-        n.vy += (c.y - n.y) * strength;
-        n.vz += (c.z - n.z) * strength;
-      });
-    });
-    // 星系内:电荷斥力按节点大小增强,防止个体被吸到小核心重叠
+    graphInstance.d3Force('subgalaxy-attract', null);
+    graphInstance.d3Force('galaxy-attract', null);
     const charge = graphInstance.d3Force('charge');
-    if (charge && typeof charge.strength === 'function') {
-      charge.strength(d => -(45 + (d.size || 4) * 14));
-    }
+    if (charge && typeof charge.strength === 'function') charge.strength(0);
     const linkF = graphInstance.d3Force('link');
-    if (linkF && typeof linkF.distance === 'function') linkF.distance(30);
-    // 碰撞检测半径按节点大小,节点不重叠穿透
-    const collide = graphInstance.d3Force('collide');
-    if (collide && typeof collide.radius === 'function') collide.radius(d => (d.size || 4) * 0.8);
+    if (linkF) {
+      if (typeof linkF.strength === 'function') linkF.strength(0);
+      if (typeof linkF.distance === 'function') linkF.distance(80);
+    }
+    const center = graphInstance.d3Force('center');
+    if (center && typeof center.strength === 'function') center.strength(0);
+    graphInstance.nodeVisibility(n => lodVisible(n));
+    graphInstance.linkVisibility(l => lodLinkVisible(l));
+    graphInstance.enableNodeDrag(false);
+    const scene = graphInstance.scene();
+    if (scene && !scene.__castaliaLit) {
+      scene.add(new THREE.AmbientLight(0xffffff, 2.4));
+      const dir = new THREE.DirectionalLight(0xffffff, 1.8);
+      dir.position.set(80, 120, 160);
+      scene.add(dir);
+      scene.__castaliaLit = true;
+    }
   } catch (e) { console.error('galaxy force:', e.message); }
+  try {
+    graphInstance.cameraPosition({ x: 0, y: 40, z: 520 }, { x: 0, y: 0, z: 0 }, 0);
+  } catch (e) {}
+  window.graphInstance = graphInstance;
+  window.flyTo = flyTo;
 }
 
 function renderStarLegend(data) {
-  const counts = {};
-  data.nodes.forEach(n => { const mt = n.memType || 'general'; counts[mt] = (counts[mt] || 0) + 1; });
-  const items = MEM_TYPE_ORDER
-    .filter(mt => counts[mt])
-    .map(mt => ({ color: MEM_TYPE_COLORS[mt], label: MEM_TYPE_LABELS[mt] || mt, count: counts[mt] }));
-  // 星系图例:每个项目一个星系
-  const projects = [...new Set(data.nodes.map(n => n.project || n.lib || 'default'))];
-  const GALAXY_COLORS = { airi: '#8b5cf6', hermes: '#14b8a6', reflect: '#f59e0b' };
-  const galItems = projects.map(p => {
-    const cnt = data.nodes.filter(n => (n.project || n.lib) === p).length;
-    return { color: GALAXY_COLORS[p] || '#fbbf24', label: p.toUpperCase() + ' 星系', count: cnt };
+  const real = (data.nodes || []).filter(n => !n.group);
+  const structCounts = {};
+  real.forEach(n => {
+    const k = structKey(n);
+    structCounts[k] = (structCounts[k] || 0) + 1;
   });
-  setLegend('星系与记忆类型', items.concat(galItems), '⭐ 双向互联 · ➤ 单向读取 · 🔶 因果/时序 · 🔷 同主题/相关 · ┄ 相似度');
+  const structKeys = IS_FED ? ['Hermes', 'LobeHub', 'AIRI', '联邦'] : Object.keys(structCounts);
+  const items = [];
+  structKeys.forEach(k => {
+    const members = real.filter(n => structKey(n) === k);
+    items.push({
+      color: STRUCT_COLORS[k] || '#8A94A3',
+      label: k,
+      count: members.length,
+      cls: 'parent',
+      filter: { kind: IS_FED ? 'instance' : 'project', id: k },
+    });
+    MEM_TYPE_ORDER.forEach(mt => {
+      const c = members.filter(n => (n.memType || 'general') === mt).length;
+      if (!c) return;
+      items.push({
+        color: MEM_TYPE_COLORS[mt],
+        label: MEM_TYPE_LABELS[mt] || mt,
+        count: c,
+        cls: 'child',
+        filter: { kind: 'nested', struct: k, type: mt },
+      });
+    });
+  });
+  const titleEl = document.getElementById('legend-struct-title');
+  if (titleEl) titleEl.textContent = IS_FED ? '结构' : '结构 · 项目';
+  fillLegendList(document.getElementById('legend-struct'), items);
 }
 
 function renderAssembly(data) {
@@ -1111,7 +1408,7 @@ function renderAssembly(data) {
 
   graphInstance = (graphInstance || new ForceGraph3D(document.getElementById('graph')))
     .graphData({ nodes: data.nodes, links: data.links || [] })
-    .backgroundColor(document.fullscreenElement ? '#000000' : '#15161B')
+    .backgroundColor(document.fullscreenElement ? '#000000' : '#07090D')
     .nodeThreeObject(node => buildNode(node))
     .nodeVal(n => n.size || 4)
     .nodeColor(n => memColor(n))
@@ -1131,6 +1428,7 @@ function renderAssembly(data) {
       );
     })
     .onNodeHover(node => { document.body.style.cursor = node ? 'pointer' : 'default'; });
+  softenControls();
 }
 
 function renderAssemblyLegend(data) {
@@ -1204,27 +1502,64 @@ function toggleTour() {
 function startAutoTour() {
   if (!allData || !allData.nodes || !allData.nodes.length) return;
   autoTourActive = true;
+  tourSeen = new Set();
+  tourCursor = null;
   const btn = document.getElementById('tour-btn');
   btn.classList.add('active');
   btn.textContent = '⏸ 停止导览';
   document.getElementById('tour-indicator').classList.add('on');
-  flyToRandomNode();
-  autoTourTimer = setInterval(flyToRandomNode, 60000);
+  walkToNextMemory();
+  autoTourTimer = setInterval(walkToNextMemory, 9000);
 }
 
-function flyToRandomNode() {
+let tourCursor = null;
+let tourSeen = new Set();
+
+function tourNeighbors(node) {
+  if (!graphInstance || !node) return [];
+  const links = graphInstance.graphData().links || [];
+  const id = node.id;
+  const out = [];
+  links.forEach(l => {
+    if (l.type === 'similarity' || (l.type || '').indexOf('galaxy') === 0 || (l.type || '').indexOf('subgalaxy') === 0) return;
+    const s = (l.source && typeof l.source === 'object') ? l.source.id : l.source;
+    const t = (l.target && typeof l.target === 'object') ? l.target.id : l.target;
+    if (s === id) out.push(t);
+    else if (t === id) out.push(s);
+  });
+  return out.map(nid => (allData.nodes || []).find(n => n.id === nid)).filter(Boolean);
+}
+
+function pickWalkNode() {
+  const nodes = (allData.nodes || []).filter(n => !n.dimmed && !n.group);
+  if (!nodes.length) return null;
+  if (tourSeen.size >= nodes.length) tourSeen = new Set();
+  if (tourCursor) {
+    const nbr = tourNeighbors(tourCursor).filter(n => !tourSeen.has(n.id));
+    if (nbr.length) return nbr[Math.floor(Math.random() * nbr.length)];
+    const same = nodes.filter(n => !tourSeen.has(n.id) && n.memType === tourCursor.memType && (n.project || n.lib) === (tourCursor.project || tourCursor.lib));
+    if (same.length) return same[0];
+    const sameProj = nodes.filter(n => !tourSeen.has(n.id) && (n.project || n.lib) === (tourCursor.project || tourCursor.lib));
+    if (sameProj.length) return sameProj[0];
+  }
+  const rest = nodes.filter(n => !tourSeen.has(n.id));
+  rest.sort((a, b) => (b.importance || 0) - (a.importance || 0));
+  return rest[0] || nodes[0];
+}
+
+function walkToNextMemory() {
   if (!allData || !allData.nodes || !allData.nodes.length || !graphInstance) return;
-  const visible = allData.nodes.filter(n => !n.dimmed);
-  const pool = visible.length ? visible : allData.nodes;
-  const node = pool[Math.floor(Math.random() * pool.length)];
+  const node = pickWalkNode();
+  if (!node) return;
+  tourCursor = node;
+  tourSeen.add(node.id);
   autoTargetId = node.id;
-  document.getElementById('tour-indicator-label').textContent = 'AUTO-TOUR • ' + ((node.fullText || node.label || '').substring(0, 25));
+  document.getElementById('tour-indicator-label').textContent = '散步 · ' + ((node.fullText || node.label || '').substring(0, 25));
   refreshNodeVisuals();
+  showPanel(node);
   const nx = node.x || 0, ny = node.y || 0, nz = node.z || 0;
-  const distance = 80;
   const d = Math.hypot(nx, ny, nz) || 1;
-  const distRatio = 1 + distance / d;
-  graphInstance.cameraPosition({ x: nx * distRatio, y: ny * distRatio, z: nz * distRatio }, { x: nx, y: ny, z: nz }, 2500);
+  graphInstance.cameraPosition({ x: nx * (1 + 70 / d), y: ny * (1 + 70 / d) + 18, z: nz * (1 + 70 / d) }, { x: nx, y: ny, z: nz }, 2200);
 }
 
 function stopAutoTour() {
@@ -1253,7 +1588,7 @@ document.addEventListener('fullscreenchange', () => {
   const btn = document.getElementById('fs-btn');
   btn.textContent = fs ? '⛶ 退出全屏' : '⛶ 全屏';
   btn.classList.toggle('active', fs);
-  if (graphInstance) graphInstance.backgroundColor(fs ? '#000000' : '#15161B');
+  if (graphInstance) graphInstance.backgroundColor(fs ? '#000000' : '#07090D');
   document.body.style.background = fs ? '#000' : '';
 });
 
@@ -1274,6 +1609,7 @@ function showPanel(node) {
   document.getElementById('panel-time').textContent = node.createdAt ? new Date(node.createdAt).toLocaleString('zh-CN') : '—';
 
   const srcParts = [];
+  if (node.instance) srcParts.push('实例: ' + node.instance);
   if (node.source) srcParts.push('来源: ' + node.source);
   if (node.project) srcParts.push('项目: ' + node.project);
   document.getElementById('panel-source').textContent = srcParts.join(' · ') || '—';
@@ -1293,6 +1629,28 @@ function showPanel(node) {
     }
   } else {
     document.getElementById('panel-tags-section').style.display = 'none';
+  }
+
+  const relEl = document.getElementById('panel-rel');
+  const relSec = document.getElementById('panel-rel-section');
+  if (relEl && relSec) {
+    relEl.innerHTML = '';
+    const nbr = oneHopNeighbors(node.id);
+    const others = [...nbr].filter(id => id !== node.id).slice(0, 6)
+      .map(id => (allData.nodes || []).find(n => n.id === id)).filter(Boolean);
+    if (!others.length) relSec.style.display = 'none';
+    else {
+      relSec.style.display = '';
+      others.forEach(n => {
+        const row = document.createElement('div');
+        row.className = 'panel-value';
+        row.style.cursor = 'pointer';
+        row.style.marginBottom = '6px';
+        row.textContent = (n.fullText || n.label || '').slice(0, 72);
+        row.onclick = () => onStarNodeClick(n);
+        relEl.appendChild(row);
+      });
+    }
   }
 
   updateStarButton();
@@ -1386,7 +1744,7 @@ document.getElementById('search-input').addEventListener('input', () => {
 
 /* ═══════════════════ 初始加载 ═══════════════════ */
 function __init() {
-fetch('/api/graph')
+fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE))
   .then(r => r.json())
   .then(data => {
     if (data.error || !data.nodes) throw new Error(data.error || '无法读取记忆库');
@@ -1400,6 +1758,7 @@ fetch('/api/graph')
     return fetch('/api/status').then(r => r.json());
   })
   .then(s => {
+    applyInstanceChrome(s);
     if (s && s.dbExists === false) {
       loading.innerHTML = '📭 记忆库为空或未创建——启动 MCP server 或写入第一条记忆后,图谱会自动出现';
       loading.classList.add('error');
@@ -1584,7 +1943,7 @@ async function delMem(id) {
 }
 
 function refreshGraph() {
-  fetch('/api/graph').then(r => r.json()).then(data => {
+  fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE)).then(r => r.json()).then(data => {
     allData = data;
     updateStats(data.nodes.length, data.stats ? data.stats.totalLinks : data.links.length);
     if (currentView === 'star') {

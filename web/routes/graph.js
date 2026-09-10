@@ -1,7 +1,7 @@
 /* routes/graph.js — /api/graph /api/stats /api/status */
 import { Router } from 'express';
 import { existsSync } from 'fs';
-import { DB_DIR, DB_PATH, LEGACY_DB_PATH, CONFIG_PATH, loadConfig, openLibDb, libFiles, currentInstanceLibs, dbDirHasData } from './lib.js';
+import { DB_DIR, DB_PATH, LEGACY_DB_PATH, CONFIG_PATH, loadConfig, openLibDb, libFiles, currentInstanceLibs, dbDirHasData, AGGREGATE_DIRS } from './lib.js';
 
 const router = Router();
 
@@ -19,8 +19,20 @@ function edgeStrength(type, similarity) {
 }
 
 // ═══ API: GET /api/graph ═══
+function graphScope(req) {
+  return String(req.query.scope || process.env.GRAPH_SCOPE || 'local').toLowerCase();
+}
+function libsForScope(scope) {
+  if (scope === 'federation' || scope === 'all' || scope === 'fed') return libFiles();
+  return currentInstanceLibs();
+}
+function instanceName() {
+  const self = AGGREGATE_DIRS.find(c => c.dir === DB_DIR);
+  return self ? self.name : 'local';
+}
+
 router.get('/graph', (req, res) => {
-  const libs = libFiles();
+  const libs = libsForScope(graphScope(req));
   const nodes = [];
   const links = [];
   let totalMemories = 0;
@@ -54,6 +66,7 @@ router.get('/graph', (req, res) => {
         return {
           id: `${lib.project}:${m.id}`,
           rawId: m.id,
+          instance: lib.instance || '',
           lib: lib.project,
           label: m.text.length > 60 ? m.text.slice(0, 60) + '...' : m.text,
           fullText: m.text,
@@ -157,6 +170,7 @@ router.get('/status', (req, res) => {
     dbExists: existsSync(dbPath) || dbDirHasData(DB_DIR),
     embedMode: cfg.embedding?.mode || 'ollama',
     reflectConfigured: !!(cfg.reflect?.api_key),
+    instance: instanceName(),
   });
 });
 
