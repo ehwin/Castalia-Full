@@ -201,6 +201,7 @@ body.panel-open #stats-bar { opacity: 0; pointer-events: none; }
 </style>
 </head>
 <body>
+
 <div id="loading">Castalia 正在展开星图</div>
 <div id="graph"></div>
 <div id="vignette"></div>
@@ -235,8 +236,8 @@ body.panel-open #stats-bar { opacity: 0; pointer-events: none; }
     <a class="map-tab" id="tab-airi" href="http://127.0.0.1:3344/?scope=local"><i style="background:var(--airi)"></i>AIRI</a>
   </nav>
   <div id="view-mode">
-    <button class="view-tab active" id="view-star" type="button" onclick="setView('star')">星系</button>
-    <button class="view-tab" id="view-universe" type="button" onclick="setView('universe')">宇宙</button>
+    <button class="view-tab" id="view-star" type="button" onclick="setView('galaxy')">星系</button>
+    <button class="view-tab active" id="view-universe" type="button" onclick="setView('nebula')">星云</button>
   </div>
   <div id="search-bar">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
@@ -264,7 +265,7 @@ body.panel-open #stats-bar { opacity: 0; pointer-events: none; }
   <div class="legend-link">点星系看分类 · 点分类看记忆</div>
 </div>
 
-<div id="controls-hint">座内按文件夹分区 · 座间只留主桥 · 宇宙图按嵌入空间铺开</div>
+<div id="controls-hint">星云 · 纯嵌入空间 · 细网=真实关系边</div>
 
 <div id="side-panel">
   <div class="panel-header">
@@ -463,8 +464,6 @@ const MEM_TYPE_LABELS = {
   general: '通用',
 };
 const TYPE_FALLBACK_COLORS = { episodic: '#f59e0b', semantic: '#8b5cf6', working: '#14b8a6' };
-const SOFTWARE_COLOR = '#00A89A';
-const LIBRARY_COLOR = '#7c6ff7';
 const MEM_TYPE_ORDER = ['user', 'feedback', 'project', 'reference', 'general'];
 const MORPH_LABELS = {
   spiral: '旋涡',
@@ -571,8 +570,7 @@ const loading = document.getElementById('loading');
 const adminDrawer = document.getElementById('admin-drawer');
 let graphInstance = null;
 let allData = null;
-let assemblyData = null;
-let currentView = 'star';
+let currentView = 'nebula';
 let selectedNodeId = null;
 let panelNode = null;
 let autoTourActive = false;
@@ -617,8 +615,6 @@ function makeLabelTexture(text, color) {
 function memColor(node) {
   if (node.group === 'galaxy-core') return node.__galaxyColor || '#fbbf24';
   if (node.group === 'subgalaxy-core') return node.__galaxyColor || '#64748b';
-  if (node.group === 'software') return SOFTWARE_COLOR;
-  if (node.group === 'library') return LIBRARY_COLOR;
   if (node.memType && MEM_TYPE_COLORS[node.memType]) return MEM_TYPE_COLORS[node.memType];
   if (node.type && TYPE_FALLBACK_COLORS[node.type]) return TYPE_FALLBACK_COLORS[node.type];
   return '#64748b';
@@ -814,7 +810,7 @@ function flyTo(node, ms) {
   if (!graphInstance || !node) return;
   markInteraction();
   flyingUntil = Date.now() + (ms || 2000) + 100;
-  if (currentView === 'universe') {
+  if (currentView === 'nebula') {
     const nx = node.x || 0, ny = node.y || 0, nz = node.z || 0;
     const distance = Math.max(90, (window.__universeR || 220) * 0.45);
     let dx = 0, dy = 18, dz = distance;
@@ -862,12 +858,12 @@ function cameraDist() {
 }
 function lodVisible(n) {
   if (n.group === 'galaxy-core' || n.group === 'subgalaxy-core') return true;
-  if (currentView === 'universe') return n.__shown !== false;
+  if (currentView === 'nebula') return n.__shown !== false;
   if (expandedKey && n.__clusterKey === expandedKey) return true;
   return n.__shown !== false;
 }
 function lodLinkVisible(l) {
-  if (currentView === 'universe') {
+  if (currentView === 'nebula') {
     if (!hoverSet && !selectedNodeId) return true;
     const s = linkSrcId(l), t = linkTgtId(l);
     if (selectedNodeId) return s === selectedNodeId || t === selectedNodeId;
@@ -946,35 +942,6 @@ function hash01(id, salt) {
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
   return ((h >>> 0) % 10000) / 10000;
 }
-function layoutUniverse(nodes) {
-  const SPACE = 520;
-  const has = nodes.filter(n => Number.isFinite(n.universeX) && Number.isFinite(n.universeY));
-  let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity, minz = Infinity, maxz = -Infinity;
-  has.forEach(n => {
-    minx = Math.min(minx, n.universeX); maxx = Math.max(maxx, n.universeX);
-    miny = Math.min(miny, n.universeY); maxy = Math.max(maxy, n.universeY);
-    const z = Number.isFinite(n.universeZ) ? n.universeZ : 0;
-    minz = Math.min(minz, z); maxz = Math.max(maxz, z);
-  });
-  const dx = Math.max(maxx - minx, 1e-6);
-  const dy = Math.max(maxy - miny, 1e-6);
-  const dz = Math.max(maxz - minz, 1e-6);
-  const span = Math.max(dx, dy, dz, 1e-3);
-  const s = SPACE / span;
-  has.forEach(n => {
-    n.x = (n.universeX - (minx + maxx) / 2) * s;
-    n.y = (n.universeY - (miny + maxy) / 2) * s;
-    n.z = ((Number.isFinite(n.universeZ) ? n.universeZ : 0) - (minz + maxz) / 2) * s;
-  });
-  const missing = nodes.filter(n => !has.includes(n));
-  missing.forEach(n => {
-    n.x = (hash01(n.id, 1) - 0.5) * SPACE * 0.7;
-    n.y = (hash01(n.id, 2) - 0.5) * SPACE * 0.7;
-    n.z = (hash01(n.id, 3) - 0.5) * SPACE * 0.7;
-  });
-  window.__universeR = SPACE / 2;
-}
-
 /* ═══════════════════ 相机自动环绕 (M2) ═══════════════════ */
 let orbitRAF = null;
 let orbitAngle = null;
@@ -983,7 +950,7 @@ let interactionBound = false;
 const ORBIT_RESUME_MS = 8000;
 function markInteraction() { lastInteraction = Date.now(); }
 function strollMemories() {
-  if (currentView !== 'star' || !graphInstance) return;
+  if (currentView !== 'galaxy' || !graphInstance) return;
   const gd = graphInstance.graphData();
   if (!gd || !gd.nodes) return;
   const t = Date.now();
@@ -1019,22 +986,6 @@ function bindInteraction() {
   graphEl.addEventListener('pointerdown', markInteraction);
   graphEl.addEventListener('wheel', markInteraction, { passive: true });
   graphEl.addEventListener('touchstart', markInteraction);
-  graphEl.addEventListener('click', (ev) => {
-    if (!graphInstance) return;
-    const rect = graphEl.getBoundingClientRect();
-    const x = ev.clientX - rect.left;
-    const y = ev.clientY - rect.top;
-    const nodes = (graphInstance.graphData().nodes || []).filter(n => lodVisible(n));
-    let best = null, bestD = 72;
-    nodes.forEach(n => {
-      let s;
-      try { s = graphInstance.graph2ScreenCoords(n.x, n.y, n.z); } catch (e) { return; }
-      const hit = n.group === 'galaxy-core' ? 70 : (n.group === 'subgalaxy-core' ? 36 : 18);
-      const d = Math.hypot((s.x || 0) - x, (s.y || 0) - y);
-      if (d < hit && d < bestD) { best = n; bestD = d; }
-    });
-    if (best) onStarNodeClick(best);
-  }, true);
   document.addEventListener('keydown', (e) => {
     if (e.key === '/' && !e.ctrlKey && !e.metaKey && (e.target.tagName || '') !== 'INPUT' && (e.target.tagName || '') !== 'TEXTAREA') {
       e.preventDefault();
@@ -1051,6 +1002,7 @@ function bindInteraction() {
       closePanel();
       recomputeDim();
       if (allData) renderStarLegend(allData);
+      renderNebulaLegend(allData);
     }
   });
 }
@@ -1113,7 +1065,7 @@ function applyLinkHoverVisibility() {
   graphInstance.linkVisibility(l => lodLinkVisible(l));
 }
 function onHoverNode(node) {
-  if (currentView !== 'star' && currentView !== 'universe') return;
+  if (currentView !== 'galaxy' && currentView !== 'nebula') return;
   const isCore = !!node && (node.group === 'galaxy-core' || node.group === 'subgalaxy-core');
   hoveredNodeId = (node && !isCore) ? node.id : null;
   hoverSet = (node && !isCore) ? oneHopNeighbors(node.id) : null;
@@ -1133,12 +1085,7 @@ function addStatCell(grid, value, label, color) {
 function renderStats() {
   const grid = document.getElementById('stats-grid');
   grid.innerHTML = '';
-  if (currentView === 'assembly' && assemblyData) {
-    const sw = assemblyData.nodes.filter(n => n.group === 'software').length;
-    const lb = assemblyData.nodes.filter(n => n.group === 'library').length;
-    addStatCell(grid, sw, 'SOFTWARE', SOFTWARE_COLOR);
-    addStatCell(grid, lb, 'LIBRARY', LIBRARY_COLOR);
-  } else if (allData) {
+  if (allData) {
     const real = allData.nodes.filter(n => !n.group);
     addStatCell(grid, real.length, 'TOTAL', '#3EE8C8');
     if (IS_FED) {
@@ -1196,9 +1143,9 @@ function fillLegendList(el, items) {
         }
         recomputeDim();
         if (allData) {
-          if (currentView === 'universe') {
+          if (currentView === 'nebula') {
             const real = allData.nodes.filter(n => !n.group);
-            renderUniverseLegend(allData, real);
+            renderNebulaLegend(allData, real);
           } else renderStarLegend(allData);
         }
       };
@@ -1807,61 +1754,16 @@ function renderStarLegend(data) {
   fillLegendList(document.getElementById('legend-struct'), items);
 }
 
-function renderAssembly(data) {
-  data.nodes.forEach(n => {
-    n.fx = n.group === 'software' ? -250 : 250;
-    n.fy = null; n.fz = null;
-    n.x = n.fx;
-    n.y = (Math.random() - 0.5) * 260;
-    n.z = (Math.random() - 0.5) * 260;
-    n.size = 4 + Math.sqrt(n.value || 0) * 2;
-    n.starred = false;
-  });
-
-  graphInstance = (graphInstance || new ForceGraph3D(document.getElementById('graph')))
-    .graphData({ nodes: data.nodes, links: data.links || [] })
-    .backgroundColor(document.fullscreenElement ? '#000000' : '#07090D')
-    .nodeThreeObject(node => buildNode(node))
-    .nodeVal(n => n.size || 4)
-    .nodeColor(n => memColor(n))
-    .nodeLabel(null)
-    .linkColor(() => 'rgba(0,168,154,0.32)')
-    .linkWidth(l => 0.6 + Math.sqrt(l.value || 0) * 0.18)
-    .linkDirectionalParticles(0)
-    .linkDirectionalParticleWidth(0)
-    .linkOpacity(0.45)
-    .showNavInfo(false)
-    .onNodeClick(node => {
-      if (!node) return;
-      graphInstance.cameraPosition(
-        { x: node.x * 1.8, y: node.y * 1.8, z: node.z * 1.8 },
-        { x: node.x, y: node.y, z: node.z },
-        1500
-      );
-    })
-    .onNodeHover(node => { document.body.style.cursor = node ? 'pointer' : 'default'; });
-  softenControls();
-}
-
-function renderAssemblyLegend(data) {
-  const sw = data.nodes.filter(n => n.group === 'software').length;
-  const lb = data.nodes.filter(n => n.group === 'library').length;
-  setLegend('总成视图', [
-    { color: SOFTWARE_COLOR, label: '软件实例', count: sw },
-    { color: LIBRARY_COLOR, label: '记忆库', count: lb },
-  ], '━ 归属连线');
-}
-
 function syncViewButtons() {
   const star = document.getElementById('view-star');
   const uni = document.getElementById('view-universe');
-  if (star) star.classList.toggle('active', currentView === 'star');
-  if (uni) uni.classList.toggle('active', currentView === 'universe');
+  if (star) star.classList.toggle('active', currentView === 'galaxy');
+  if (uni) uni.classList.toggle('active', currentView === 'nebula');
   const hint = document.getElementById('controls-hint');
   if (hint) {
-    hint.textContent = currentView === 'universe'
-      ? '三维宇宙网 · 拖动环绕看深度 · 细丝=关系'
-      : '座内按文件夹分区 · 座间只留主桥 · 拖动旋转';
+    hint.textContent = currentView === 'nebula'
+      ? '星云 · 纯嵌入空间 · 细网=真实关系边'
+      : '星系 · 座内按文件夹分区 · 座间主桥';
   }
 }
 
@@ -1872,12 +1774,11 @@ function setView(mode) {
   selectedNodeId = null;
   stopAutoTour();
   currentView = mode;
-  if (mode === 'universe') {
-    renderUniverse(allData);
-  } else {
-    removeUniverseFilaments();
+  if (mode === 'galaxy') {
     renderStar(allData);
     renderStarLegend(allData);
+  } else {
+    renderNebula(allData);
   }
   syncViewButtons();
   const tourBtn = document.getElementById('tour-btn');
@@ -1886,102 +1787,71 @@ function setView(mode) {
   setTimeout(applySearchVisuals, 0);
 }
 
-let universeLines = null;
-function removeUniverseFilaments() {
-  if (universeLines && universeLines.parent) universeLines.parent.remove(universeLines);
-  universeLines = null;
+/* ═══════════════════ 星云视图 (agent-skills-network 语义:纯嵌入坐标 + 点云辉光 + 雾深) ═══════════════════ */
+let nebulaPoints = null, nebulaGlow = null, nebulaWeb = null;
+function removeNebulaObjects() {
+  if (!graphInstance) return;
+  const scene = graphInstance.scene();
+  for (const obj of [nebulaPoints, nebulaGlow, nebulaWeb]) {
+    if (obj) { if (obj.parent) obj.parent.remove(obj); }
+  }
+  nebulaPoints = nebulaGlow = nebulaWeb = null;
 }
-function addUniverseFilaments(nodes, links) {
-  if (!graphInstance || typeof THREE === 'undefined') return;
-  try {
-    removeUniverseFilaments();
-    const byId = new Map((nodes || []).map(n => [n.id, n]));
-    const pos = [];
-    const col = [];
-    (links || []).forEach(l => {
-      const s = byId.get(linkSrcId(l)), t = byId.get(linkTgtId(l));
-      if (!s || !t) return;
-      pos.push(s.x || 0, s.y || 0, s.z || 0, t.x || 0, t.y || 0, t.z || 0);
-      const sim = l.type === 'similarity';
-      const c = sim ? [0.28, 0.62, 0.82] : [0.45, 0.88, 1.0];
-      col.push(c[0], c[1], c[2], c[0], c[1], c[2]);
-    });
-    if (pos.length < 6) return;
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-    const mat = new THREE.LineBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.42,
-      blending: THREE.AdditiveBlending, depthWrite: false,
-    });
-    universeLines = new THREE.LineSegments(geo, mat);
-    universeLines.name = 'castalia-universe-filaments';
-    graphInstance.scene().add(universeLines);
-  } catch (e) { console.error('filaments:', e.message); }
+function makeNebulaSpriteTexture(size = 128) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+  g.addColorStop(0.0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.22, 'rgba(255,255,255,0.85)');
+  g.addColorStop(0.55, 'rgba(255,255,255,0.22)');
+  g.addColorStop(1.0, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  return tex;
 }
-
-function relaxUniverse(nodes, links, ticks) {
-  const N = nodes.length;
-  if (N < 2) return;
-  nodes.forEach(n => {
-    delete n.fx; delete n.fy; delete n.fz;
-    n.vx = n.vx || 0; n.vy = n.vy || 0; n.vz = n.vz || 0;
-  });
-  const byId = new Map(nodes.map(n => [n.id, n]));
-  const springs = [];
-  (links || []).forEach(l => {
-    const s = byId.get(linkSrcId(l)), t = byId.get(linkTgtId(l));
-    if (!s || !t || s === t) return;
-    const sim = l.type === 'similarity';
-    springs.push({ s, t, k: sim ? 0.035 : 0.11, rest: sim ? 28 : 18 });
-  });
-  const rep = Math.max(90, 5200 / Math.max(N, 8));
-  const grav = 0.022;
-  const decay = 0.66;
-  const steps = Math.max(40, Math.min(ticks || 90, 140));
-  for (let iter = 0; iter < steps; iter++) {
-    for (let i = 0; i < N; i++) {
-      const a = nodes[i];
-      for (let j = i + 1; j < N; j++) {
-        const b = nodes[j];
-        let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
-        const d2 = dx * dx + dy * dy + dz * dz + 0.9;
-        const d = Math.sqrt(d2);
-        const f = rep / d2;
-        dx /= d; dy /= d; dz /= d;
-        a.vx += dx * f; a.vy += dy * f; a.vz += dz * f;
-        b.vx -= dx * f; b.vy -= dy * f; b.vz -= dz * f;
-      }
+let _nebulaSprite = null;
+function nebulaSprite() {
+  if (!_nebulaSprite) _nebulaSprite = makeNebulaSpriteTexture();
+  return _nebulaSprite;
+}
+/* 悬停/选中驱动的点云视觉(仿 updateAlphas):可见→1.0 强度,过滤→0.05,焦点→加大 */
+function updateNebulaState(points) {
+  if (!nebulaPoints) return;
+  const geo = nebulaPoints.geometry;
+  const aAlpha = geo.attributes.aAlpha;
+  const aSize = geo.attributes.aSize;
+  const glowSize = nebulaGlow ? nebulaGlow.geometry.attributes.aSize : null;
+  const N = points.length;
+  for (let i = 0; i < N; i++) {
+    const n = points[i];
+    const vis = !n.dimmed;
+    const emph = n.id === selectedNodeId || n.id === hoveredNodeId;
+    const alpha = aAlpha.array[i];
+    const want = vis ? (emph ? 1.0 : 0.85) : 0.05;
+    if (alpha !== want) aAlpha.array[i] = want;
+    if (aSize) {
+      const sizeWant = vis ? (emph ? 5.2 : 3.2) : 1.1;
+      if (aSize.array[i] !== sizeWant) aSize.array[i] = sizeWant;
     }
-    for (let k = 0; k < springs.length; k++) {
-      const e = springs[k];
-      let dx = e.t.x - e.s.x, dy = e.t.y - e.s.y, dz = e.t.z - e.s.z;
-      const d = Math.hypot(dx, dy, dz) || 1;
-      const f = (d - e.rest) * e.k;
-      dx /= d; dy /= d; dz /= d;
-      e.s.vx += dx * f; e.s.vy += dy * f; e.s.vz += dz * f;
-      e.t.vx -= dx * f; e.t.vy -= dy * f; e.t.vz -= dz * f;
-    }
-    for (let i = 0; i < N; i++) {
-      const n = nodes[i];
-      n.vx = (n.vx - n.x * grav) * decay;
-      n.vy = (n.vy - n.y * grav) * decay;
-      n.vz = (n.vz - n.z * grav) * decay;
-      n.x += n.vx;
-      n.y += n.vy;
-      n.z += n.vz;
+    if (glowSize) {
+      const gw = vis ? (emph ? 0.34 : 0.22) : 0;
+      if (glowSize.array[i] !== gw) glowSize.array[i] = gw;
     }
   }
-  nodes.forEach(n => { n.fx = n.x; n.fy = n.y; n.fz = n.z; });
+  aAlpha.needsUpdate = true;
+  if (aSize) aSize.needsUpdate = true;
+  if (glowSize) glowSize.needsUpdate = true;
 }
-
-function renderUniverse(data) {
+function renderNebula(data) {
   window.__galaxyMode = false;
   hoverSet = null; hoveredNodeId = null;
-  data.links = (data.links || []).filter(l =>
-    l.type !== 'galaxy-bridge' && l.type !== 'subgalaxy-spoke' && l.type !== 'subgalaxy-bridge');
+  removeNebulaObjects();
+  /* 星云 = 嵌入真值:纯 universeX/Y/Z,无任何二次布局(PCA 即地面真值) */
   const real = (data.nodes || []).filter(n => !n.group);
-  const deg = computeDegrees(real, data.links);
+  const deg = computeDegrees(real, data.links || []);
   const labelBudget = Math.min(15, Math.max(8, Math.round(Math.sqrt(Math.max(real.length, 1)) * 2.8)));
   const ranked = real.slice().sort((a, b) => (deg[b.id] || 0) - (deg[a.id] || 0));
   const importantIds = new Set(ranked.slice(0, labelBudget).map(n => n.id));
@@ -1993,284 +1863,223 @@ function renderUniverse(data) {
     node.starred = (node.importance || 0.5) >= 0.9;
     node.size = 1.15 + Math.sqrt(Math.min(node.__degree, 16)) * 0.95 + (node.importance || 0.5) * 0.9;
   });
-  layoutUniverse(real);
-  relaxUniverse(real, data.links, real.length > 300 ? 70 : 100);
-  window.__layoutRadius = window.__universeR || 360;
-  const allLinks = data.links || [];
+  layoutNebula(real, window.__nebulaSpace || 520);
+  const links = (data.links || []).filter(l => !isSyntheticLink(l) && l.type !== 'galaxy-bridge');
 
   graphInstance = (graphInstance || new ForceGraph3D(document.getElementById('graph')))
-    .graphData({ nodes: real, links: allLinks })
-    .backgroundColor(document.fullscreenElement ? '#000000' : '#07090D')
-    .nodeThreeObject(node => buildNode(node))
-    .nodeThreeObjectExtend(false)
+    .graphData({ nodes: real, links: [] })          /* 引擎层不画线;点也交由 sprite 点云,节点本体仅作拾取代理 */
     .nodeRelSize(3)
+    .nodeThreeObject(n => buildNode(n))
+    .nodeThreeObjectExtend(false)
     .nodeVal(n => 2 + (n.importance || 0.5) * 3)
-    .nodeColor(n => selectedNodeId === n.id ? '#ffffff' : memColor(n))
+    .nodeColor(n => memColor(n))
     .nodeOpacity(1)
     .nodeLabel(n => (n.fullText || n.label || '').slice(0, 80))
     .enablePointerInteraction(true)
     .enableNodeDrag(false)
-    .linkColor(l => {
-      if (l.type === 'similarity') return 'rgba(80,190,230,0.35)';
-      const tc = linkTypeColor(l);
-      if (tc) return tc;
-      return 'rgba(140,230,255,0.55)';
-    })
-    .linkWidth(l => {
-      if (l.type === 'similarity') return 1.8;
-      if (isWarmLinkType(l.type)) return 3.2;
-      return 2.4;
-    })
-    .linkDirectionalParticles(l => {
-      if (l.type === 'similarity') return 0;
-      const s = linkSrcId(l), t = linkTgtId(l);
-      const focus = (selectedNodeId && (s === selectedNodeId || t === selectedNodeId))
-        || (hoverSet && hoverSet.has(s) && hoverSet.has(t));
-      return focus ? 3 : 0;
-    })
-    .linkDirectionalParticleWidth(1.05)
-    .linkDirectionalParticleSpeed(0.004)
-    .linkOpacity(0.9)
+    .linkColor(() => 'rgba(0,0,0,0)')
+    .linkWidth(0)
+    .linkDirectionalParticles(0)
     .showNavInfo(false)
     .onNodeClick(node => onStarNodeClick(node))
     .onNodeHover(node => {
       document.body.style.cursor = node ? 'pointer' : 'default';
       onHoverNode(node);
-    })
-    .onLinkClick(l => {
-      if (l && graphInstance && typeof graphInstance.emitParticle === 'function') graphInstance.emitParticle(l);
+      updateNebulaState(real);
     })
     .onBackgroundClick(() => {
-      expandedKey = null;
+      if (hoveredNodeId) {
+        const n = (allData.nodes || []).find(x => x.id === hoveredNodeId);
+        if (n) { onStarNodeClick(n); return; }
+      }
       selectedNodeId = null;
       closePanel();
-      if (graphInstance) graphInstance.nodeVisibility(n => lodVisible(n));
+      updateNebulaState(real);
     });
   addStarField();
-  addUniverseFilaments(real, allLinks);
+  addNebulaClouds(real);
+  addNebulaWeb(real, links);
   startOrbit();
   bindInteraction();
   softenControls();
   try {
     if (typeof graphInstance.numDimensions === 'function') graphInstance.numDimensions(3);
-    ['charge', 'link', 'center', 'collide', 'subgalaxy-attract', 'galaxy-attract'].forEach(name => {
-      try { graphInstance.d3Force(name, null); } catch (e) {}
-    });
+    graphInstance.d3Force('charge', null);
+    graphInstance.d3Force('link', null);
     if (typeof graphInstance.warmupTicks === 'function') graphInstance.warmupTicks(0);
     if (typeof graphInstance.cooldownTicks === 'function') graphInstance.cooldownTicks(0);
-    real.forEach(n => {
-      if (n.fx != null) { n.x = n.fx; n.y = n.fy; n.z = n.fz; }
-    });
+    real.forEach(n => { if (n.fx != null) { n.x = n.fx; n.y = n.fy; n.z = n.fz; } });
     graphInstance.nodeVisibility(n => lodVisible(n));
-    graphInstance.linkVisibility(l => lodLinkVisible(l));
-    graphInstance.enableNodeDrag(false);
-    const scene = graphInstance.scene();
-    if (scene && !scene.__castaliaLit) {
-      scene.add(new THREE.AmbientLight(0xffffff, 2.4));
-      const dir = new THREE.DirectionalLight(0xffffff, 1.8);
-      dir.position.set(80, 120, 160);
-      scene.add(dir);
-      scene.__castaliaLit = true;
-    }
-  } catch (e) { console.error('universe force:', e.message); }
+  } catch (e) { console.error('nebula force:', e.message); }
   try {
     let maxR = 1;
     real.forEach(n => { maxR = Math.max(maxR, Math.hypot(n.x || 0, n.y || 0, n.z || 0)); });
     window.__universeR = maxR;
     window.__layoutRadius = maxR;
-    graphInstance.cameraPosition(
-      { x: maxR * 1.35, y: maxR * 0.82, z: maxR * 1.85 },
-      { x: 0, y: 0, z: 0 },
-      0
-    );
+    graphInstance.cameraPosition({ x: maxR * 1.1, y: maxR * 0.72, z: maxR * 1.5 }, { x: 0, y: 0, z: 0 }, 0);
     const ctrl = graphInstance.controls();
-    if (ctrl) {
-      ctrl.target.set(0, 0, 0);
-      if (ctrl.maxPolarAngle != null) {
-        ctrl.minPolarAngle = 0;
-        ctrl.maxPolarAngle = Math.PI;
-      }
-    }
+    if (ctrl) { ctrl.target.set(0, 0, 0); }
   } catch (e) {}
   window.graphInstance = graphInstance;
   window.flyTo = flyTo;
-  renderUniverseLegend(data, real);
+  renderNebulaLegend(data, real);
+  updateNebulaState(real);
 }
-
-function renderUniverseLegend(data, real) {
+/* 纯 PCA 布点(layoutUniverse 语义,留锚定/兜底,无弹簧) */
+function layoutNebula(nodes, SPACE) {
+  SPACE = SPACE || 520;
+  const has = nodes.filter(n => Number.isFinite(n.universeX) && Number.isFinite(n.universeY));
+  let minx=Infinity,maxx=-Infinity,miny=Infinity,maxy=-Infinity,minz=Infinity,maxz=-Infinity;
+  has.forEach(n => {
+    minx=Math.min(minx,n.universeX);maxx=Math.max(maxx,n.universeX);
+    miny=Math.min(miny,n.universeY);maxy=Math.max(maxy,n.universeY);
+    const z = Number.isFinite(n.universeZ) ? n.universeZ : 0;
+    minz=Math.min(minz,z);maxz=Math.max(maxz,z);
+  });
+  const dx=Math.max(maxx-minx,1e-6),dy=Math.max(maxy-miny,1e-6),dz=Math.max(maxz-minz,1e-6);
+  const span=Math.max(dx,dy,dz,1e-3);
+  const s=SPACE/span;
+  has.forEach(n => {
+    n.x=(n.universeX-(minx+maxx)/2)*s;
+    n.y=(n.universeY-(miny+maxy)/2)*s;
+    n.z=((Number.isFinite(n.universeZ)?n.universeZ:0)-(minz+maxz)/2)*s;
+    n.fx=n.x; n.fy=n.y; n.fz=n.z;
+  });
+  const missing = nodes.filter(n => !has.includes(n));
+  missing.forEach(n => {
+    n.x=(hash01(n.id,1)-0.5)*SPACE*0.7;
+    n.y=(hash01(n.id,2)-0.5)*SPACE*0.7;
+    n.z=(hash01(n.id,3)-0.5)*SPACE*0.7;
+    n.fx=n.x;n.fy=n.y;n.fz=n.z;
+  });
+  window.__universeR = SPACE/2;
+}
+/* 点云本体 + 外晕(ShaderMaterial,agent-skills-network 双层辉光) */
+function addNebulaClouds(real) {
+  if (!graphInstance || typeof THREE === 'undefined') return;
+  try {
+    const scene = graphInstance.scene();
+    const N = real.length;
+    if (!N) return;
+    const SPRITE = nebulaSprite();
+    const positions = new Float32Array(N*3);
+    const colors = new Float32Array(N*3);
+    const sizes = new Float32Array(N);
+    const alphas = new Float32Array(N);
+    for (let i=0;i<N;i++) {
+      const n = real[i];
+      positions[i*3]=n.x||0; positions[i*3+1]=n.y||0; positions[i*3+2]=n.z||0;
+      const c = new THREE.Color(memColor(n));
+      colors[i*3]=c.r; colors[i*3+1]=c.g; colors[i*3+2]=c.b;
+      sizes[i]=3.2; alphas[i]=0.85;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions,3));
+    geo.setAttribute('color', new THREE.BufferAttribute(colors,3));
+    geo.setAttribute('aSize', new THREE.BufferAttribute(sizes,1));
+    geo.setAttribute('aAlpha', new THREE.BufferAttribute(alphas,1));
+    const mkMat = (sizeMult, alphaScale) => new THREE.ShaderMaterial({
+      uniforms: { uMap: { value: SPRITE }, uPixelRatio: { value: window.graphInstance ? 1 : 1 } },
+      vertexShader: `attribute float aSize; attribute float aAlpha; varying vec3 vColor; varying float vAlpha; void main(){ vColor=color; vAlpha=aAlpha; vec4 mv=modelViewMatrix*vec4(position,1.0); gl_PointSize = aSize*${sizeMult}/-mv.z; gl_Position = projectionMatrix*mv; }`,
+      fragmentShader: `uniform sampler2D uMap; varying vec3 vColor; varying float vAlpha; void main(){ vec4 tex=texture2D(uMap,gl_PointCoord); if(tex.a<0.01) discard; vec3 c=vColor*(0.55+0.45*tex.a); gl_FragColor=vec4(c, tex.a*vAlpha*${alphaScale}); }`,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, vertexColors: true,
+    });
+    nebulaPoints = new THREE.Points(geo, mkMat('52.0', '0.40'));
+    scene.add(nebulaPoints);
+    const glowGeo = new THREE.BufferGeometry();
+    glowGeo.setAttribute('position', geo.attributes.position);
+    glowGeo.setAttribute('color', geo.attributes.color);
+    const gSize = new Float32Array(N); for (let i=0;i<N;i++) gSize[i]=0.22;
+    glowGeo.setAttribute('aSize', new THREE.BufferAttribute(gSize,1));
+    const gAlpha = new Float32Array(N); for (let i=0;i<N;i++) gAlpha[i]=1;
+    glowGeo.setAttribute('aAlpha', new THREE.BufferAttribute(gAlpha,1));
+    nebulaGlow = new THREE.Points(glowGeo, mkMat('140.0', '0.05'));
+    scene.add(nebulaGlow);
+  } catch (e) { console.error('nebula clouds:', e.message); }
+}
+/* 真实语义边网(细淡 LineSegments;不再与引擎线叠加) */
+function addNebulaWeb(real, links) {
+  if (!graphInstance || typeof THREE === 'undefined') return;
+  try {
+    const scene = graphInstance.scene();
+    const byId = new Map(real.map(n => [n.id, n]));
+    const pos = [];
+    const col = [];
+    (links||[]).forEach(l => {
+      const s = byId.get(linkSrcId(l)), t = byId.get(linkTgtId(l));
+      if (!s || !t) return;
+      pos.push((s.x||0),(s.y||0),(s.z||0),(t.x||0),(t.y||0),(t.z||0));
+      const sim = l.type === 'similarity';
+      const c = sim ? [0.30,0.66,0.86] : [0.55,0.88,1.0];
+      col.push(c[0],c[1],c[2],c[0],c[1],c[2]);
+    });
+    if (pos.length < 6) return;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col,3));
+    const mat = new THREE.LineBasicMaterial({ vertexColors:true, transparent:true, opacity:0.30, blending: THREE.AdditiveBlending, depthWrite: false });
+    if (nebulaWeb && nebulaWeb.parent) nebulaWeb.parent.remove(nebulaWeb);
+    nebulaWeb = new THREE.LineSegments(geo, mat);
+    scene.add(nebulaWeb);
+    const fog = scene.fog || new THREE.FogExp2(0x07090D, 0.00042);
+    if (!scene.fog) scene.fog = fog;
+  } catch (e) { console.error('nebula web:', e.message); }
+}
+function renderNebulaLegend(data, real) {
   const items = [];
   MEM_TYPE_ORDER.forEach(mt => {
-    const c = (real || []).filter(n => (n.memType || 'general') === mt).length;
+    const c = (real||[]).filter(n => (n.memType||'general')===mt).length;
     if (!c) return;
-    items.push({
-      color: MEM_TYPE_COLORS[mt],
-      label: MEM_TYPE_LABELS[mt] || mt,
-      count: c,
-      cls: 'parent',
-      filter: { kind: 'type', id: mt },
-    });
+    items.push({ color: MEM_TYPE_COLORS[mt], label: MEM_TYPE_LABELS[mt]||mt, count: c, cls: 'parent', filter: { kind:'type', id: mt } });
   });
   const titleEl = document.getElementById('legend-struct-title');
-  if (titleEl) titleEl.textContent = '宇宙 · 类型';
+  if (titleEl) titleEl.textContent = '星云 · 嵌入空间';
   fillLegendList(document.getElementById('legend-struct'), items);
   const linkEl = document.querySelector('#legend .legend-link');
-  if (linkEl) linkEl.textContent = '3D 嵌入 + 立体力导向 · 拖动看深度';
+  if (linkEl) linkEl.textContent = '点密度=语义,细网=真实关系边';
 }
-
-function toggleView() {
-  const btn = document.getElementById('view-btn');
-  if (currentView === 'star') {
-    btn.disabled = true;
-    stopAutoTour();
-    fetch('/api/aggregate/graph')
-      .then(r => r.json())
-      .then(d => {
-        if (d.error || !Array.isArray(d.nodes)) throw new Error(d.error || '总成数据解析失败');
-        if (!d.nodes.length) {
-          loading.textContent = '📭 总成视图暂无数据(各实例 memory 目录下没有 project-*.sqlite)';
-          loading.classList.add('error');
-          loading.style.display = '';
-          return;
-        }
-        loading.style.display = 'none';
-        loading.classList.remove('error');
-        assemblyData = d;
-        closePanel();
-        selectedNodeId = null;
-        renderAssembly(d);
-        renderAssemblyLegend(d);
-        updateStats(d.nodes.length, d.links.length);
-        currentView = 'assembly';
-        btn.textContent = '✦ 记忆星图';
-        btn.classList.add('active');
-        document.getElementById('tour-btn').disabled = true;
-        renderStats();
-      })
-      .catch(err => {
-        loading.textContent = '❌ 总成视图加载失败: ' + err.message;
-        loading.classList.add('error');
-        loading.style.display = '';
-      })
-      .finally(() => { btn.disabled = false; });
-  } else {
-    closePanel();
-    selectedNodeId = null;
-    renderStar(allData);
-    renderStarLegend(allData);
-    updateStats(allData.nodes.length, allData.stats ? allData.stats.totalLinks : allData.links.length);
-    currentView = 'star';
-    btn.textContent = '🗂 总成视图';
-    btn.classList.remove('active');
-    document.getElementById('tour-btn').disabled = false;
-    loading.style.display = 'none';
-    loading.classList.remove('error');
+/* ═══════════════════ 初始加载 ═══════════════════ */
+function __init() {
+fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE) + '&layout=folder-wedges')
+  .then(r => r.json())
+  .then(data => {
+    if (data.error || !data.nodes) throw new Error(data.error || '无法读取记忆库');
+    allData = data;
+    updateStats(data.nodes.length, data.stats.totalLinks);
+    currentView = 'nebula';
+    renderNebula(data);
+    syncViewButtons();
     renderStats();
-    setTimeout(applySearchVisuals, 0);
-  }
-}
-
-/* ═══════════════════ Auto-Tour 自动导览 ═══════════════════ */
-function toggleTour() {
-  if (currentView !== 'star' && currentView !== 'universe') return;
-  if (autoTourActive) stopAutoTour();
-  else startAutoTour();
-}
-
-function startAutoTour() {
-  if (!allData || !allData.nodes || !allData.nodes.length) return;
-  autoTourActive = true;
-  tourSeen = new Set();
-  tourCursor = null;
-  const btn = document.getElementById('tour-btn');
-  btn.classList.add('active');
-  btn.title = '停止导览';
-  document.getElementById('tour-indicator').classList.add('on');
-  walkToNextMemory();
-  autoTourTimer = setInterval(walkToNextMemory, 9000);
-}
-
-let tourCursor = null;
-let tourSeen = new Set();
-
-function tourNeighbors(node) {
-  if (!graphInstance || !node) return [];
-  const links = graphInstance.graphData().links || [];
-  const id = node.id;
-  const out = [];
-  links.forEach(l => {
-    if (l.type === 'similarity' || (l.type || '').indexOf('galaxy') === 0 || (l.type || '').indexOf('subgalaxy') === 0) return;
-    const s = (l.source && typeof l.source === 'object') ? l.source.id : l.source;
-    const t = (l.target && typeof l.target === 'object') ? l.target.id : l.target;
-    if (s === id) out.push(t);
-    else if (t === id) out.push(s);
+    loading.style.display = 'none';
+    document.getElementById('tour-btn').disabled = false;
+    return fetch('/api/status').then(r => r.json());
+  })
+  .then(s => {
+    applyInstanceChrome(s);
+    if (s && s.dbExists === false) {
+      loading.innerHTML = '📭 记忆库为空或未创建——启动 MCP server 或写入第一条记忆后,图谱会自动出现';
+      loading.classList.add('error');
+      loading.style.display = '';
+    } else {
+      loading.style.display = 'none';
+    }
+  })
+  .catch(err => {
+    fetch('/api/status').then(r => r.json()).then(s => {
+      if (s && s.dbExists === false) {
+        loading.innerHTML = '📭 记忆库为空或未创建——启动 MCP server 或写入第一条记忆后,图谱会自动出现';
+      } else {
+        loading.textContent = '❌ 加载失败: ' + err.message;
+      }
+      loading.classList.add('error');
+    }).catch(() => {
+      loading.textContent = '❌ 加载失败: ' + err.message;
+      loading.classList.add('error');
+    });
   });
-  return out.map(nid => (allData.nodes || []).find(n => n.id === nid)).filter(Boolean);
 }
-
-function pickWalkNode() {
-  const nodes = (allData.nodes || []).filter(n => !n.dimmed && !n.group);
-  if (!nodes.length) return null;
-  if (tourSeen.size >= nodes.length) tourSeen = new Set();
-  if (tourCursor) {
-    const nbr = tourNeighbors(tourCursor).filter(n => !tourSeen.has(n.id));
-    if (nbr.length) return nbr[Math.floor(Math.random() * nbr.length)];
-    const same = nodes.filter(n => !tourSeen.has(n.id) && n.memType === tourCursor.memType && (n.project || n.lib) === (tourCursor.project || tourCursor.lib));
-    if (same.length) return same[0];
-    const sameProj = nodes.filter(n => !tourSeen.has(n.id) && (n.project || n.lib) === (tourCursor.project || tourCursor.lib));
-    if (sameProj.length) return sameProj[0];
-  }
-  const rest = nodes.filter(n => !tourSeen.has(n.id));
-  rest.sort((a, b) => (b.importance || 0) - (a.importance || 0));
-  return rest[0] || nodes[0];
-}
-
-function walkToNextMemory() {
-  if (!allData || !allData.nodes || !allData.nodes.length || !graphInstance) return;
-  const node = pickWalkNode();
-  if (!node) return;
-  tourCursor = node;
-  tourSeen.add(node.id);
-  autoTargetId = node.id;
-  document.getElementById('tour-indicator-label').textContent = '散步 · ' + ((node.fullText || node.label || '').substring(0, 25));
-  refreshNodeVisuals();
-  showPanel(node);
-  const nx = node.x || 0, ny = node.y || 0, nz = node.z || 0;
-  const d = Math.hypot(nx, ny, nz) || 1;
-  graphInstance.cameraPosition({ x: nx * (1 + 70 / d), y: ny * (1 + 70 / d) + 18, z: nz * (1 + 70 / d) }, { x: nx, y: ny, z: nz }, 2200);
-}
-
-function stopAutoTour() {
-  if (autoTourTimer) { clearInterval(autoTourTimer); autoTourTimer = null; }
-  autoTourActive = false;
-  autoTargetId = null;
-  const btn = document.getElementById('tour-btn');
-  if (btn) { btn.classList.remove('active'); btn.title = '导览'; }
-  document.getElementById('tour-indicator').classList.remove('on');
-  refreshNodeVisuals();
-}
-
-/* ═══════════════════ 沉浸全屏 ═══════════════════ */
-function toggleFullscreen() {
-  if (document.fullscreenElement) {
-    document.exitFullscreen();
-  } else {
-    const el = document.body;
-    const fn = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
-    if (fn) { try { fn.call(el); } catch (e) {} }
-  }
-}
-
-document.addEventListener('fullscreenchange', () => {
-  const fs = !!document.fullscreenElement;
-  const btn = document.getElementById('fs-btn');
-  btn.title = fs ? '退出全屏' : '全屏';
-  btn.classList.toggle('active', fs);
-  btn.classList.toggle('active', fs);
-  if (graphInstance) graphInstance.backgroundColor(fs ? '#000000' : '#07090D');
-  document.body.style.background = fs ? '#000' : '';
-});
-
-/* ═══════════════════ 详情卡片 ═══════════════════ */
+if (typeof ForceGraph3D !== 'undefined') __init();
+else window.addEventListener('viz-libs-ready', __init);
 function graphAllNodes() {
   try { return (graphInstance && graphInstance.graphData().nodes) || allData.nodes || []; }
   catch (e) { return allData.nodes || []; }
@@ -2557,6 +2366,111 @@ function closePanel() {
 }
 
 /* ═══════════════════ 搜索过滤(直接改材质) ═══════════════════ */
+
+/* ═══════════════════ Auto-Tour 自动导览 ═══════════════════ */
+function toggleTour() {
+  if (currentView !== 'galaxy' && currentView !== 'nebula') return;
+  if (autoTourActive) stopAutoTour();
+  else startAutoTour();
+}
+
+function startAutoTour() {
+  if (!allData || !allData.nodes || !allData.nodes.length) return;
+  autoTourActive = true;
+  tourSeen = new Set();
+  tourCursor = null;
+  const btn = document.getElementById('tour-btn');
+  btn.classList.add('active');
+  btn.title = '停止导览';
+  document.getElementById('tour-indicator').classList.add('on');
+  walkToNextMemory();
+  autoTourTimer = setInterval(walkToNextMemory, 9000);
+}
+
+let tourCursor = null;
+let tourSeen = new Set();
+
+function tourNeighbors(node) {
+  if (!graphInstance || !node) return [];
+  const links = graphInstance.graphData().links || [];
+  const id = node.id;
+  const out = [];
+  links.forEach(l => {
+    if (l.type === 'similarity' || (l.type || '').indexOf('galaxy') === 0 || (l.type || '').indexOf('subgalaxy') === 0) return;
+    const s = (l.source && typeof l.source === 'object') ? l.source.id : l.source;
+    const t = (l.target && typeof l.target === 'object') ? l.target.id : l.target;
+    if (s === id) out.push(t);
+    else if (t === id) out.push(s);
+  });
+  return out.map(nid => (allData.nodes || []).find(n => n.id === nid)).filter(Boolean);
+}
+
+function pickWalkNode() {
+  const nodes = (allData.nodes || []).filter(n => !n.dimmed && !n.group);
+  if (!nodes.length) return null;
+  if (tourSeen.size >= nodes.length) tourSeen = new Set();
+  if (tourCursor) {
+    const nbr = tourNeighbors(tourCursor).filter(n => !tourSeen.has(n.id));
+    if (nbr.length) return nbr[Math.floor(Math.random() * nbr.length)];
+    const same = nodes.filter(n => !tourSeen.has(n.id) && n.memType === tourCursor.memType && (n.project || n.lib) === (tourCursor.project || tourCursor.lib));
+    if (same.length) return same[0];
+    const sameProj = nodes.filter(n => !tourSeen.has(n.id) && (n.project || n.lib) === (tourCursor.project || tourCursor.lib));
+    if (sameProj.length) return sameProj[0];
+  }
+  const rest = nodes.filter(n => !tourSeen.has(n.id));
+  rest.sort((a, b) => (b.importance || 0) - (a.importance || 0));
+  return rest[0] || nodes[0];
+}
+
+function walkToNextMemory() {
+  if (!allData || !allData.nodes || !allData.nodes.length || !graphInstance) return;
+  const node = pickWalkNode();
+  if (!node) return;
+  tourCursor = node;
+  tourSeen.add(node.id);
+  autoTargetId = node.id;
+  document.getElementById('tour-indicator-label').textContent = '散步 · ' + ((node.fullText || node.label || '').substring(0, 25));
+  refreshNodeVisuals();
+  showPanel(node);
+  const nx = node.x || 0, ny = node.y || 0, nz = node.z || 0;
+  const d = Math.hypot(nx, ny, nz) || 1;
+  graphInstance.cameraPosition({ x: nx * (1 + 70 / d), y: ny * (1 + 70 / d) + 18, z: nz * (1 + 70 / d) }, { x: nx, y: ny, z: nz }, 2200);
+}
+
+function stopAutoTour() {
+  if (autoTourTimer) { clearInterval(autoTourTimer); autoTourTimer = null; }
+  autoTourActive = false;
+  autoTargetId = null;
+  const btn = document.getElementById('tour-btn');
+  if (btn) { btn.classList.remove('active'); btn.title = '导览'; }
+  document.getElementById('tour-indicator').classList.remove('on');
+  refreshNodeVisuals();
+}
+
+
+/* ═══════════════════ 沉浸全屏 ═══════════════════ */
+function toggleFullscreen() {
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else {
+    const el = document.body;
+    const fn = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+    if (fn) { try { fn.call(el); } catch (e) {} }
+  }
+}
+
+document.addEventListener('fullscreenchange', () => {
+  const fs = !!document.fullscreenElement;
+  const btn = document.getElementById('fs-btn');
+  btn.title = fs ? '退出全屏' : '全屏';
+  btn.classList.toggle('active', fs);
+  btn.classList.toggle('active', fs);
+  if (graphInstance) graphInstance.backgroundColor(fs ? '#000000' : '#07090D');
+  document.body.style.background = fs ? '#000' : '';
+});
+
+/* ═══════════════════ 详情卡片 ═══════════════════ */
+
 function matchesNode(n, q) {
   return (n.fullText || '').toLowerCase().includes(q) ||
     (n.tags || []).some(t => (t || '').toLowerCase().includes(q)) ||
@@ -2572,52 +2486,9 @@ function applySearchVisuals() {
 }
 
 document.getElementById('search-input').addEventListener('input', () => {
-  if (currentView !== 'star' && currentView !== 'universe') return;
+  if (currentView !== 'galaxy' && currentView !== 'nebula') return;
   applySearchVisuals();
 });
-
-/* ═══════════════════ 初始加载 ═══════════════════ */
-function __init() {
-fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE) + '&layout=folder-wedges')
-  .then(r => r.json())
-  .then(data => {
-    if (data.error || !data.nodes) throw new Error(data.error || '无法读取记忆库');
-    allData = data;
-    updateStats(data.nodes.length, data.stats.totalLinks);
-    currentView = 'universe';
-    renderUniverse(data);
-    syncViewButtons();
-    renderStats();
-    loading.style.display = 'none';
-    document.getElementById('tour-btn').disabled = false;
-    return fetch('/api/status').then(r => r.json());
-  })
-  .then(s => {
-    applyInstanceChrome(s);
-    if (s && s.dbExists === false) {
-      loading.innerHTML = '📭 记忆库为空或未创建——启动 MCP server 或写入第一条记忆后,图谱会自动出现';
-      loading.classList.add('error');
-      loading.style.display = '';
-    } else {
-      loading.style.display = 'none';
-    }
-  })
-  .catch(err => {
-    fetch('/api/status').then(r => r.json()).then(s => {
-      if (s && s.dbExists === false) {
-        loading.innerHTML = '📭 记忆库为空或未创建——启动 MCP server 或写入第一条记忆后,图谱会自动出现';
-      } else {
-        loading.textContent = '❌ 加载失败: ' + err.message;
-      }
-      loading.classList.add('error');
-    }).catch(() => {
-      loading.textContent = '❌ 加载失败: ' + err.message;
-      loading.classList.add('error');
-    });
-  });
-}
-if (typeof ForceGraph3D !== 'undefined') __init();
-else window.addEventListener('viz-libs-ready', __init);
 
 /* ═══════════════════ 管理抽屉逻辑 ═══════════════════ */
 function toggleAdmin() {
@@ -2818,11 +2689,11 @@ function refreshGraph() {
   fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE) + '&layout=folder-wedges').then(r => r.json()).then(data => {
     allData = data;
     updateStats(data.nodes.length, data.stats ? data.stats.totalLinks : data.links.length);
-    if (currentView === 'universe') {
-      renderUniverse(data);
+    if (currentView === 'nebula') {
+      renderNebula(data);
       renderStats();
       setTimeout(applySearchVisuals, 0);
-    } else if (currentView === 'star') {
+    } else if (currentView === 'galaxy') {
       renderStar(data);
       renderStarLegend(data);
       renderStats();
@@ -2830,6 +2701,10 @@ function refreshGraph() {
     }
   }).catch(() => {});
 }
+</script>
+</body>
+</html>
+
 </script>
 </body>
 </html>
