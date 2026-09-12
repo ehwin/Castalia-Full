@@ -3,18 +3,22 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Castalia — Memory Constellation</title>
+<title>Castalia · 分区星图</title>
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<link rel="icon" type="image/png" href="/favicon.png">
 <style>
 :root {
   --bg: #07090D;
-  --panel: rgba(12, 16, 24, 0.72);
+  --elev: #0B0E14;
+  --panel: rgba(12, 16, 24, 0.78);
   --card: #12171F;
   --border: rgba(255,255,255,0.08);
-  --line-2: rgba(255,255,255,0.14);
+  --line: rgba(255,255,255,0.07);
+  --line-2: rgba(255,255,255,0.13);
   --text: #E8EDF2;
   --t-primary: #E8EDF2;
   --t-secondary: #8A94A3;
+  --t-faint: #5C6573;
   --t-bright: #fff;
   --b-hover: rgba(255,255,255,0.25);
   --accent: #3EE8C8;
@@ -22,38 +26,82 @@
   --accent-mid: #45B9AC;
   --accent-light: #7AE8D8;
   --accent-hi: #A0F8E8;
+  --accent-dim: rgba(62,232,200,0.14);
   --red: #f4554f;
   --green: #57E6C4;
   --rose: #f43f5e;
   --gold: #fbbf24;
+  --hermes: #5FF5D6;
+  --lobehub: #7EB0FF;
+  --airi: #FF8FB8;
+  --fed: #FFD056;
   --c-user: #3EE8C8;
   --c-feedback: #F5B942;
   --c-project: #A78BFA;
   --c-reference: #5B8CFF;
   --c-general: #6B7585;
+  --rail: 56px;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif; }
-#graph { position: fixed; inset: 0; }
-#vignette { position: fixed; inset: 0; pointer-events: none; z-index: 4;
+html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+  font-family: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  font-feature-settings: "ss01" on; }
+#graph { position: fixed; inset: 0 0 0 var(--rail); }
+#vignette { position: fixed; inset: 0 0 0 var(--rail); pointer-events: none; z-index: 4;
   background: radial-gradient(ellipse at 50% 45%, transparent 42%, rgba(0,0,0,0.55) 100%); }
-#loading { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); font-size: 1.05rem; color: var(--accent); letter-spacing: 0.12em; z-index: 5; text-shadow: 0 0 18px rgba(62,232,200,.45); }
-#loading.error { color: var(--red); text-shadow: none; }
-#top-bar { position: fixed; top: 0; left: 0; right: 0; height: 56px; display: flex; align-items: center; padding: 0 18px; background: linear-gradient(180deg, rgba(7,9,13,.92), rgba(7,9,13,0)); z-index: 10; pointer-events: none; }
-#top-bar .logo { font-weight: 650; color: var(--t-bright); letter-spacing: .4px; font-size: .95rem; }
-#top-bar .stat-pill { margin-left: 14px; font-size: .75rem; color: var(--t-secondary); }
-#top-bar .stat-pill b { color: var(--t-primary); font-weight: 600; }
-#search-bar { flex: 1; max-width: 280px; margin: 0 16px 0 18px; pointer-events: auto; }
-#search-input { width: 100%; background: rgba(255,255,255,.04); border: 1px solid var(--line-2); color: var(--t-primary); padding: 7px 14px; border-radius: 999px; font-size: .8rem; outline: none; backdrop-filter: blur(16px); }
-#search-input:focus { border-color: rgba(62,232,200,.45); }
-.tool-btn { pointer-events: auto; margin-left: 8px; background: rgba(255,255,255,.04); border: 1px solid var(--line-2); color: var(--t-primary); padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: .78rem; transition: .2s; backdrop-filter: blur(12px); }
+#loading { position: fixed; top: 50%; left: calc(50% + var(--rail)/2); transform: translate(-50%,-50%); font-size: .95rem; color: var(--accent); letter-spacing: 0.14em; z-index: 5; }
+#loading.error { color: var(--red); }
+
+#rail { position: fixed; left: 0; top: 0; bottom: 0; width: var(--rail); z-index: 12;
+  background: rgba(8,10,15,.92); border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; align-items: center; padding: 12px 0 14px; gap: 2px; }
+#rail .mark { width: 32px; height: 32px; border-radius: 9px; margin-bottom: 10px;
+  overflow: hidden; display: block; box-shadow: 0 0 14px rgba(62,232,200,.22); }
+#rail .mark img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rail-btn { position: relative; width: 36px; height: 36px; border-radius: 10px; border: 1px solid transparent;
+  background: transparent; color: var(--t-faint); display: grid; place-items: center; cursor: pointer;
+  text-decoration: none; }
+.rail-btn svg { width: 18px; height: 18px; }
+.rail-btn:hover { color: var(--t-primary); background: rgba(255,255,255,.05); }
+.rail-btn.active { background: var(--accent-dim); color: var(--accent); border-color: rgba(62,232,200,.22); }
+.rail-btn[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute; left: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+  background: #12161e; border: 1px solid var(--line-2); color: var(--text);
+  font-size: 12px; font-weight: 500; padding: 5px 9px; border-radius: 8px;
+  white-space: nowrap; z-index: 50; pointer-events: none;
+  box-shadow: 0 10px 28px rgba(0,0,0,.45);
+}
+.rail-dot { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
+.rail-spacer { flex: 1; }
+.rail-sep { width: 18px; height: 1px; background: var(--line); margin: 8px 0; }
+
+#top-bar { position: fixed; top: 0; left: var(--rail); right: 0; height: 52px; display: flex; align-items: center; padding: 0 18px; background: linear-gradient(180deg, rgba(7,9,13,.88), rgba(7,9,13,0)); z-index: 10; pointer-events: none; gap: 10px; }
+#top-bar .logo { font-weight: 620; color: var(--t-bright); letter-spacing: .2px; font-size: .92rem; }
+#top-bar .logo em { font-style: normal; color: var(--accent); font-weight: 500; margin-left: 8px; font-size: .72rem; }
+#top-bar .stat-pill { font-size: .72rem; color: var(--t-secondary); }
+#top-bar .stat-pill b { color: var(--t-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+#map-tabs { display: flex; gap: 2px; pointer-events: auto; margin-left: 4px; background: rgba(255,255,255,.03); border: 1px solid var(--line); border-radius: 10px; padding: 2px; }
+.map-tab { color: var(--t-secondary); text-decoration: none; font-size: .72rem; padding: 5px 9px; border-radius: 8px; }
+.map-tab:hover { color: var(--t-primary); }
+.map-tab.active { color: var(--t-bright); background: rgba(255,255,255,.07); }
+.map-tab i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+#view-mode { display: flex; gap: 2px; pointer-events: auto; margin-left: 8px; background: rgba(255,255,255,.03); border: 1px solid var(--line); border-radius: 10px; padding: 2px; }
+.view-tab { color: var(--t-secondary); background: transparent; border: 0; font-size: .72rem; padding: 5px 9px; border-radius: 8px; cursor: pointer; font-family: inherit; }
+.view-tab:hover { color: var(--t-primary); }
+.view-tab.active { color: var(--t-bright); background: rgba(255,255,255,.07); }
+#search-bar { position: relative; flex: 1; max-width: 240px; margin-left: auto; pointer-events: auto; }
+#search-bar svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--t-faint); pointer-events: none; }
+#search-input { width: 100%; background: rgba(255,255,255,.04); border: 1px solid var(--line); color: var(--t-primary); padding: 7px 12px 7px 32px; border-radius: 999px; font-size: .78rem; outline: none; }
+#search-input:focus { border-color: rgba(62,232,200,.4); background: rgba(255,255,255,.06); }
+.tool-btn { pointer-events: auto; width: 32px; height: 32px; margin-left: 4px; padding: 0;
+  background: rgba(255,255,255,.04); border: 1px solid var(--line); color: var(--t-secondary);
+  border-radius: 9px; cursor: pointer; display: grid; place-items: center; }
+.tool-btn svg { width: 15px; height: 15px; }
 .tool-btn:hover { border-color: var(--accent); color: var(--accent); }
-.tool-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(62,232,200,0.12); }
-.tool-btn:disabled { opacity: .4; cursor: not-allowed; }
-#admin-btn { margin-left: auto; }
-#top-bar a { pointer-events: auto; color: var(--t-primary); font-size: .78rem; margin-left: 8px; text-decoration: none; border: 1px solid var(--line-2); padding: 6px 12px; border-radius: 8px; background: rgba(255,255,255,.04); backdrop-filter: blur(12px); }
-#top-bar a:hover { border-color: var(--accent); color: var(--accent); }
-#legend { position: fixed; left: 16px; bottom: 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; font-size: .72rem; color: var(--t-secondary); backdrop-filter: blur(18px) saturate(1.2); z-index: 10; min-width: 188px; max-width: 240px; }
+.tool-btn.active { border-color: rgba(62,232,200,.35); color: var(--accent); background: var(--accent-dim); }
+.tool-btn:disabled { opacity: .35; cursor: not-allowed; }
+#legend { position: fixed; left: calc(var(--rail) + 14px); bottom: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px 13px 10px; font-size: .72rem; color: var(--t-secondary); backdrop-filter: blur(20px) saturate(1.2); z-index: 10; min-width: 176px; max-width: 236px; }
 .legend-title { font-weight: 650; margin-bottom: 6px; color: var(--t-primary); letter-spacing: 1.4px; font-size: .62rem; text-transform: uppercase; }
 .legend-item { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
 .legend-item.child { padding-left: 14px; font-size: .66rem; opacity: .92; }
@@ -61,10 +109,11 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; box-shadow: 0 0 6px currentColor; }
 .legend-count { margin-left: auto; opacity: .6; }
 .legend-divider { border-top: 1px solid var(--border); margin: 8px 0; }
-#controls-hint { position: fixed; bottom: 16px; right: 16px; font-size: .68rem; color: rgba(255,255,255,0.28); z-index: 10; letter-spacing: .04em; }
+#controls-hint { position: fixed; bottom: 16px; right: 16px; font-size: .68rem; color: var(--t-faint); z-index: 10; letter-spacing: .04em; }
 
 /* ─── 统计宫格 (MNEMO MemoryStats) — 右上角,不挡 3D 图 ─── */
-#stats-bar { position: fixed; top: 60px; right: 16px; left: auto; transform: none; display: flex; align-items: center; gap: 8px; z-index: 9; }
+body.panel-open #stats-bar { opacity: 0; pointer-events: none; }
+#stats-bar { position: fixed; top: 56px; right: 14px; left: auto; transform: none; display: flex; align-items: center; gap: 8px; z-index: 9; }
 #stats-grid { display: flex; gap: 8px; flex-wrap: nowrap; }
 .stat-cell { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 8px 14px; text-align: center; min-width: 76px; backdrop-filter: blur(16px); }
 .stat-num { font-size: 1.4rem; font-weight: 800; line-height: 1; }
@@ -73,7 +122,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 #stats-bar.collapsed #stats-grid { display: none; }
 
 /* ─── Auto-Tour 指示器 ─── */
-#tour-indicator { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); display: none; align-items: center; gap: 8px; background: rgba(20,184,166,0.15); border: 1px solid rgba(20,184,166,0.3); padding: 6px 12px; border-radius: 20px; z-index: 9; }
+#tour-indicator { position: fixed; top: 14px; left: calc(50% + var(--rail) / 2); transform: translateX(-50%); display: none; align-items: center; gap: 8px; background: rgba(20,184,166,0.15); border: 1px solid rgba(20,184,166,0.3); padding: 6px 12px; border-radius: 20px; z-index: 9; }
 #tour-indicator.on { display: flex; }
 #tour-indicator .dot { width: 8px; height: 8px; border-radius: 50%; background: #14b8a6; animation: breathe 2s ease-in-out infinite; display: inline-block; }
 #tour-indicator .label { font-size: 0.6rem; color: #14b8a6; font-family: 'JetBrains Mono', Consolas, monospace; font-weight: 600; letter-spacing: 1px; }
@@ -99,9 +148,17 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 .importance-bar { background: rgba(255,255,255,0.08); border-radius: 4px; height: 6px; overflow: hidden; }
 .importance-fill { background: linear-gradient(90deg, var(--accent-deep), var(--accent-light)); height: 100%; border-radius: 4px; transition: width .4s; }
 .panel-importance-val { font-size: .7rem; color: var(--t-secondary); margin-top: 4px; }
+.panel-tree-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 4px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-size: .78rem; color: var(--t-primary); line-height: 1.35; }
+.panel-tree-row:hover { border-color: var(--accent); background: rgba(62,232,200,0.07); }
+.panel-tree-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.panel-tree-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-tree-count { flex-shrink: 0; color: var(--t-secondary); font-size: .68rem; }
+.panel-tree-back { margin-bottom: 10px; font-size: .75rem; color: var(--accent); cursor: pointer; }
+.panel-tree-back:hover { color: var(--accent-hi); }
+#panel-back-btn { display: none; }
 
 /* ─── 管理抽屉 ─── */
-#admin-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 420px; background: #1F2229; border-left: 1px solid var(--border); transform: translateX(100%); transition: transform .3s ease; z-index: 30; overflow-y: auto; padding: 16px; }
+#admin-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 420px; background: var(--elev); border-left: 1px solid var(--border); transform: translateX(100%); transition: transform .3s ease; z-index: 30; overflow-y: auto; padding: 16px; }
 #admin-drawer.open { transform: translateX(0); }
 .adm-header { display: flex; align-items: center; margin-bottom: 14px; }
 .adm-header h2 { font-size: 1rem; color: var(--t-primary); }
@@ -137,26 +194,60 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 .mem-item .mem-text { margin-top: 2px; word-break: break-all; }
 .mem-item .mem-meta { color: #666; font-size: .65rem; margin-top: 2px; }
 .note { color: #888; font-size: .72rem; margin-top: 6px; line-height: 1.5; }
+.cfg-instances { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+.cfg-chip { font-size: .72rem; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--t-secondary); }
+.cfg-chip.on { border-color: rgba(62,232,200,.35); color: var(--accent); background: var(--accent-dim); }
+.cfg-chip.warn { border-color: rgba(245,185,66,.4); color: var(--gold); }
 </style>
 </head>
 <body>
-<div id="loading">✦ Castalia 记忆星图正在展开...</div>
+<div id="loading">Castalia 正在展开星图</div>
 <div id="graph"></div>
 <div id="vignette"></div>
 
+<aside id="rail">
+  <a class="mark" href="http://127.0.0.1:3345/?scope=federation" data-tip="Castalia"><img src="/castalia-mark.png" alt="Castalia"></a>
+  <a class="rail-btn" id="rail-fed" href="http://127.0.0.1:3345/?scope=federation" data-tip="联邦总图"><i class="rail-dot" style="color:var(--fed);background:var(--fed)"></i></a>
+  <a class="rail-btn" id="rail-hermes" href="http://127.0.0.1:3345/?scope=local" data-tip="Hermes"><i class="rail-dot" style="color:var(--hermes);background:var(--hermes)"></i></a>
+  <a class="rail-btn" id="rail-lobehub" href="http://127.0.0.1:3346/?scope=local" data-tip="LobeHub"><i class="rail-dot" style="color:var(--lobehub);background:var(--lobehub)"></i></a>
+  <a class="rail-btn" id="rail-airi" href="http://127.0.0.1:3344/?scope=local" data-tip="AIRI"><i class="rail-dot" style="color:var(--airi);background:var(--airi)"></i></a>
+  <div class="rail-sep"></div>
+  <a class="rail-btn" href="/aggregate.html" data-tip="记忆总成">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>
+  </a>
+  <a class="rail-btn" href="/manage.html" data-tip="库管理">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.66 3.13 3 7 3s7-1.34 7-3V6M5 12v6c0 1.66 3.13 3 7 3s7-1.34 7-3v-6"/></svg>
+  </a>
+  <div class="rail-spacer"></div>
+  <button class="rail-btn" id="admin-btn" onclick="toggleAdmin()" data-tip="设置" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M3 12h2M19 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+  </button>
+</aside>
+
 <div id="top-bar">
-  <span class="logo" id="app-logo">✦ Castalia</span>
+  <span class="logo" id="app-logo">Castalia <em id="app-sub">星图</em></span>
   <span class="stat-pill">记忆 <b id="stat-nodes">—</b></span>
   <span class="stat-pill">连线 <b id="stat-links">—</b></span>
-  <div id="search-bar">
-    <input type="text" id="search-input" placeholder="搜索记忆..." />
+  <nav id="map-tabs">
+    <a class="map-tab" id="tab-federation" href="http://127.0.0.1:3345/?scope=federation"><i style="background:var(--fed)"></i>联邦</a>
+    <a class="map-tab" id="tab-hermes" href="http://127.0.0.1:3345/?scope=local"><i style="background:var(--hermes)"></i>Hermes</a>
+    <a class="map-tab" id="tab-lobehub" href="http://127.0.0.1:3346/?scope=local"><i style="background:var(--lobehub)"></i>LobeHub</a>
+    <a class="map-tab" id="tab-airi" href="http://127.0.0.1:3344/?scope=local"><i style="background:var(--airi)"></i>AIRI</a>
+  </nav>
+  <div id="view-mode">
+    <button class="view-tab active" id="view-star" type="button" onclick="setView('star')">星系</button>
+    <button class="view-tab" id="view-universe" type="button" onclick="setView('universe')">宇宙</button>
   </div>
-  <button id="tour-btn" class="tool-btn" onclick="toggleTour()" disabled>▶ 自动导览</button>
-  <button id="fs-btn" class="tool-btn" onclick="toggleFullscreen()">⛶ 全屏</button>
-  <a id="fed-link" href="http://127.0.0.1:3345/?scope=federation" style="pointer-events:auto;color:var(--t-primary);font-size:.85rem;margin-left:10px;text-decoration:none;border:1px solid var(--border);padding:4px 10px;border-radius:8px;">联邦总图</a>
-  <button id="admin-btn" class="tool-btn" onclick="toggleAdmin()">⚙ 管理</button>
-  <a href="/aggregate.html" style="pointer-events:auto;color:var(--t-primary);font-size:.85rem;margin-left:10px;text-decoration:none;border:1px solid var(--border);padding:4px 10px;border-radius:8px;">记忆总成</a>
-  <a href="/manage.html" style="pointer-events:auto;color:var(--t-primary);font-size:.85rem;margin-left:10px;text-decoration:none;border:1px solid var(--border);padding:4px 10px;border-radius:8px;">库管理</a>
+  <div id="search-bar">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+    <input type="text" id="search-input" placeholder="搜索记忆" />
+  </div>
+  <button id="tour-btn" class="tool-btn" onclick="toggleTour()" disabled title="导览" type="button">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v14l11-7-11-7z"/></svg>
+  </button>
+  <button id="fs-btn" class="tool-btn" onclick="toggleFullscreen()" title="全屏" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M21 16v5h-5"/></svg>
+  </button>
 </div>
 
 <div id="stats-bar">
@@ -170,22 +261,26 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
   <div class="legend-title" id="legend-struct-title">结构</div>
   <div id="legend-struct"></div>
   <div class="legend-divider"></div>
-  <div class="legend-link">点击节点看记忆 · 图例筛选</div>
+  <div class="legend-link">点星系看分类 · 点分类看记忆</div>
 </div>
 
-<div id="controls-hint">搜索 / · 点击看记忆与连线 · 滚远成云 · 滚近是星</div>
+<div id="controls-hint">座内按文件夹分区 · 座间只留主桥 · 宇宙图按嵌入空间铺开</div>
 
 <div id="side-panel">
   <div class="panel-header">
     <span class="panel-dot" id="panel-dot"></span>
     <span class="panel-badge" id="panel-badge"></span>
     <div class="panel-actions">
+      <button id="panel-back-btn" onclick="panelGoBack()" title="返回">←</button>
       <button id="panel-star-btn" onclick="toggleStar()" title="星标">⭐</button>
       <button id="panel-del-btn" onclick="deletePanelNode()" title="删除">🗑</button>
       <button class="close-btn" onclick="closePanel()">×</button>
     </div>
   </div>
   <div class="panel-text" id="panel-text"></div>
+  <div class="panel-section" id="panel-tree-section" style="display:none">
+    <div id="panel-tree"></div>
+  </div>
   <div class="panel-section">
     <div class="panel-section-label">时间</div>
     <div class="panel-value" id="panel-time"></div>
@@ -212,13 +307,26 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 <!-- ═══ 管理抽屉(副界面) ═══ -->
 <div id="admin-drawer">
   <div class="adm-header">
-    <h2>🧠 记忆管理</h2>
+    <h2>记忆设置</h2>
     <button class="adm-close" onclick="toggleAdmin()">×</button>
   </div>
 
   <div class="card">
-    <h3>🚀 反思整理</h3>
-    <p class="note" style="margin-bottom:8px">把记忆发给大模型判断合并/拆分/关联/重分类(需下方配置 LLM API)</p>
+    <h3>全部 MCP</h3>
+    <p class="note">一份设置同时写入 Hermes / LobeHub / AIRI 的 <code>memory/config.json</code>。密钥留空则保留各端已有值。</p>
+    <div class="cfg-instances" id="cfgInstances"></div>
+    <div class="row" style="margin-top:8px">
+      <label>写入范围</label>
+      <select id="cfgApplyTo">
+        <option value="all" selected>全部实例</option>
+        <option value="local">仅当前实例</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>反思整理</h3>
+    <p class="note" style="margin-bottom:8px">把记忆发给大模型判断合并/拆分/关联/重分类（用当前实例的 MCP）</p>
     <div class="btn-group">
       <button class="btn btn-primary" id="btnRun" onclick="runReflect('auto')">▶ 日常反思</button>
       <button class="btn btn-orange" id="btnDeep" onclick="runReflect('deep')">🔬 深度校准</button>
@@ -231,8 +339,9 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
     <div class="row">
       <label>来源</label>
       <select id="embedMode" onchange="toggleEmbedMode()">
-        <option value="ollama">Ollama(本地)</option>
-        <option value="api">API(云端,Key)</option>
+        <option value="ollama">Ollama（本地）</option>
+        <option value="api">API（云端）</option>
+        <option value="none">关闭（只用文本检索）</option>
       </select>
     </div>
     <div id="embedOllamaFields">
@@ -259,20 +368,38 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
       </select>
     </div>
     <div class="row"><label>单轮上限</label><input id="refMaxFacts" type="number" min="1" max="100" placeholder="15"></div>
-    <p class="note">事实提取=off 时,反思不提取 SPO 三元组、不写 facts 表;上限控制每轮最多落库几条 facts。保存后重启 MCP server 生效</p>
+    <div class="row"><label>启动间隔</label><input id="refMinGap" type="number" min="0" max="720" placeholder="24"> <span class="note" style="margin:0">小时</span></div>
+    <div class="row"><label>未分析条数</label><input id="refMinUnan" type="number" min="0" max="500" placeholder="5"></div>
+    <div class="row"><label>周期反思</label><input id="refInterval" type="number" min="0" max="720" step="0.5" placeholder="0"> <span class="note" style="margin:0">小时，0=关闭</span></div>
+    <p class="note">启动时：距上次反思 ≥ 间隔 且 未分析对话 ≥ 条数才自动跑。周期反思 &gt;0 则按小时循环。保存后重启 MCP 生效</p>
   </div>
 
   <div class="card">
-    <h3>🔀 分拣 LLM (triage, LLM1)</h3>
-    <p class="note" style="margin-bottom:8px">入站记忆分拣通道:轻量分类入站文本 → user/feedback/project/reference/general。不填则回退用上方"反思 LLM"的配置</p>
+    <h3>分拣与会话缓冲</h3>
+    <p class="note" style="margin-bottom:8px">入站分拣通道。不填 API 则回退用反思 LLM。缓冲满了会后台做临时反思。</p>
     <div class="row"><label>API 地址</label><input id="triUrl" placeholder="https://api.deepseek.com/v1"></div>
     <div class="row"><label>API Key</label><input id="triKey" type="password" placeholder="sk-..."></div>
     <div class="row"><label>模型</label><input id="triModel" placeholder="deepseek-chat"></div>
-    <p class="note">留空 = 走 REFLECT_* 回退通道。保存后重启 MCP server 生效</p>
+    <div class="row"><label>缓冲轮次</label><input id="triBuffer" type="number" min="1" max="50" placeholder="5"></div>
+    <div class="row"><label>缓冲 Token</label><input id="triBufTok" type="number" min="500" max="32000" placeholder="4000"></div>
+    <div class="row"><label>会话 TTL</label><input id="triTtl" type="number" min="1" max="90" placeholder="7"> <span class="note" style="margin:0">天</span></div>
+  </div>
+
+  <div class="card">
+    <h3>记忆整合</h3>
+    <p class="note" style="margin-bottom:8px">条数过多时，启动后用向量预筛 + 反思 LLM 去重合并。源库只读。</p>
+    <div class="row"><label>触发条数</label><input id="consMin" type="number" min="0" max="5000" placeholder="15"></div>
+    <div class="row"><label>相似阈值</label><input id="consSim" type="number" min="0.5" max="0.99" step="0.01" placeholder="0.88"></div>
+    <div class="row"><label>启动时跑</label>
+      <select id="consAuto">
+        <option value="1">是</option>
+        <option value="0">否（只手动）</option>
+      </select>
+    </div>
   </div>
 
   <div class="btn-group" style="margin-bottom:12px">
-    <button class="btn btn-primary" onclick="saveAllConfig()">💾 保存全部配置</button>
+    <button class="btn btn-primary" onclick="saveAllConfig()">保存到所选范围</button>
     <span id="configStatus"></span>
   </div>
 
@@ -339,32 +466,76 @@ const TYPE_FALLBACK_COLORS = { episodic: '#f59e0b', semantic: '#8b5cf6', working
 const SOFTWARE_COLOR = '#00A89A';
 const LIBRARY_COLOR = '#7c6ff7';
 const MEM_TYPE_ORDER = ['user', 'feedback', 'project', 'reference', 'general'];
+const MORPH_LABELS = {
+  spiral: '旋涡',
+  barred: '棒旋',
+  elliptical: '椭圆',
+  ring: '环状',
+  irregular: '不规则',
+};
+function pickGalaxyMorph(p, count, nTypes, gi) {
+  const k = String(p || '').toLowerCase();
+  if (k === 'custom-project') return 'spiral';
+  if (k === 'lobehub' || k === 'lobe') return 'barred';
+  if (k === 'airi') return 'barred';
+  if (k === 'hermes') return 'irregular';
+  if (k === '联邦' || k === 'reflect') return 'ring';
+  if (count < 20) return 'irregular';
+  if (nTypes <= 2) return 'elliptical';
+  if (nTypes >= 4 && count > 90) return gi % 2 ? 'barred' : 'spiral';
+  if (nTypes >= 3 && count > 28) return 'spiral';
+  return 'elliptical';
+}
 const GRAPH_SCOPE = (new URLSearchParams(location.search).get('scope') || 'local').toLowerCase();
 const IS_FED = GRAPH_SCOPE === 'federation' || GRAPH_SCOPE === 'all' || GRAPH_SCOPE === 'fed';
 const FED_GRAPH_URL = 'http://127.0.0.1:3345/?scope=federation';
+const MAP_LINKS = {
+  federation: { href: 'http://127.0.0.1:3345/?scope=federation', label: '联邦' },
+  Hermes: { href: 'http://127.0.0.1:3345/?scope=local', label: 'Hermes' },
+  LobeHub: { href: 'http://127.0.0.1:3346/?scope=local', label: 'LobeHub' },
+  AIRI: { href: 'http://127.0.0.1:3344/?scope=local', label: 'AIRI' },
+  联邦: { href: 'http://127.0.0.1:3345/?scope=federation', label: '联邦' },
+};
+function currentMapId() {
+  const port = String(location.port || '');
+  if (port === '3346') return 'lobehub';
+  if (port === '3344') return 'airi';
+  if (IS_FED) return 'federation';
+  return 'hermes';
+}
 const STRUCT_COLORS = {
   Hermes: '#5FF5D6', LobeHub: '#7EB0FF', AIRI: '#FF8FB8', 联邦: '#FFD056',
   hermes: '#3EE8C8', lobehub: '#5B8CFF', airi: '#A78BFA',
   reflect: '#F5B942', default: '#6B7585', shared: '#8A94A3', custom-project: '#E8A54B',
 };
+const STRUCT_LABELS = {
+  Hermes: 'Hermes', LobeHub: 'LobeHub', AIRI: 'AIRI', 联邦: '联邦',
+  hermes: 'Hermes', lobehub: '对话', airi: 'AIRI',
+  custom-project: '自定义领域', reflect: '反思', shared: '共享', default: '默认',
+};
+function structLabel(k) { return STRUCT_LABELS[k] || k; }
 function structKey(n) {
-  if ((n.project || n.lib) === 'reflect') return '联邦';
-  if (IS_FED) return n.instance || '未知';
-  return n.project || n.lib || 'default';
+  const proj = n.project || n.lib || '';
+  if (IS_FED) {
+    if (proj === 'reflect') return '联邦';
+    return n.instance || '未知';
+  }
+  return proj || 'default';
 }
 
 function applyInstanceChrome(s) {
-  const logo = document.getElementById('app-logo');
-  const fedLink = document.getElementById('fed-link');
-  if (IS_FED) {
-    if (logo) logo.textContent = '✦ Castalia 联邦总图';
-    document.title = 'Castalia 联邦总图';
-    if (fedLink) fedLink.style.display = 'none';
-  } else {
-    const name = (s && s.instance) ? s.instance : '';
-    if (logo) logo.textContent = name ? ('✦ ' + name) : '✦ Castalia';
-    document.title = name ? (name + ' · 星图') : 'Castalia 星图';
-  }
+  const sub = document.getElementById('app-sub');
+  const id = currentMapId();
+  const names = { federation: '联邦总图', hermes: 'Hermes', lobehub: 'LobeHub', airi: 'AIRI' };
+  const name = names[id] || ((s && s.instance) ? s.instance : '星图');
+  if (sub) sub.textContent = name;
+  document.title = 'Castalia · ' + name;
+  ['federation', 'hermes', 'lobehub', 'airi'].forEach(k => {
+    const tab = document.getElementById('tab-' + k);
+    const rail = document.getElementById('rail-' + (k === 'federation' ? 'fed' : k));
+    if (tab) tab.classList.toggle('active', k === id);
+    if (rail) rail.classList.toggle('active', k === id);
+  });
 }
 applyInstanceChrome(null);
 
@@ -407,6 +578,7 @@ let panelNode = null;
 let autoTourActive = false;
 let autoTourTimer = null;
 let autoTargetId = null;
+let panelStack = [];
 
 /* ═══════════════════ 节点渲染 (THREE.Group = 核心球 + 光晕 + 文字 Sprite) ═══════════════════ */
 const _geoCache = new Map();
@@ -458,15 +630,16 @@ function buildCoreNode(node, R, labelW) {
   const group = new THREE.Group();
   const core = new THREE.Mesh(sphereGeo(R), new THREE.MeshBasicMaterial({ color, transparent: false, opacity: 1 }));
   group.add(core);
-  const glow1 = new THREE.Mesh(sphereGeo(R * 2.1), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+  const glow1 = new THREE.Mesh(sphereGeo(R * 1.55), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.38, blending: THREE.AdditiveBlending, depthWrite: false }));
   group.add(glow1);
-  const glow2 = new THREE.Mesh(sphereGeo(R * 3.6), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false }));
+  const glow2 = new THREE.Mesh(sphereGeo(R * 2.2), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.11, blending: THREE.AdditiveBlending, depthWrite: false }));
   group.add(glow2);
-  const name = (node.label || node.project || '').toUpperCase();
+  const name = (node.shortLabel || node.label || node.project || '').split('·')[0].trim();
   if (name) {
     const mat = new THREE.SpriteMaterial({ map: makeLabelTexture(name, color), transparent: true, depthTest: false, sizeAttenuation: true });
     const spr = new THREE.Sprite(mat);
-    spr.scale.set(R * labelW, R * 1.1, 1);
+    const w = Math.max(16, Math.min(32, 10 + name.length * 1.5));
+    spr.scale.set(w, 4.2, 1);
     spr.position.set(0, -(R + 5), 0);
     group.add(spr);
   }
@@ -477,35 +650,25 @@ function buildCoreNode(node, R, labelW) {
   return group;
 }
 
-function buildGalaxyCore(node) { return buildCoreNode(node, 28, 11); }
+function buildGalaxyCore(node) {
+  return buildCoreNode(node, 5.6, 5);
+}
 
 /* 小星系核心小星(分类级,memType 色) */
-function buildSubGalaxyCore(node) { return buildCoreNode(node, 2.4, 8); }
+function buildSubGalaxyCore(node) {
+  return buildCoreNode(node, 2.6, 3.4);
+}
 
 /* 点击星系核心:飞行到该星系并弹出项目统计 */
 function onGalaxyCoreClick(node) {
   if (!node) return;
   stopAutoTour();
+  panelStack = [];
   expandedKey = null;
   selectedNodeId = node.id;
   if (graphInstance) graphInstance.nodeVisibility(n => lodVisible(n));
   flyTo(node, 1000);
-  const p = node.project || node.lib || '';
-  const projNodes = (allData?.nodes || []).filter(n => structKey(n) === (node.__struct || p));
-  const counts = {};
-  projNodes.forEach(n => { const mt = n.memType || 'general'; counts[mt] = (counts[mt] || 0) + 1; });
-  showPanel({
-    id: node.id,
-    group: 'galaxy-core',
-    __galaxyColor: node.__galaxyColor || '#fbbf24',
-    label: (node.label || p).toUpperCase() + ' 星系',
-    fullText: `${p} 项目星系 · ${projNodes.length} 条记忆\n` + Object.entries(counts).map(([k, v]) => `  ${MEM_TYPE_LABELS[k] || k}: ${v}`).join('\n'),
-    importance: 1,
-    memType: 'general',
-    tags: [],
-    createdAt: null,
-    source: 'galaxy',
-  });
+  showPanel(node);
 }
 
 /* 点击小星系核心:飞行到该小星系并弹出分类统计 */
@@ -521,19 +684,7 @@ function onSubGalaxyCoreClick(node) {
     graphInstance.linkVisibility(l => lodLinkVisible(l));
   }
   flyTo(node, 900);
-  const subNodes = (allData?.nodes || []).filter(n => n.__clusterKey === expandedKey);
-  showPanel({
-    id: node.id,
-    group: 'subgalaxy-core',
-    __galaxyColor: node.__galaxyColor || '#64748b',
-    label: (MEM_TYPE_LABELS[mt] || mt).toUpperCase() + ' 小星系',
-    fullText: `${p} · ${MEM_TYPE_LABELS[mt] || mt} 小星系 · ${subNodes.length} 条记忆`,
-    importance: 0.6,
-    memType: mt,
-    tags: [],
-    createdAt: null,
-    source: 'subgalaxy',
-  });
+  showPanel(node);
 }
 
 /* 语义簇色板(renderStar 聚类时使用,下标与 __clusterColorKey 对应) */
@@ -549,27 +700,29 @@ function buildNode(node) {
   const clusterCol = node.__cluster ? CLUSTER_COLORS_GLOBAL[node.__clusterColorKey || 0] : null;
   const group = new THREE.Group();
 
-  const coreMesh = new THREE.Mesh(sphereGeo(size * 0.5), new THREE.MeshBasicMaterial({ color }));
+  const coreMesh = new THREE.Mesh(sphereGeo(size * 0.42), new THREE.MeshBasicMaterial({ color }));
   group.add(coreMesh);
   const glowColor = clusterCol || color;
   const glowMesh = new THREE.Mesh(
-    sphereGeo(important ? size * 1.45 : size * 1.05),
+    sphereGeo(important ? size * 1.15 : size * 0.7),
     new THREE.MeshBasicMaterial({
-      color: glowColor, transparent: true, opacity: important ? 0.55 : 0.32,
+      color: glowColor, transparent: true, opacity: important ? 0.4 : 0.16,
       blending: THREE.AdditiveBlending, depthWrite: false,
     })
   );
   group.add(glowMesh);
-  const halo = new THREE.Mesh(
-    sphereGeo(important ? size * 2.2 : size * 1.6),
-    new THREE.MeshBasicMaterial({
-      color: glowColor, transparent: true, opacity: important ? 0.16 : 0.08,
-      blending: THREE.AdditiveBlending, depthWrite: false,
-    })
-  );
-  group.add(halo);
+  if (important) {
+    const halo = new THREE.Mesh(
+      sphereGeo(size * 1.7),
+      new THREE.MeshBasicMaterial({
+        color: glowColor, transparent: true, opacity: 0.12,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      })
+    );
+    group.add(halo);
+  }
   const hit = new THREE.Mesh(
-    sphereGeo(Math.max(size * 2.4, 10)),
+    sphereGeo(Math.max(size * 2.1, 6)),
     new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, depthTest: false })
   );
   group.add(hit);
@@ -623,8 +776,11 @@ function applyNodeVisual(node) {
   node.__glowMat.color.set(glowColor);
   node.__glowMat.opacity = glowOpacity;
   if (node.__coreMat) node.__coreMat.color.set(isDim ? '#3c3c46' : (isTour ? '#fbbf24' : base));
-  // 标签:选中/悬停才显示(dim 时隐藏)
-  if (node.__labelSprite) node.__labelSprite.visible = node.group === 'galaxy-core' ? !isDim : (!isDim && (isSel || isHover));
+  // 标签:核心/高 degree 常驻;其余选中/悬停才显示(dim 时隐藏)
+  if (node.__labelSprite) {
+    const always = node.group === 'galaxy-core' || node.group === 'subgalaxy-core' || node.__importantLabel;
+    node.__labelSprite.visible = always ? !isDim : (!isDim && (isSel || isHover));
+  }
   if (node.__labelMat) node.__labelMat.opacity = isDim ? 0 : 0.95;
 }
 
@@ -658,12 +814,40 @@ function flyTo(node, ms) {
   if (!graphInstance || !node) return;
   markInteraction();
   flyingUntil = Date.now() + (ms || 2000) + 100;
-  const distance = node.group === 'galaxy-core' ? 80 : 40;
-  const distRatio = 1 + distance / Math.hypot(node.x || 0, node.y || 0, node.z || 0);
-  const newPos = (node.x || node.y || node.z)
-    ? { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio }
-    : { x: 0, y: 0, z: distance };
-  graphInstance.cameraPosition(newPos, node, ms || 2000);
+  if (currentView === 'universe') {
+    const nx = node.x || 0, ny = node.y || 0, nz = node.z || 0;
+    const distance = Math.max(90, (window.__universeR || 220) * 0.45);
+    let dx = 0, dy = 18, dz = distance;
+    try {
+      const cam = graphInstance.camera();
+      dx = cam.position.x - nx;
+      dy = cam.position.y - ny;
+      dz = cam.position.z - nz;
+    } catch (e) {}
+    const len = Math.hypot(dx, dy, dz) || 1;
+    graphInstance.cameraPosition({
+      x: nx + dx / len * distance,
+      y: ny + dy / len * distance,
+      z: nz + dz / len * distance,
+    }, node, ms == null ? 900 : ms);
+    try { graphInstance.controls().target.set(nx, ny, nz); } catch (e) {}
+    return;
+  }
+  const distance = node.group === 'galaxy-core' ? 110 : (node.group === 'subgalaxy-core' ? 64 : 72);
+  let dx = 0, dy = 18, dz = distance;
+  try {
+    const cam = graphInstance.camera();
+    dx = cam.position.x - (node.x || 0);
+    dy = cam.position.y - (node.y || 0);
+    dz = cam.position.z - (node.z || 0);
+  } catch (e) {}
+  const len = Math.hypot(dx, dy, dz) || 1;
+  const newPos = {
+    x: (node.x || 0) + dx / len * distance,
+    y: (node.y || 0) + dy / len * distance,
+    z: (node.z || 0) + dz / len * distance,
+  };
+  graphInstance.cameraPosition(newPos, node, ms == null ? 2000 : ms);
   try { graphInstance.controls().target.set(node.x, node.y, node.z); } catch (e) {}
 }
 window.flyTo = flyTo;
@@ -677,13 +861,19 @@ function cameraDist() {
   } catch (e) { return 0; }
 }
 function lodVisible(n) {
-  if (n.group === 'galaxy-core') return true;
-  if (n.group === 'subgalaxy-core') return true;
-  if (expandedKey && (n.__clusterKey === expandedKey)) return true;
-  return false;
+  if (n.group === 'galaxy-core' || n.group === 'subgalaxy-core') return true;
+  if (currentView === 'universe') return n.__shown !== false;
+  if (expandedKey && n.__clusterKey === expandedKey) return true;
+  return n.__shown !== false;
 }
 function lodLinkVisible(l) {
-  if (isSyntheticLink(l)) return false;
+  if (currentView === 'universe') {
+    if (!hoverSet && !selectedNodeId) return true;
+    const s = linkSrcId(l), t = linkTgtId(l);
+    if (selectedNodeId) return s === selectedNodeId || t === selectedNodeId;
+    return hoverSet.has(s) && hoverSet.has(t);
+  }
+  if (isSyntheticLink(l)) return true;
   const focus = selectedNodeId || hoveredNodeId;
   if (!focus) return false;
   const s = linkSrcId(l), t = linkTgtId(l);
@@ -738,6 +928,53 @@ function addStarField() {
   } catch (e) { console.error('starfield:', e.message); }
 }
 
+/* ═══════════════════ 宇宙图 (cosmograph-org: embedding scatter + 细丝连线) ═══════════════════ */
+function computeDegrees(nodes, links) {
+  const deg = {};
+  (nodes || []).forEach(n => { deg[n.id] = 0; });
+  (links || []).forEach(l => {
+    if (isSyntheticLink(l)) return;
+    const s = linkSrcId(l), t = linkTgtId(l);
+    if (deg[s] != null) deg[s]++;
+    if (deg[t] != null) deg[t]++;
+  });
+  return deg;
+}
+function hash01(id, salt) {
+  const s = String(id || '') + ':' + salt;
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return ((h >>> 0) % 10000) / 10000;
+}
+function layoutUniverse(nodes) {
+  const SPACE = 520;
+  const has = nodes.filter(n => Number.isFinite(n.universeX) && Number.isFinite(n.universeY));
+  let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity, minz = Infinity, maxz = -Infinity;
+  has.forEach(n => {
+    minx = Math.min(minx, n.universeX); maxx = Math.max(maxx, n.universeX);
+    miny = Math.min(miny, n.universeY); maxy = Math.max(maxy, n.universeY);
+    const z = Number.isFinite(n.universeZ) ? n.universeZ : 0;
+    minz = Math.min(minz, z); maxz = Math.max(maxz, z);
+  });
+  const dx = Math.max(maxx - minx, 1e-6);
+  const dy = Math.max(maxy - miny, 1e-6);
+  const dz = Math.max(maxz - minz, 1e-6);
+  const span = Math.max(dx, dy, dz, 1e-3);
+  const s = SPACE / span;
+  has.forEach(n => {
+    n.x = (n.universeX - (minx + maxx) / 2) * s;
+    n.y = (n.universeY - (miny + maxy) / 2) * s;
+    n.z = ((Number.isFinite(n.universeZ) ? n.universeZ : 0) - (minz + maxz) / 2) * s;
+  });
+  const missing = nodes.filter(n => !has.includes(n));
+  missing.forEach(n => {
+    n.x = (hash01(n.id, 1) - 0.5) * SPACE * 0.7;
+    n.y = (hash01(n.id, 2) - 0.5) * SPACE * 0.7;
+    n.z = (hash01(n.id, 3) - 0.5) * SPACE * 0.7;
+  });
+  window.__universeR = SPACE / 2;
+}
+
 /* ═══════════════════ 相机自动环绕 (M2) ═══════════════════ */
 let orbitRAF = null;
 let orbitAngle = null;
@@ -751,18 +988,23 @@ function strollMemories() {
   if (!gd || !gd.nodes) return;
   const t = Date.now();
   gd.nodes.forEach(n => {
-    if (!n.__subCenter || !n.__rest || n.group) return;
-    const c = n.__subCenter;
-    const ax = n.__rest.x - c.x, ay = n.__rest.y - c.y, az = n.__rest.z - c.z;
-    const ang = t * (n.__orbitSpeed || 0.00015);
+    if (!n.__frame || !n.__local || !n.__galaxyCenter) return;
+    if (n.group === 'galaxy-core') return;
+    if (n.id === selectedNodeId) return;
+    const g = n.__galaxyCenter, f = n.__frame, loc = n.__local;
+    const ang = t * (n.__orbitSpeed || 0.00005);
     const cos = Math.cos(ang), sin = Math.sin(ang);
-    n.x = n.fx = c.x + ax * cos - az * sin;
-    n.z = n.fz = c.z + ax * sin + az * cos;
-    n.y = n.fy = c.y + ay + Math.sin(ang * 0.7) * 1.6;
+    const lx = loc.lx * cos - loc.ly * sin;
+    const ly = loc.lx * sin + loc.ly * cos;
+    const lz = loc.lz;
+    n.x = n.fx = g.x + f.u.x * lx + f.v.x * ly + f.n.x * lz;
+    n.y = n.fy = g.y + f.u.y * lx + f.v.y * ly + f.n.y * lz;
+    n.z = n.fz = g.z + f.u.z * lx + f.v.z * ly + f.n.z * lz;
   });
 }
 function orbitTick() {
   if (orbitRAF == null) return;
+  if (Date.now() > flyingUntil) strollMemories();
   applyLod();
   orbitRAF = requestAnimationFrame(orbitTick);
 }
@@ -871,7 +1113,7 @@ function applyLinkHoverVisibility() {
   graphInstance.linkVisibility(l => lodLinkVisible(l));
 }
 function onHoverNode(node) {
-  if (currentView !== 'star') return;
+  if (currentView !== 'star' && currentView !== 'universe') return;
   const isCore = !!node && (node.group === 'galaxy-core' || node.group === 'subgalaxy-core');
   hoveredNodeId = (node && !isCore) ? node.id : null;
   hoverSet = (node && !isCore) ? oneHopNeighbors(node.id) : null;
@@ -953,7 +1195,12 @@ function fillLegendList(el, items) {
           }
         }
         recomputeDim();
-        if (allData) renderStarLegend(allData);
+        if (allData) {
+          if (currentView === 'universe') {
+            const real = allData.nodes.filter(n => !n.group);
+            renderUniverseLegend(allData, real);
+          } else renderStarLegend(allData);
+        }
       };
     }
     el.appendChild(item);
@@ -990,80 +1237,216 @@ function renderStar(data) {
   /* 清理上一次追加的合成边(renderStar 会被多次调用,避免重复) */
   data.links = (data.links || []).filter(l =>
     l.type !== 'galaxy-bridge' && l.type !== 'subgalaxy-spoke' && l.type !== 'subgalaxy-bridge');
-  /* 布局:先社区再 pack。团心分开,团内 Vogel 螺旋,间距 ≥ 视觉半径,不用弹簧勒。 */
+  /* 多种星系形态：旋涡 / 棒旋 / 椭圆 / 环状 / 不规则。实例按数据或名字各用一种。 */
   const memTypeOf = n => n.memType || 'general';
-  const GOLDEN = Math.PI * (3 - Math.sqrt(5));
-  const visR = (n) => ((n.size || 6) * 0.9) + 5;
-  const packRof = (count, gap) => {
-    const n = Math.max(count, 1);
-    const nCore = Math.max(3, Math.floor(n * 0.22));
-    const halo = Math.max(0, n - nCore);
-    return gap * 0.55 * Math.sqrt(nCore) + (halo ? gap * 1.45 * Math.pow(halo, 0.72) : gap * 0.4);
+  const hash01 = (i, salt) => {
+    const x = Math.sin(i * 127.1 + salt * 311.7) * 43758.5453;
+    return x - Math.floor(x);
   };
+  const basisFromNormal = (nx, ny, nz) => {
+    const nl = Math.hypot(nx, ny, nz) || 1;
+    nx /= nl; ny /= nl; nz /= nl;
+    let ax = 0, ay = 1, az = 0;
+    if (Math.abs(ny) > 0.92) { ax = 1; ay = 0; }
+    let ux = ay * nz - az * ny, uy = az * nx - ax * nz, uz = ax * ny - ay * nx;
+    const ul = Math.hypot(ux, uy, uz) || 1;
+    ux /= ul; uy /= ul; uz /= ul;
+    return {
+      n: { x: nx, y: ny, z: nz },
+      u: { x: ux, y: uy, z: uz },
+      v: { x: ny * uz - nz * uy, y: nz * ux - nx * uz, z: nx * uy - ny * ux },
+    };
+  };
+  const toWorld = (c, f, lx, ly, lz) => ({
+    x: c.x + f.u.x * lx + f.v.x * ly + f.n.x * lz,
+    y: c.y + f.u.y * lx + f.v.y * ly + f.n.y * lz,
+    z: c.z + f.u.z * lx + f.v.z * ly + f.n.z * lz,
+  });
 
   data.nodes.forEach(n => {
-    n.size = 3.2 + (n.importance || 0.5) * 3.4;
+    n.size = 2.2 + (n.importance || 0.5) * 2.4;
     n.starred = (n.importance || 0.5) >= 0.9;
   });
 
   const groups = [...new Set(data.nodes.map(structKey))];
+  const galaxyMorph = {};
+  groups.forEach((p, gi) => {
+    const ns = data.nodes.filter(n => structKey(n) === p);
+    galaxyMorph[p] = pickGalaxyMorph(p, ns.length, new Set(ns.map(memTypeOf)).size, gi);
+  });
+  window.__galaxyMorph = galaxyMorph;
   const clusters = [];
-  groups.forEach(p => {
+  groups.forEach((p, gi) => {
+    const items = [];
     MEM_TYPE_ORDER.forEach(mt => {
       const ns = data.nodes.filter(n => structKey(n) === p && memTypeOf(n) === mt);
       if (!ns.length) return;
-      const gap = Math.max(...ns.map(visR), 8) * 2.6 + 10;
-      clusters.push({ p, mt, nodes: ns, gap, packR: packRof(ns.length, gap) });
+      items.push({ p, mt, nodes: ns });
+    });
+    if (!items.length) return;
+    const morph = galaxyMorph[p];
+    const nArms = Math.max(items.length, 1);
+    const gap = 5.6;
+    const twist = (gi % 2 === 0 ? 1 : -1) * (morph === 'barred' ? 1.15 : 1.45);
+    const showCap = 48;
+    const barType = items.slice().sort((a, b) => b.nodes.length - a.nodes.length)[0].mt;
+    items.forEach((it, ai) => {
+      it.sorted = it.nodes.slice().sort((a, b) => (b.importance || 0) - (a.importance || 0));
+      it.showN = Math.min(it.sorted.length, showCap);
+      it.packR = gap * Math.sqrt(it.showN + 0.4) + 8;
+      it.gap = gap;
+      it.armIndex = ai;
+      it.nArms = nArms;
+      it.twist = twist;
+      it.morph = morph;
+      it.isBar = morph === 'barred' && it.mt === barType;
+    });
+    items.forEach(it => clusters.push(it));
+  });
+
+  /* 两层不混：四座相对位置不动；座内每个文件夹占一块扇区；扇区内才用 embedding。 */
+  const CORE_CLEAR = 22;
+  const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+  const visR = 6.4;
+  function collide2d(pts, minDist, iters) {
+    for (let iter = 0; iter < iters; iter++) {
+      for (let i = 0; i < pts.length; i++) {
+        for (let j = i + 1; j < pts.length; j++) {
+          const a = pts[i].__local, b = pts[j].__local;
+          let dx = b.lx - a.lx, dy = b.ly - a.ly;
+          const d = Math.hypot(dx, dy) || 1e-6;
+          if (d < minDist) {
+            const push = (minDist - d) * 0.46;
+            dx /= d; dy /= d;
+            a.lx -= dx * push; a.ly -= dy * push;
+            b.lx += dx * push; b.ly += dy * push;
+          }
+        }
+      }
+    }
+  }
+  function layoutFolderWedge(nodes, a0, a1, r0, r1) {
+    const pad = Math.max(0.08, (a1 - a0) * 0.14);
+    const t0 = a0 + pad, t1 = a1 - pad;
+    const has = nodes.filter(n => Number.isFinite(n.atlasX) && Number.isFinite(n.atlasY));
+    const rest = nodes.filter(n => !has.includes(n));
+    if (has.length >= 2) {
+      let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
+      has.forEach(n => {
+        minx = Math.min(minx, n.atlasX); maxx = Math.max(maxx, n.atlasX);
+        miny = Math.min(miny, n.atlasY); maxy = Math.max(maxy, n.atlasY);
+      });
+      const dx = Math.max(maxx - minx, 1e-6), dy = Math.max(maxy - miny, 1e-6);
+      has.forEach(n => {
+        const u = (n.atlasX - minx) / dx;
+        const v = (n.atlasY - miny) / dy;
+        const theta = t0 + u * (t1 - t0);
+        const rr = r0 + (0.18 + 0.82 * v) * (r1 - r0);
+        n.__local = { lx: rr * Math.cos(theta), ly: rr * Math.sin(theta), lz: 0 };
+      });
+      collide2d(has, visR * 1.9, 22);
+      has.forEach(n => {
+        let th = Math.atan2(n.__local.ly, n.__local.lx);
+        let r = Math.hypot(n.__local.lx, n.__local.ly);
+        while (th < t0) th += Math.PI * 2;
+        while (th > t1) th -= Math.PI * 2;
+        th = Math.max(t0, Math.min(t1, th));
+        r = Math.max(r0, Math.min(r1, r));
+        n.__local.lx = r * Math.cos(th);
+        n.__local.ly = r * Math.sin(th);
+      });
+    }
+    rest.forEach((n, i) => {
+      const t = rest.length <= 1 ? 0.5 : (i + 0.5) / rest.length;
+      const theta = t0 + t * (t1 - t0);
+      const rr = r0 + (0.35 + 0.45 * ((i * 0.37) % 1)) * (r1 - r0);
+      n.__local = { lx: rr * Math.cos(theta), ly: rr * Math.sin(theta), lz: 0 };
+    });
+  }
+  groups.forEach(p => {
+    const items = clusters.filter(c => c.p === p);
+    if (!items.length) return;
+    const weights = items.map(it => Math.sqrt(it.nodes.length) + 0.6);
+    const sumW = weights.reduce((a, b) => a + b, 0);
+    let ang = -Math.PI / 2;
+    items.forEach((it, i) => {
+      const span = (weights[i] / sumW) * Math.PI * 2;
+      const r1 = CORE_CLEAR + visR * 3.2 * Math.sqrt(Math.max(it.nodes.length, 2));
+      layoutFolderWedge(it.nodes, ang, ang + span, CORE_CLEAR, r1);
+      const mid = ang + span / 2;
+      const rc = (CORE_CLEAR + r1) * 0.55;
+      it.clx = rc * Math.cos(mid);
+      it.cly = rc * Math.sin(mid);
+      it.clz = 0;
+      it.packR = (r1 - CORE_CLEAR) * 0.5;
+      ang += span;
     });
   });
 
-  const typeLocal = {};
   const groupBound = {};
   groups.forEach(p => {
-    const items = clusters.filter(c => c.p === p);
-    if (!items.length) { groupBound[p] = 40; return; }
-    if (items.length === 1) {
-      items[0].lx = 0; items[0].ly = 0; items[0].lz = 0;
-      groupBound[p] = items[0].packR + 24;
-      return;
-    }
-    let chord = 0;
-    for (let i = 0; i < items.length; i++) {
-      const a = items[i], b = items[(i + 1) % items.length];
-      chord = Math.max(chord, a.packR + b.packR + 32);
-    }
-    const ring = chord / (2 * Math.sin(Math.PI / items.length));
-    items.forEach((it, i) => {
-      const phi = Math.acos(1 - 2 * (i + 0.5) / items.length);
-      const theta = Math.PI * (1 + Math.sqrt(5)) * i;
-      it.lx = ring * Math.sin(phi) * Math.cos(theta);
-      it.ly = ring * Math.sin(phi) * Math.sin(theta);
-      it.lz = ring * Math.cos(phi);
+    let maxr = CORE_CLEAR;
+    data.nodes.forEach(n => {
+      if (structKey(n) !== p || !n.__local) return;
+      maxr = Math.max(maxr, Math.hypot(n.__local.lx, n.__local.ly) + visR);
     });
-    groupBound[p] = ring + Math.max(...items.map(it => it.packR)) + 28;
+    groupBound[p] = maxr + 24;
   });
+
+  const galaxyFrame = {};
+  {
+    const view = { x: 0.78, y: 0.52, z: 1.18 };
+    const vl = Math.hypot(view.x, view.y, view.z) || 1;
+    view.x /= vl; view.y /= vl; view.z /= vl;
+    const vb = basisFromNormal(view.x, view.y, view.z);
+    groups.forEach((p, i) => {
+      const morph = galaxyMorph[p];
+      const tilt = ((morph === 'elliptical' || morph === 'irregular') ? 52 : 26 + (i * 8) % 14) * Math.PI / 180;
+      const roll = i * 1.73 + 0.35;
+      const px = vb.u.x * Math.cos(roll) + vb.v.x * Math.sin(roll);
+      const py = vb.u.y * Math.cos(roll) + vb.v.y * Math.sin(roll);
+      const pz = vb.u.z * Math.cos(roll) + vb.v.z * Math.sin(roll);
+      const s = Math.sin(tilt), c = Math.cos(tilt);
+      galaxyFrame[p] = basisFromNormal(view.x * c + px * s, view.y * c + py * s, view.z * c + pz * s);
+    });
+  }
 
   const galaxyCenter = {};
   if (groups.length === 1) {
     galaxyCenter[groups[0]] = { x: 0, y: 0, z: 0 };
-  } else if (groups.length === 2) {
-    const gap = groupBound[groups[0]] + groupBound[groups[1]] + 90;
-    galaxyCenter[groups[0]] = { x: -gap / 2, y: 50, z: -40 };
-    galaxyCenter[groups[1]] = { x: gap / 2, y: -50, z: 40 };
   } else {
-    let chord = 0;
-    for (let i = 0; i < groups.length; i++) {
-      chord = Math.max(chord, groupBound[groups[i]] + groupBound[groups[(i + 1) % groups.length]] + 110);
+    const dirs = [];
+    if (groups.length === 2) {
+      dirs.push({ x: -1, y: 0.28, z: -0.62 }, { x: 1, y: -0.22, z: 0.62 });
+    } else if (groups.length === 3) {
+      dirs.push({ x: 1, y: 0.25, z: 0.48 }, { x: -0.62, y: 0.72, z: -0.5 }, { x: -0.48, y: -0.78, z: 0.38 });
+    } else if (groups.length === 4) {
+      dirs.push({ x: 1, y: 1, z: 1 }, { x: 1, y: -1, z: -1 }, { x: -1, y: 1, z: -1 }, { x: -1, y: -1, z: 1 });
+    } else {
+      groups.forEach((_, i) => {
+        const phi = Math.acos(1 - 2 * (i + 0.5) / groups.length);
+        const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+        dirs.push({
+          x: Math.sin(phi) * Math.cos(theta),
+          y: Math.sin(phi) * Math.sin(theta),
+          z: Math.cos(phi),
+        });
+      });
     }
-    const ring = chord / (2 * Math.sin(Math.PI / groups.length));
+    dirs.forEach(d => {
+      const l = Math.hypot(d.x, d.y, d.z) || 1;
+      d.x /= l; d.y /= l; d.z /= l;
+    });
+    let scale = 1;
+    for (let i = 0; i < groups.length; i++) {
+      for (let j = i + 1; j < groups.length; j++) {
+        const dist = Math.hypot(dirs[i].x - dirs[j].x, dirs[i].y - dirs[j].y, dirs[i].z - dirs[j].z);
+        const need = groupBound[groups[i]] + groupBound[groups[j]] + 90;
+        if (dist > 1e-6) scale = Math.max(scale, need / dist);
+      }
+    }
     groups.forEach((p, i) => {
-      const phi = Math.acos(1 - 2 * (i + 0.5) / groups.length);
-      const theta = Math.PI * (1 + Math.sqrt(5)) * i;
-      galaxyCenter[p] = {
-        x: ring * Math.sin(phi) * Math.cos(theta),
-        y: ring * Math.sin(phi) * Math.sin(theta) * 0.85,
-        z: ring * Math.cos(phi),
-      };
+      galaxyCenter[p] = { x: dirs[i].x * scale, y: dirs[i].y * scale, z: dirs[i].z * scale };
     });
   }
 
@@ -1071,12 +1454,15 @@ function renderStar(data) {
   const subCoreNodes = [];
   clusters.forEach(cl => {
     const g = galaxyCenter[cl.p];
-    const c = { x: g.x + (cl.lx || 0), y: g.y + (cl.ly || 0), z: g.z + (cl.lz || 0) };
+    const f = galaxyFrame[cl.p];
+    const mid = { lx: cl.clx || 0, ly: cl.cly || 0, lz: cl.clz || 0 };
+    const c = toWorld(g, f, mid.lx, mid.ly, mid.lz * 0.2);
     const key = cl.p + '::' + cl.mt;
     subCenter[key] = c;
     cl.center = c;
     cl.key = key;
-    subCoreNodes.push({
+    cl.midLocal = mid;
+    const sc = {
       id: 'subgalaxy:' + key,
       rawId: 'subgalaxy:' + key,
       lib: cl.p,
@@ -1084,17 +1470,22 @@ function renderStar(data) {
       instance: IS_FED ? cl.p : '',
       __struct: cl.p,
       __clusterKey: key,
+      shortLabel: MEM_TYPE_LABELS[cl.mt] || cl.mt,
       label: (MEM_TYPE_LABELS[cl.mt] || cl.mt) + ' · ' + cl.nodes.length,
       fullText: `${cl.p} · ${MEM_TYPE_LABELS[cl.mt] || cl.mt} · ${cl.nodes.length} 条`,
       group: 'subgalaxy-core',
       memType: cl.mt,
       category: 'subgalaxy',
-      size: 12 + Math.log2(cl.nodes.length + 1) * 3,
+      size: 8 + Math.log2(cl.nodes.length + 1) * 1.4,
       importance: 0.8,
       __galaxyColor: MEM_TYPE_COLORS[cl.mt] || '#64748b',
+      __galaxyCenter: g,
+      __frame: f,
+      __local: { lx: mid.lx, ly: mid.ly, lz: mid.lz * 0.2 },
       x: c.x, y: c.y, z: c.z,
       fx: c.x, fy: c.y, fz: c.z,
-    });
+    };
+    subCoreNodes.push(sc);
   });
 
   /* 星系核心代表节点 */
@@ -1105,43 +1496,42 @@ function renderStar(data) {
     project: p,
     instance: IS_FED ? p : '',
     __struct: p,
-    label: p + ' · ' + data.nodes.filter(n => structKey(n) === p).length,
-    fullText: IS_FED ? (p + ' 实例') : (p + ' 项目'),
+    shortLabel: structLabel(p),
+    label: structLabel(p) + ' · ' + (MORPH_LABELS[galaxyMorph[p]] || '') + ' · ' + data.nodes.filter(n => structKey(n) === p).length,
+    fullText: (IS_FED ? (p + ' 实例') : (p + ' 项目')) + ' · ' + (MORPH_LABELS[galaxyMorph[p]] || '星系'),
     group: 'galaxy-core',
     memType: 'general',
     category: 'galaxy',
-    size: 18 + Math.sqrt(data.nodes.filter(n => structKey(n) === p).length) * 0.7,
+    size: 8 + Math.log2(data.nodes.filter(n => structKey(n) === p).length + 1) * 1.05,
     count: data.nodes.filter(n => structKey(n) === p).length,
     importance: 1,
     __galaxyColor: STRUCT_COLORS[p] || '#fbbf24',
+    __morph: galaxyMorph[p],
+    __galaxyCenter: galaxyCenter[p],
+    __frame: galaxyFrame[p],
     x: galaxyCenter[p].x, y: galaxyCenter[p].y, z: galaxyCenter[p].z,
     fx: galaxyCenter[p].x, fy: galaxyCenter[p].y, fz: galaxyCenter[p].z,
   }));
 
   const nodeById = {};
   clusters.forEach(cl => {
-    const c = cl.center;
     const g = galaxyCenter[cl.p];
-    const sorted = cl.nodes.slice().sort((a, b) => (b.importance || 0) - (a.importance || 0));
-    const shown = sorted.slice(0, 32);
-    const nAll = shown.length;
-    const nCore = Math.max(3, Math.floor(nAll * 0.22));
-    shown.forEach((node, i) => {
+    const f = galaxyFrame[cl.p];
+    const sorted = cl.sorted || cl.nodes.slice().sort((a, b) => (b.importance || 0) - (a.importance || 0));
+    sorted.forEach((node, i) => {
       nodeById[node.id] = node;
       node.__struct = cl.p;
       node.__clusterKey = cl.p + '::' + cl.mt;
       node.__galaxyCenter = g;
-      node.__subCenter = c;
-      let r;
-      if (i < nCore) r = cl.gap * 0.7 * Math.pow(i + 0.5, 0.42);
-      else r = cl.gap * 0.7 * Math.pow(nCore, 0.42) + cl.gap * 1.15 * Math.pow(i - nCore + 1, 0.55);
-      const phi = Math.acos(1 - 2 * (i + 0.5) / nAll);
-      const theta = Math.PI * (1 + Math.sqrt(5)) * i;
-      node.x = c.x + r * Math.sin(phi) * Math.cos(theta);
-      node.y = c.y + r * Math.sin(phi) * Math.sin(theta);
-      node.z = c.z + r * Math.cos(phi);
-      node.__rest = { x: node.x, y: node.y, z: node.z };
-      node.__orbitSpeed = 0;
+      node.__subCenter = cl.center;
+      node.__frame = f;
+      node.__shown = i < (cl.showN || 20) || !!node.starred || (node.importance || 0) >= 0.9;
+      const loc = node.__local || { lx: cl.clx || 0, ly: cl.cly || 0, lz: 0 };
+      node.__local = loc;
+      const w = toWorld(g, f, loc.lx, loc.ly, loc.lz || 0);
+      node.x = w.x; node.y = w.y; node.z = w.z;
+      node.__rest = { x: w.x, y: w.y, z: w.z };
+      node.__orbitSpeed = 0.000035 + (i % 9) * 0.000008;
       node.fx = node.x; node.fy = node.y; node.fz = node.z;
     });
   });
@@ -1152,26 +1542,42 @@ function renderStar(data) {
       const r = Math.hypot(n.x || 0, n.y || 0, n.z || 0);
       if (r > maxR) maxR = r;
     });
-    const s = target / maxR;
-    nodes.forEach(n => {
-      n.x = (n.x || 0) * s; n.y = (n.y || 0) * s; n.z = (n.z || 0) * s;
-      if (n.fx != null) { n.fx = n.x; n.fy = n.y; n.fz = n.z; }
-      if (n.__rest) { n.__rest.x *= s; n.__rest.y *= s; n.__rest.z *= s; }
-      if (n.__subCenter) {
-        n.__subCenter = { x: n.__subCenter.x * s, y: n.__subCenter.y * s, z: n.__subCenter.z * s };
-      }
-      if (n.__galaxyCenter) {
-        n.__galaxyCenter = { x: n.__galaxyCenter.x * s, y: n.__galaxyCenter.y * s, z: n.__galaxyCenter.z * s };
-      }
-    });
-  })(coreNodes.concat(subCoreNodes).concat(data.nodes), 240);
+    const s = maxR > target ? target / maxR : 1;
+    if (s !== 1) {
+      nodes.forEach(n => {
+        n.x = (n.x || 0) * s; n.y = (n.y || 0) * s; n.z = (n.z || 0) * s;
+        if (n.fx != null) { n.fx = n.x; n.fy = n.y; n.fz = n.z; }
+        if (n.__rest) { n.__rest.x *= s; n.__rest.y *= s; n.__rest.z *= s; }
+        if (n.__local) n.__local = { lx: n.__local.lx * s, ly: n.__local.ly * s, lz: n.__local.lz * s };
+        if (n.__subCenter) n.__subCenter = { x: n.__subCenter.x * s, y: n.__subCenter.y * s, z: n.__subCenter.z * s };
+        if (n.__galaxyCenter) n.__galaxyCenter = { x: n.__galaxyCenter.x * s, y: n.__galaxyCenter.y * s, z: n.__galaxyCenter.z * s };
+      });
+    }
+    window.__layoutRadius = maxR * s;
+  })(coreNodes.concat(subCoreNodes).concat(data.nodes), 560);
 
-  /* 星系桥:总图连实例核心;本图不再用 airi↔reflect 旧规则 */
+  /* 座间金线：只留最强的 n-1 条，不要四面体全连 */
   const bridges = [];
-  for (let i = 0; i < groups.length; i++) {
-    for (let j = i + 1; j < groups.length; j++) {
-      const pa = groups[i], pb = groups[j];
-      bridges.push({ source: 'galaxy:' + pa, target: 'galaxy:' + pb, type: 'galaxy-bridge', dir: 'both', width: IS_FED ? 1.6 : 1.1 });
+  const ranked = (data.clusterBridges || []).slice().sort((a, b) => (b.score || 0) - (a.score || 0));
+  const want = Math.max(0, groups.length - 1);
+  const used = new Set();
+  ranked.forEach(br => {
+    if (bridges.length >= want) return;
+    if (!groups.includes(br.a) || !groups.includes(br.b)) return;
+    const key = [br.a, br.b].sort().join('|');
+    if (used.has(key)) return;
+    used.add(key);
+    bridges.push({
+      source: 'galaxy:' + br.a,
+      target: 'galaxy:' + br.b,
+      type: 'galaxy-bridge',
+      dir: 'both',
+      width: 1.2 + Math.min(br.score || 0, 1) * 0.8,
+    });
+  });
+  if (!bridges.length && groups.length > 1) {
+    for (let i = 0; i < groups.length - 1; i++) {
+      bridges.push({ source: 'galaxy:' + groups[i], target: 'galaxy:' + groups[i + 1], type: 'galaxy-bridge', dir: 'both', width: 1.3 });
     }
   }
 
@@ -1200,7 +1606,7 @@ function renderStar(data) {
 
   data.links = data.links || [];
   const allNodes = coreNodes.concat(subCoreNodes).concat(data.nodes);
-  const allLinks = data.links;
+  const allLinks = data.links.concat(bridges, spokes);
 
   /* ── 语义簇聚类(借鉴 supermemory computeClusterAssignments):
    * 在真实关系边(非合成边)上做 BFS 连通分量,同簇节点共享簇色
@@ -1249,11 +1655,13 @@ function renderStar(data) {
   graphInstance = (graphInstance || new ForceGraph3D(document.getElementById('graph')))
     .graphData({ nodes: allNodes, links: allLinks })
     .backgroundColor(document.fullscreenElement ? '#000000' : '#07090D')
-    .nodeRelSize(7)
+    .nodeThreeObject(node => buildNode(node))
+    .nodeThreeObjectExtend(false)
+    .nodeRelSize(4)
     .nodeVal(n => {
-      if (n.group === 'galaxy-core') return 180;
-      if (n.group === 'subgalaxy-core') return 42 + Math.min(n.size || 8, 24);
-      return 5 + (n.importance || 0.5) * 10;
+      if (n.group === 'galaxy-core') return 24;
+      if (n.group === 'subgalaxy-core') return 10;
+      return 3 + (n.importance || 0.5) * 4;
     })
     .nodeColor(n => selectedNodeId === n.id ? '#ffffff' : memColor(n))
     .nodeOpacity(1)
@@ -1303,7 +1711,6 @@ function renderStar(data) {
     .linkDirectionalArrowColor(() => 'rgba(255,214,120,0.9)')
     .linkDirectionalArrowRelPos(0.5)
     .linkOpacity(0.85)
-    .linkWidth(1.2)
     .showNavInfo(false)
     .onNodeClick(node => {
       onStarNodeClick(node);
@@ -1330,17 +1737,14 @@ function renderStar(data) {
   bindInteraction();
   softenControls();
   try {
-    graphInstance.d3Force('subgalaxy-attract', null);
-    graphInstance.d3Force('galaxy-attract', null);
-    const charge = graphInstance.d3Force('charge');
-    if (charge && typeof charge.strength === 'function') charge.strength(0);
-    const linkF = graphInstance.d3Force('link');
-    if (linkF) {
-      if (typeof linkF.strength === 'function') linkF.strength(0);
-      if (typeof linkF.distance === 'function') linkF.distance(80);
-    }
-    const center = graphInstance.d3Force('center');
-    if (center && typeof center.strength === 'function') center.strength(0);
+    ['charge', 'link', 'center', 'collide', 'subgalaxy-attract', 'galaxy-attract'].forEach(name => {
+      try { graphInstance.d3Force(name, null); } catch (e) {}
+    });
+    if (typeof graphInstance.warmupTicks === 'function') graphInstance.warmupTicks(0);
+    if (typeof graphInstance.cooldownTicks === 'function') graphInstance.cooldownTicks(0);
+    allNodes.forEach(n => {
+      if (n.fx != null) { n.x = n.fx; n.y = n.fy; n.z = n.fz; }
+    });
     graphInstance.nodeVisibility(n => lodVisible(n));
     graphInstance.linkVisibility(l => lodLinkVisible(l));
     graphInstance.enableNodeDrag(false);
@@ -1352,12 +1756,20 @@ function renderStar(data) {
       scene.add(dir);
       scene.__castaliaLit = true;
     }
+    if (typeof graphInstance.numDimensions === 'function') graphInstance.numDimensions(3);
   } catch (e) { console.error('galaxy force:', e.message); }
   try {
-    graphInstance.cameraPosition({ x: 0, y: 40, z: 520 }, { x: 0, y: 0, z: 0 }, 0);
+    const ctrl = graphInstance.controls();
+    if (ctrl && ctrl.maxPolarAngle != null) {
+      ctrl.minPolarAngle = 0;
+      ctrl.maxPolarAngle = Math.PI;
+    }
+    const R = window.__layoutRadius || 280;
+    graphInstance.cameraPosition({ x: R * 0.78, y: R * 0.52, z: Math.max(180, R * 1.18) }, { x: 0, y: 0, z: 0 }, 0);
   } catch (e) {}
   window.graphInstance = graphInstance;
   window.flyTo = flyTo;
+  renderStarLegend(data);
 }
 
 function renderStarLegend(data) {
@@ -1373,7 +1785,7 @@ function renderStarLegend(data) {
     const members = real.filter(n => structKey(n) === k);
     items.push({
       color: STRUCT_COLORS[k] || '#8A94A3',
-      label: k,
+      label: structLabel(k) + (window.__galaxyMorph && window.__galaxyMorph[k] ? ' · ' + (MORPH_LABELS[window.__galaxyMorph[k]] || '') : ''),
       count: members.length,
       cls: 'parent',
       filter: { kind: IS_FED ? 'instance' : 'project', id: k },
@@ -1440,6 +1852,271 @@ function renderAssemblyLegend(data) {
   ], '━ 归属连线');
 }
 
+function syncViewButtons() {
+  const star = document.getElementById('view-star');
+  const uni = document.getElementById('view-universe');
+  if (star) star.classList.toggle('active', currentView === 'star');
+  if (uni) uni.classList.toggle('active', currentView === 'universe');
+  const hint = document.getElementById('controls-hint');
+  if (hint) {
+    hint.textContent = currentView === 'universe'
+      ? '三维宇宙网 · 拖动环绕看深度 · 细丝=关系'
+      : '座内按文件夹分区 · 座间只留主桥 · 拖动旋转';
+  }
+}
+
+function setView(mode) {
+  if (!allData) return;
+  if (mode === currentView) return;
+  closePanel();
+  selectedNodeId = null;
+  stopAutoTour();
+  currentView = mode;
+  if (mode === 'universe') {
+    renderUniverse(allData);
+  } else {
+    removeUniverseFilaments();
+    renderStar(allData);
+    renderStarLegend(allData);
+  }
+  syncViewButtons();
+  const tourBtn = document.getElementById('tour-btn');
+  if (tourBtn) tourBtn.disabled = false;
+  renderStats();
+  setTimeout(applySearchVisuals, 0);
+}
+
+let universeLines = null;
+function removeUniverseFilaments() {
+  if (universeLines && universeLines.parent) universeLines.parent.remove(universeLines);
+  universeLines = null;
+}
+function addUniverseFilaments(nodes, links) {
+  if (!graphInstance || typeof THREE === 'undefined') return;
+  try {
+    removeUniverseFilaments();
+    const byId = new Map((nodes || []).map(n => [n.id, n]));
+    const pos = [];
+    const col = [];
+    (links || []).forEach(l => {
+      const s = byId.get(linkSrcId(l)), t = byId.get(linkTgtId(l));
+      if (!s || !t) return;
+      pos.push(s.x || 0, s.y || 0, s.z || 0, t.x || 0, t.y || 0, t.z || 0);
+      const sim = l.type === 'similarity';
+      const c = sim ? [0.28, 0.62, 0.82] : [0.45, 0.88, 1.0];
+      col.push(c[0], c[1], c[2], c[0], c[1], c[2]);
+    });
+    if (pos.length < 6) return;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    const mat = new THREE.LineBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 0.42,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    universeLines = new THREE.LineSegments(geo, mat);
+    universeLines.name = 'castalia-universe-filaments';
+    graphInstance.scene().add(universeLines);
+  } catch (e) { console.error('filaments:', e.message); }
+}
+
+function relaxUniverse(nodes, links, ticks) {
+  const N = nodes.length;
+  if (N < 2) return;
+  nodes.forEach(n => {
+    delete n.fx; delete n.fy; delete n.fz;
+    n.vx = n.vx || 0; n.vy = n.vy || 0; n.vz = n.vz || 0;
+  });
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  const springs = [];
+  (links || []).forEach(l => {
+    const s = byId.get(linkSrcId(l)), t = byId.get(linkTgtId(l));
+    if (!s || !t || s === t) return;
+    const sim = l.type === 'similarity';
+    springs.push({ s, t, k: sim ? 0.035 : 0.11, rest: sim ? 28 : 18 });
+  });
+  const rep = Math.max(90, 5200 / Math.max(N, 8));
+  const grav = 0.022;
+  const decay = 0.66;
+  const steps = Math.max(40, Math.min(ticks || 90, 140));
+  for (let iter = 0; iter < steps; iter++) {
+    for (let i = 0; i < N; i++) {
+      const a = nodes[i];
+      for (let j = i + 1; j < N; j++) {
+        const b = nodes[j];
+        let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+        const d2 = dx * dx + dy * dy + dz * dz + 0.9;
+        const d = Math.sqrt(d2);
+        const f = rep / d2;
+        dx /= d; dy /= d; dz /= d;
+        a.vx += dx * f; a.vy += dy * f; a.vz += dz * f;
+        b.vx -= dx * f; b.vy -= dy * f; b.vz -= dz * f;
+      }
+    }
+    for (let k = 0; k < springs.length; k++) {
+      const e = springs[k];
+      let dx = e.t.x - e.s.x, dy = e.t.y - e.s.y, dz = e.t.z - e.s.z;
+      const d = Math.hypot(dx, dy, dz) || 1;
+      const f = (d - e.rest) * e.k;
+      dx /= d; dy /= d; dz /= d;
+      e.s.vx += dx * f; e.s.vy += dy * f; e.s.vz += dz * f;
+      e.t.vx -= dx * f; e.t.vy -= dy * f; e.t.vz -= dz * f;
+    }
+    for (let i = 0; i < N; i++) {
+      const n = nodes[i];
+      n.vx = (n.vx - n.x * grav) * decay;
+      n.vy = (n.vy - n.y * grav) * decay;
+      n.vz = (n.vz - n.z * grav) * decay;
+      n.x += n.vx;
+      n.y += n.vy;
+      n.z += n.vz;
+    }
+  }
+  nodes.forEach(n => { n.fx = n.x; n.fy = n.y; n.fz = n.z; });
+}
+
+function renderUniverse(data) {
+  window.__galaxyMode = false;
+  hoverSet = null; hoveredNodeId = null;
+  data.links = (data.links || []).filter(l =>
+    l.type !== 'galaxy-bridge' && l.type !== 'subgalaxy-spoke' && l.type !== 'subgalaxy-bridge');
+  const real = (data.nodes || []).filter(n => !n.group);
+  const deg = computeDegrees(real, data.links);
+  const labelBudget = Math.min(15, Math.max(8, Math.round(Math.sqrt(Math.max(real.length, 1)) * 2.8)));
+  const ranked = real.slice().sort((a, b) => (deg[b.id] || 0) - (deg[a.id] || 0));
+  const importantIds = new Set(ranked.slice(0, labelBudget).map(n => n.id));
+  real.forEach(node => {
+    node.__struct = structKey(node);
+    node.__shown = true;
+    node.__degree = deg[node.id] || 0;
+    node.__importantLabel = importantIds.has(node.id) || !!node.starred;
+    node.starred = (node.importance || 0.5) >= 0.9;
+    node.size = 1.15 + Math.sqrt(Math.min(node.__degree, 16)) * 0.95 + (node.importance || 0.5) * 0.9;
+  });
+  layoutUniverse(real);
+  relaxUniverse(real, data.links, real.length > 300 ? 70 : 100);
+  window.__layoutRadius = window.__universeR || 360;
+  const allLinks = data.links || [];
+
+  graphInstance = (graphInstance || new ForceGraph3D(document.getElementById('graph')))
+    .graphData({ nodes: real, links: allLinks })
+    .backgroundColor(document.fullscreenElement ? '#000000' : '#07090D')
+    .nodeThreeObject(node => buildNode(node))
+    .nodeThreeObjectExtend(false)
+    .nodeRelSize(3)
+    .nodeVal(n => 2 + (n.importance || 0.5) * 3)
+    .nodeColor(n => selectedNodeId === n.id ? '#ffffff' : memColor(n))
+    .nodeOpacity(1)
+    .nodeLabel(n => (n.fullText || n.label || '').slice(0, 80))
+    .enablePointerInteraction(true)
+    .enableNodeDrag(false)
+    .linkColor(l => {
+      if (l.type === 'similarity') return 'rgba(80,190,230,0.35)';
+      const tc = linkTypeColor(l);
+      if (tc) return tc;
+      return 'rgba(140,230,255,0.55)';
+    })
+    .linkWidth(l => {
+      if (l.type === 'similarity') return 1.8;
+      if (isWarmLinkType(l.type)) return 3.2;
+      return 2.4;
+    })
+    .linkDirectionalParticles(l => {
+      if (l.type === 'similarity') return 0;
+      const s = linkSrcId(l), t = linkTgtId(l);
+      const focus = (selectedNodeId && (s === selectedNodeId || t === selectedNodeId))
+        || (hoverSet && hoverSet.has(s) && hoverSet.has(t));
+      return focus ? 3 : 0;
+    })
+    .linkDirectionalParticleWidth(1.05)
+    .linkDirectionalParticleSpeed(0.004)
+    .linkOpacity(0.9)
+    .showNavInfo(false)
+    .onNodeClick(node => onStarNodeClick(node))
+    .onNodeHover(node => {
+      document.body.style.cursor = node ? 'pointer' : 'default';
+      onHoverNode(node);
+    })
+    .onLinkClick(l => {
+      if (l && graphInstance && typeof graphInstance.emitParticle === 'function') graphInstance.emitParticle(l);
+    })
+    .onBackgroundClick(() => {
+      expandedKey = null;
+      selectedNodeId = null;
+      closePanel();
+      if (graphInstance) graphInstance.nodeVisibility(n => lodVisible(n));
+    });
+  addStarField();
+  addUniverseFilaments(real, allLinks);
+  startOrbit();
+  bindInteraction();
+  softenControls();
+  try {
+    if (typeof graphInstance.numDimensions === 'function') graphInstance.numDimensions(3);
+    ['charge', 'link', 'center', 'collide', 'subgalaxy-attract', 'galaxy-attract'].forEach(name => {
+      try { graphInstance.d3Force(name, null); } catch (e) {}
+    });
+    if (typeof graphInstance.warmupTicks === 'function') graphInstance.warmupTicks(0);
+    if (typeof graphInstance.cooldownTicks === 'function') graphInstance.cooldownTicks(0);
+    real.forEach(n => {
+      if (n.fx != null) { n.x = n.fx; n.y = n.fy; n.z = n.fz; }
+    });
+    graphInstance.nodeVisibility(n => lodVisible(n));
+    graphInstance.linkVisibility(l => lodLinkVisible(l));
+    graphInstance.enableNodeDrag(false);
+    const scene = graphInstance.scene();
+    if (scene && !scene.__castaliaLit) {
+      scene.add(new THREE.AmbientLight(0xffffff, 2.4));
+      const dir = new THREE.DirectionalLight(0xffffff, 1.8);
+      dir.position.set(80, 120, 160);
+      scene.add(dir);
+      scene.__castaliaLit = true;
+    }
+  } catch (e) { console.error('universe force:', e.message); }
+  try {
+    let maxR = 1;
+    real.forEach(n => { maxR = Math.max(maxR, Math.hypot(n.x || 0, n.y || 0, n.z || 0)); });
+    window.__universeR = maxR;
+    window.__layoutRadius = maxR;
+    graphInstance.cameraPosition(
+      { x: maxR * 1.35, y: maxR * 0.82, z: maxR * 1.85 },
+      { x: 0, y: 0, z: 0 },
+      0
+    );
+    const ctrl = graphInstance.controls();
+    if (ctrl) {
+      ctrl.target.set(0, 0, 0);
+      if (ctrl.maxPolarAngle != null) {
+        ctrl.minPolarAngle = 0;
+        ctrl.maxPolarAngle = Math.PI;
+      }
+    }
+  } catch (e) {}
+  window.graphInstance = graphInstance;
+  window.flyTo = flyTo;
+  renderUniverseLegend(data, real);
+}
+
+function renderUniverseLegend(data, real) {
+  const items = [];
+  MEM_TYPE_ORDER.forEach(mt => {
+    const c = (real || []).filter(n => (n.memType || 'general') === mt).length;
+    if (!c) return;
+    items.push({
+      color: MEM_TYPE_COLORS[mt],
+      label: MEM_TYPE_LABELS[mt] || mt,
+      count: c,
+      cls: 'parent',
+      filter: { kind: 'type', id: mt },
+    });
+  });
+  const titleEl = document.getElementById('legend-struct-title');
+  if (titleEl) titleEl.textContent = '宇宙 · 类型';
+  fillLegendList(document.getElementById('legend-struct'), items);
+  const linkEl = document.querySelector('#legend .legend-link');
+  if (linkEl) linkEl.textContent = '3D 嵌入 + 立体力导向 · 拖动看深度';
+}
+
 function toggleView() {
   const btn = document.getElementById('view-btn');
   if (currentView === 'star') {
@@ -1494,7 +2171,7 @@ function toggleView() {
 
 /* ═══════════════════ Auto-Tour 自动导览 ═══════════════════ */
 function toggleTour() {
-  if (currentView !== 'star') return;
+  if (currentView !== 'star' && currentView !== 'universe') return;
   if (autoTourActive) stopAutoTour();
   else startAutoTour();
 }
@@ -1506,7 +2183,7 @@ function startAutoTour() {
   tourCursor = null;
   const btn = document.getElementById('tour-btn');
   btn.classList.add('active');
-  btn.textContent = '⏸ 停止导览';
+  btn.title = '停止导览';
   document.getElementById('tour-indicator').classList.add('on');
   walkToNextMemory();
   autoTourTimer = setInterval(walkToNextMemory, 9000);
@@ -1567,7 +2244,7 @@ function stopAutoTour() {
   autoTourActive = false;
   autoTargetId = null;
   const btn = document.getElementById('tour-btn');
-  if (btn) { btn.classList.remove('active'); btn.textContent = '▶ 自动导览'; }
+  if (btn) { btn.classList.remove('active'); btn.title = '导览'; }
   document.getElementById('tour-indicator').classList.remove('on');
   refreshNodeVisuals();
 }
@@ -1586,75 +2263,230 @@ function toggleFullscreen() {
 document.addEventListener('fullscreenchange', () => {
   const fs = !!document.fullscreenElement;
   const btn = document.getElementById('fs-btn');
-  btn.textContent = fs ? '⛶ 退出全屏' : '⛶ 全屏';
+  btn.title = fs ? '退出全屏' : '全屏';
+  btn.classList.toggle('active', fs);
   btn.classList.toggle('active', fs);
   if (graphInstance) graphInstance.backgroundColor(fs ? '#000000' : '#07090D');
   document.body.style.background = fs ? '#000' : '';
 });
 
 /* ═══════════════════ 详情卡片 ═══════════════════ */
+function graphAllNodes() {
+  try { return (graphInstance && graphInstance.graphData().nodes) || allData.nodes || []; }
+  catch (e) { return allData.nodes || []; }
+}
+function memSnippet(n) {
+  return String(n.fullText || n.label || n.text || '').replace(/\s+/g, ' ').trim();
+}
+function addTreeLabel(el, text) {
+  const lab = document.createElement('div');
+  lab.className = 'panel-section-label';
+  lab.style.marginTop = '10px';
+  lab.textContent = text;
+  el.appendChild(lab);
+}
+function addTreeRow(el, opts) {
+  const row = document.createElement('div');
+  row.className = 'panel-tree-row';
+  const dot = document.createElement('span');
+  dot.className = 'panel-tree-dot';
+  dot.style.background = opts.color || '#8A94A3';
+  const title = document.createElement('span');
+  title.className = 'panel-tree-title';
+  title.textContent = opts.title;
+  title.title = opts.title;
+  row.appendChild(dot);
+  row.appendChild(title);
+  if (opts.count != null) {
+    const c = document.createElement('span');
+    c.className = 'panel-tree-count';
+    c.textContent = String(opts.count);
+    row.appendChild(c);
+  }
+  row.onclick = opts.onClick;
+  el.appendChild(row);
+}
+function fillGalaxyTree(node, tree) {
+  const p = node.__struct || node.project || node.lib;
+  const mems = (allData.nodes || []).filter(n => !n.group && structKey(n) === p)
+    .sort((a, b) => (b.importance || 0) - (a.importance || 0));
+  const byType = {};
+  mems.forEach(n => {
+    const mt = n.memType || 'general';
+    (byType[mt] = byType[mt] || []).push(n);
+  });
+  addTreeLabel(tree, '分节点');
+  MEM_TYPE_ORDER.forEach(mt => {
+    const list = byType[mt];
+    if (!list) return;
+    const sub = graphAllNodes().find(n => n.group === 'subgalaxy-core' && n.__struct === p && n.memType === mt);
+    addTreeRow(tree, {
+      color: MEM_TYPE_COLORS[mt] || '#8A94A3',
+      title: MEM_TYPE_LABELS[mt] || mt,
+      count: list.length,
+      onClick: () => {
+        panelStack.push(node);
+        if (sub) onSubGalaxyCoreClick(sub);
+      },
+    });
+  });
+  const map = MAP_LINKS[p];
+  if (map && currentMapId() === 'federation' && p !== '联邦') {
+    addTreeRow(tree, {
+      color: STRUCT_COLORS[p] || '#8A94A3',
+      title: '打开 ' + map.label + ' 星图',
+      onClick: () => { location.href = map.href; },
+    });
+  }
+  addTreeLabel(tree, '记忆 · ' + mems.length);
+  mems.forEach(n => {
+    addTreeRow(tree, {
+      color: memColor(n),
+      title: memSnippet(n).slice(0, 72) || n.id,
+      onClick: () => { panelStack.push(node); onStarNodeClick(n); },
+    });
+  });
+}
+function fillSubTree(node, tree) {
+  const p = node.__struct || node.project || node.lib;
+  const mt = node.memType || 'general';
+  const parent = graphAllNodes().find(n => n.group === 'galaxy-core' && n.__struct === p);
+  const mems = (allData.nodes || []).filter(n => !n.group && structKey(n) === p && (n.memType || 'general') === mt)
+    .sort((a, b) => (b.importance || 0) - (a.importance || 0));
+  if (parent) {
+    const back = document.createElement('div');
+    back.className = 'panel-tree-back';
+    back.textContent = '← ' + (parent.__struct || parent.label || p);
+    back.onclick = () => { panelStack = []; onGalaxyCoreClick(parent); };
+    tree.appendChild(back);
+  }
+  addTreeLabel(tree, '记忆 · ' + mems.length);
+  mems.forEach(n => {
+    addTreeRow(tree, {
+      color: memColor(n),
+      title: memSnippet(n).slice(0, 72) || n.id,
+      onClick: () => { panelStack.push(node); onStarNodeClick(n); },
+    });
+  });
+}
+function panelGoBack() {
+  const prev = panelStack.pop();
+  if (!prev) { closePanel(); return; }
+  if (prev.group === 'galaxy-core') { panelStack = []; onGalaxyCoreClick(prev); }
+  else if (prev.group === 'subgalaxy-core') onSubGalaxyCoreClick(prev);
+  else showPanel(prev);
+}
+window.panelGoBack = panelGoBack;
+
 function showPanel(node) {
   panelNode = node;
   const color = memColor(node);
   const starred = !!(node.starred);
+  const isStruct = node.group === 'galaxy-core' || node.group === 'subgalaxy-core';
   const panel = sidePanel;
   panel.style.borderLeftColor = color;
   panel.style.borderLeftWidth = starred ? '2px' : '1px';
   panel.style.borderLeftStyle = 'solid';
 
   document.getElementById('panel-dot').style.background = color;
-  document.getElementById('panel-badge').textContent = `${(node.memType || node.type || 'general').toUpperCase()} · ${(node.type || '').toUpperCase()}`;
+  const backBtn = document.getElementById('panel-back-btn');
+  if (backBtn) backBtn.style.display = panelStack.length ? 'inline-block' : 'none';
+  document.getElementById('panel-star-btn').style.display = isStruct ? 'none' : '';
+  document.getElementById('panel-del-btn').style.display = isStruct ? 'none' : '';
+
+  if (node.group === 'galaxy-core') {
+    const p = node.__struct || node.project || node.lib || '';
+    const nMem = (allData.nodes || []).filter(n => !n.group && structKey(n) === p).length;
+    document.getElementById('panel-badge').textContent = (structLabel(p) + ' · ' + (MORPH_LABELS[node.__morph] || '星系')).toUpperCase();
+    document.getElementById('panel-text').textContent = nMem + ' 条记忆';
+  } else if (node.group === 'subgalaxy-core') {
+    const mt = node.memType || 'general';
+    document.getElementById('panel-badge').textContent = (MEM_TYPE_LABELS[mt] || mt).toUpperCase();
+    document.getElementById('panel-text').textContent = (node.__struct || '') + ' · ' + ((allData.nodes || []).filter(n => n.__clusterKey === node.__clusterKey || (structKey(n) === node.__struct && (n.memType || 'general') === mt && !n.group)).length) + ' 条记忆';
+  } else {
+    document.getElementById('panel-badge').textContent = `${(node.memType || node.type || 'general').toUpperCase()} · ${(node.type || '').toUpperCase()}`;
+    document.getElementById('panel-text').textContent = node.fullText || node.text || '';
+  }
   document.getElementById('panel-badge').style.color = color;
-  document.getElementById('panel-text').textContent = node.fullText || node.text || '';
-  document.getElementById('panel-time').textContent = node.createdAt ? new Date(node.createdAt).toLocaleString('zh-CN') : '—';
 
-  const srcParts = [];
-  if (node.instance) srcParts.push('实例: ' + node.instance);
-  if (node.source) srcParts.push('来源: ' + node.source);
-  if (node.project) srcParts.push('项目: ' + node.project);
-  document.getElementById('panel-source').textContent = srcParts.join(' · ') || '—';
-
-  document.getElementById('panel-importance').style.width = ((node.importance || 0) * 100) + '%';
+  const hideMeta = isStruct;
+  ['panel-time', 'panel-source', 'panel-importance', 'panel-importance-val'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && el.parentElement && el.parentElement.classList.contains('panel-section')) el.parentElement.style.display = hideMeta ? 'none' : '';
+  });
+  const timeSec = document.getElementById('panel-time');
+  if (timeSec) {
+    timeSec.textContent = node.createdAt ? new Date(node.createdAt).toLocaleString('zh-CN') : '—';
+    const sec = timeSec.closest('.panel-section');
+    if (sec) sec.style.display = hideMeta ? 'none' : '';
+  }
+  const srcEl = document.getElementById('panel-source');
+  if (srcEl) {
+    const srcParts = [];
+    if (node.instance) srcParts.push('实例: ' + node.instance);
+    if (node.source) srcParts.push('来源: ' + node.source);
+    if (node.project) srcParts.push('项目: ' + node.project);
+    srcEl.textContent = srcParts.join(' · ') || '—';
+    const sec = srcEl.closest('.panel-section');
+    if (sec) sec.style.display = hideMeta ? 'none' : '';
+  }
+  const impFill = document.getElementById('panel-importance');
+  if (impFill) {
+    impFill.style.width = ((node.importance || 0) * 100) + '%';
+    const sec = impFill.closest('.panel-section');
+    if (sec) sec.style.display = hideMeta ? 'none' : '';
+  }
   document.getElementById('panel-importance-val').textContent = Math.round((node.importance || 0) * 100) + '%';
 
   const tagsEl = document.getElementById('panel-tags');
   tagsEl.innerHTML = '';
-  document.getElementById('panel-tags-section').style.display = '';
-  if (node.tags && node.tags.length) {
+  document.getElementById('panel-tags-section').style.display = (hideMeta || !node.tags || !node.tags.length) ? 'none' : '';
+  if (!hideMeta && node.tags && node.tags.length) {
     for (const t of node.tags) {
       const span = document.createElement('span');
       span.className = 'tag';
       span.textContent = t;
       tagsEl.appendChild(span);
     }
-  } else {
-    document.getElementById('panel-tags-section').style.display = 'none';
+  }
+
+  const treeSec = document.getElementById('panel-tree-section');
+  const tree = document.getElementById('panel-tree');
+  if (treeSec && tree) {
+    tree.innerHTML = '';
+    if (node.group === 'galaxy-core') { treeSec.style.display = ''; fillGalaxyTree(node, tree); }
+    else if (node.group === 'subgalaxy-core') { treeSec.style.display = ''; fillSubTree(node, tree); }
+    else treeSec.style.display = 'none';
   }
 
   const relEl = document.getElementById('panel-rel');
   const relSec = document.getElementById('panel-rel-section');
   if (relEl && relSec) {
     relEl.innerHTML = '';
-    const nbr = oneHopNeighbors(node.id);
-    const others = [...nbr].filter(id => id !== node.id).slice(0, 6)
-      .map(id => (allData.nodes || []).find(n => n.id === id)).filter(Boolean);
-    if (!others.length) relSec.style.display = 'none';
+    if (isStruct) relSec.style.display = 'none';
     else {
-      relSec.style.display = '';
-      others.forEach(n => {
-        const row = document.createElement('div');
-        row.className = 'panel-value';
-        row.style.cursor = 'pointer';
-        row.style.marginBottom = '6px';
-        row.textContent = (n.fullText || n.label || '').slice(0, 72);
-        row.onclick = () => onStarNodeClick(n);
-        relEl.appendChild(row);
-      });
+      const nbr = oneHopNeighbors(node.id);
+      const others = [...nbr].filter(id => id !== node.id).slice(0, 6)
+        .map(id => (allData.nodes || []).find(n => n.id === id)).filter(Boolean);
+      if (!others.length) relSec.style.display = 'none';
+      else {
+        relSec.style.display = '';
+        others.forEach(n => {
+          const row = document.createElement('div');
+          row.className = 'panel-value';
+          row.style.cursor = 'pointer';
+          row.style.marginBottom = '6px';
+          row.textContent = (n.fullText || n.label || '').slice(0, 72);
+          row.onclick = () => onStarNodeClick(n);
+          relEl.appendChild(row);
+        });
+      }
     }
   }
 
   updateStarButton();
   panel.classList.add('open');
+  document.body.classList.add('panel-open');
 }
 
 function updateStarButton() {
@@ -1717,8 +2549,10 @@ async function deletePanelNode() {
 
 function closePanel() {
   sidePanel.classList.remove('open');
+  document.body.classList.remove('panel-open');
   selectedNodeId = null;
   panelNode = null;
+  panelStack = [];
   refreshNodeVisuals();
 }
 
@@ -1738,20 +2572,21 @@ function applySearchVisuals() {
 }
 
 document.getElementById('search-input').addEventListener('input', () => {
-  if (currentView !== 'star') return;
+  if (currentView !== 'star' && currentView !== 'universe') return;
   applySearchVisuals();
 });
 
 /* ═══════════════════ 初始加载 ═══════════════════ */
 function __init() {
-fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE))
+fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE) + '&layout=folder-wedges')
   .then(r => r.json())
   .then(data => {
     if (data.error || !data.nodes) throw new Error(data.error || '无法读取记忆库');
     allData = data;
     updateStats(data.nodes.length, data.stats.totalLinks);
-    renderStarLegend(data);
-    renderStar(data);
+    currentView = 'universe';
+    renderUniverse(data);
+    syncViewButtons();
     renderStats();
     loading.style.display = 'none';
     document.getElementById('tour-btn').disabled = false;
@@ -1804,30 +2639,55 @@ function log(msg, cls='log-info') {
   el.scrollTop = el.scrollHeight;
 }
 
+function fillConfigForm(d) {
+  const emb = d.embedding || {};
+  document.getElementById('embedMode').value = emb.mode || 'ollama';
+  document.getElementById('embOllamaUrl').value = emb.ollama_url || 'http://127.0.0.1:11436';
+  document.getElementById('embOllamaModel').value = emb.model || 'yuan-embedding-2.0-zh';
+  document.getElementById('embApiUrl').value = emb.api_url || '';
+  document.getElementById('embApiKey').value = emb.api_key && emb.api_key !== '****' ? emb.api_key : '';
+  document.getElementById('embApiModel').value = emb.api_model || '';
+  const ref = d.reflect || {};
+  document.getElementById('refUrl').value = ref.llm_url || 'https://api.deepseek.com/v1';
+  document.getElementById('refKey').value = ref.api_key && ref.api_key !== '****' ? ref.api_key : '';
+  document.getElementById('refModel').value = ref.model || 'deepseek-chat';
+  document.getElementById('refFactExtract').value = ref.factExtraction || 'auto';
+  document.getElementById('refMaxFacts').value = ref.maxFacts ?? 15;
+  document.getElementById('refMinGap').value = ref.minGapHours ?? 24;
+  document.getElementById('refMinUnan').value = ref.minUnanalyzed ?? 5;
+  document.getElementById('refInterval').value = ref.intervalHours ?? 0;
+  const tri = d.triage || {};
+  document.getElementById('triUrl').value = tri.llm_url || '';
+  document.getElementById('triKey').value = tri.api_key && tri.api_key !== '****' ? tri.api_key : '';
+  document.getElementById('triModel').value = tri.model || '';
+  document.getElementById('triBuffer').value = tri.bufferSize ?? 5;
+  document.getElementById('triBufTok').value = tri.bufferTokens ?? 4000;
+  document.getElementById('triTtl').value = tri.sessionTtlDays ?? 7;
+  const cons = d.consolidate || {};
+  document.getElementById('consMin').value = cons.minMemories ?? 15;
+  document.getElementById('consSim').value = cons.similarity ?? 0.88;
+  document.getElementById('consAuto').value = (cons.autoOnStart === false || cons.autoOnStart === 0 || cons.autoOnStart === '0') ? '0' : '1';
+  toggleEmbedMode();
+}
+
 async function loadConfig() {
   try {
-    const r = await fetch('/api/config');
+    const r = await fetch('/api/config?scope=all');
     const d = await r.json();
-    const emb = d.embedding || {};
-    document.getElementById('embedMode').value = emb.mode || 'ollama';
-    document.getElementById('embOllamaUrl').value = emb.ollama_url || 'http://127.0.0.1:11436';
-    document.getElementById('embOllamaModel').value = emb.model || 'yuan-embedding-2.0-zh';
-    document.getElementById('embApiUrl').value = emb.api_url || '';
-    document.getElementById('embApiKey').value = emb.api_key && emb.api_key !== '****' ? emb.api_key : '';
-    document.getElementById('embApiModel').value = emb.api_model || '';
-    const ref = d.reflect || {};
-    document.getElementById('refUrl').value = ref.llm_url || 'https://api.deepseek.com/v1';
-    document.getElementById('refKey').value = ref.api_key && ref.api_key !== '****' ? ref.api_key : '';
-    document.getElementById('refModel').value = ref.model || 'deepseek-chat';
-    document.getElementById('refFactExtract').value = ref.factExtraction || 'auto';
-    document.getElementById('refMaxFacts').value = ref.maxFacts ?? 15;
-    const tri = d.triage || {};
-    document.getElementById('triUrl').value = tri.llm_url || '';
-    document.getElementById('triKey').value = tri.api_key && tri.api_key !== '****' ? tri.api_key : '';
-    document.getElementById('triModel').value = tri.model || '';
-    toggleEmbedMode();
+    fillConfigForm(d.config || d);
+    const box = document.getElementById('cfgInstances');
+    if (box && Array.isArray(d.instances)) {
+      box.innerHTML = d.instances.map((it) => {
+        const cls = it.exists ? 'cfg-chip on' : 'cfg-chip warn';
+        const st = it.exists ? '已有配置' : '保存时创建';
+        return `<span class="${cls}">${it.name} · ${st}</span>`;
+      }).join('');
+      if (d.inSync === false) {
+        box.innerHTML += '<span class="cfg-chip warn">各端不一致，表单显示第一份。保存到全部可对齐</span>';
+      }
+    }
     document.getElementById('configStatus').innerHTML = '<span class="badge badge-ok">已加载</span>';
-  } catch(e) {
+  } catch (e) {
     document.getElementById('configStatus').innerHTML = '<span class="badge badge-err">加载失败</span>';
     log('加载配置失败: ' + e.message, 'log-err');
   }
@@ -1850,14 +2710,26 @@ async function saveAllConfig() {
       model: document.getElementById('refModel').value.trim() || 'deepseek-chat',
       factExtraction: document.getElementById('refFactExtract').value === 'off' ? 'off' : 'auto',
       maxFacts: parseInt(document.getElementById('refMaxFacts').value, 10) || 15,
+      minGapHours: parseFloat(document.getElementById('refMinGap').value) || 24,
+      minUnanalyzed: parseInt(document.getElementById('refMinUnan').value, 10) || 0,
+      intervalHours: parseFloat(document.getElementById('refInterval').value) || 0,
     },
     triage: {
       llm_url: document.getElementById('triUrl').value.trim(),
       api_key: document.getElementById('triKey').value.trim(),
       model: document.getElementById('triModel').value.trim(),
+      bufferSize: parseInt(document.getElementById('triBuffer').value, 10) || 5,
+      bufferTokens: parseInt(document.getElementById('triBufTok').value, 10) || 4000,
+      sessionTtlDays: parseInt(document.getElementById('triTtl').value, 10) || 7,
+    },
+    consolidate: {
+      minMemories: parseInt(document.getElementById('consMin').value, 10) || 15,
+      similarity: parseFloat(document.getElementById('consSim').value) || 0.88,
+      autoOnStart: document.getElementById('consAuto').value !== '0',
     },
   };
   try {
+    cfg.applyTo = (document.getElementById('cfgApplyTo') || {}).value || 'all';
     const r = await fetch('/api/config', {
       method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(cfg)
     });
@@ -1943,10 +2815,14 @@ async function delMem(id) {
 }
 
 function refreshGraph() {
-  fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE)).then(r => r.json()).then(data => {
+  fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE) + '&layout=folder-wedges').then(r => r.json()).then(data => {
     allData = data;
     updateStats(data.nodes.length, data.stats ? data.stats.totalLinks : data.links.length);
-    if (currentView === 'star') {
+    if (currentView === 'universe') {
+      renderUniverse(data);
+      renderStats();
+      setTimeout(applySearchVisuals, 0);
+    } else if (currentView === 'star') {
       renderStar(data);
       renderStarLegend(data);
       renderStats();

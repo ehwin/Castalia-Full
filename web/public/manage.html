@@ -4,20 +4,31 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>库管理 · Castalia</title>
+<link rel="icon" type="image/png" href="/favicon.png">
 <style>
   :root {
-    --bg: #0d1117; --panel: #161b22; --border: #30363d;
-    --text: #e6edf3; --dim: #8b949e; --accent: #7c6ff7; --accent2: #58a6ff;
-    --ok: #3fb950; --warn: #d29922; --err: #f85149;
+    --bg: #07090D; --panel: #12171F; --border: rgba(255,255,255,0.08);
+    --text: #E8EDF2; --dim: #8A94A3; --accent: #3EE8C8; --accent2: #7EB0FF;
+    --ok: #57E6C4; --warn: #F5B942; --err: #f4554f;
+    --hermes: #5FF5D6; --lobehub: #7EB0FF; --airi: #FF8FB8; --fed: #FFD056;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--text); font-family: "Segoe UI", "Microsoft YaHei", sans-serif; padding: 24px; }
-  header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
-  h1 { font-size: 22px; color: var(--accent); }
+  body { background: var(--bg); color: var(--text); font-family: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", sans-serif; padding: 0 28px 48px; }
+  .app-head { display: flex; align-items: center; gap: 14px; height: 56px; margin: 0 -28px 22px; padding: 0 28px;
+    background: #080A0F; border-bottom: 1px solid var(--border); }
+  .brand { font-weight: 650; color: #fff; text-decoration: none; font-size: 15px; display: inline-flex; align-items: center; gap: 10px; }
+  .brand img { width: 28px; height: 28px; border-radius: 8px; }
+  .brand em { font-style: normal; color: var(--accent); font-size: 12px; margin-left: 8px; font-weight: 500; }
+  .maps { display: flex; gap: 3px; background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 10px; padding: 3px; }
+  .maps a { color: var(--dim); text-decoration: none; font-size: 12px; padding: 5px 10px; border-radius: 8px; }
+  .maps a:hover { color: var(--text); }
+  .maps i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+  .pages { margin-left: auto; display: flex; gap: 6px; }
+  .pages a { color: var(--dim); text-decoration: none; font-size: 13px; padding: 6px 10px; border-radius: 8px; }
+  .pages a.active, .pages a:hover { color: var(--accent); }
+  header.page { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  h1 { font-size: 20px; color: var(--text); font-weight: 650; }
   h1 small { color: var(--dim); font-weight: normal; font-size: 13px; margin-left: 10px; }
-  nav { display: flex; gap: 12px; }
-  nav a { color: var(--accent2); text-decoration: none; font-size: 13px; }
-  nav a:hover { text-decoration: underline; }
   section { margin-bottom: 24px; }
   h2 { font-size: 15px; color: var(--accent2); margin-bottom: 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
@@ -84,12 +95,21 @@
 </style>
 </head>
 <body>
-<header>
-  <h1>库管理<small>手动调整记忆归属 · 跨库移动 · 批量迁移 · 改分类 · 软删</small></h1>
-  <nav>
-    <a href="/">← 3D 图</a>
-    <a href="/aggregate.html">🗂 记忆总成</a>
+<div class="app-head">
+  <a class="brand" href="http://127.0.0.1:3345/?scope=federation"><img src="/castalia-mark.png" alt="">Castalia <em>库管理</em></a>
+  <nav class="maps">
+    <a href="http://127.0.0.1:3345/?scope=federation"><i style="background:var(--fed)"></i>联邦</a>
+    <a href="http://127.0.0.1:3345/?scope=local"><i style="background:var(--hermes)"></i>Hermes</a>
+    <a href="http://127.0.0.1:3346/?scope=local"><i style="background:var(--lobehub)"></i>LobeHub</a>
+    <a href="http://127.0.0.1:3344/?scope=local"><i style="background:var(--airi)"></i>AIRI</a>
   </nav>
+  <nav class="pages">
+    <a href="/aggregate.html">总成</a>
+    <a class="active" href="/manage.html">库管理</a>
+  </nav>
+</div>
+<header class="page">
+  <h1>库管理<small>手动调整记忆归属 · 跨库移动 · 批量迁移 · 改分类 · 软删</small></h1>
 </header>
 
 <section id="reflectSection">

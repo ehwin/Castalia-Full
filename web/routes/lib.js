@@ -100,12 +100,9 @@ function openDb(readonly = false) {
 }
 
 // ═══ 嵌入配置 ═══
-function loadConfig() {
-  let cfg = {};
-  if (existsSync(CONFIG_PATH)) {
-    try { cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')); } catch {}
-  }
+function normalizeConfig(cfg = {}) {
   return {
+    ...cfg,
     embedding: {
       mode: 'ollama',
       ollama_url: 'http://127.0.0.1:11436',
@@ -116,17 +113,74 @@ function loadConfig() {
     reflect: {
       llm_url: 'https://api.deepseek.com/v1', api_key: '', model: 'deepseek-chat',
       factExtraction: 'auto', maxFacts: 15,
+      minGapHours: 24, minUnanalyzed: 5, intervalHours: 0,
       ...(cfg.reflect || {}),
     },
     triage: {
       llm_url: 'https://api.deepseek.com/v1', api_key: '', model: 'deepseek-chat',
+      bufferSize: 5, bufferTokens: 4000, sessionTtlDays: 7,
       ...(cfg.triage || {}),
+    },
+    consolidate: {
+      minMemories: 15, similarity: 0.88, autoOnStart: true,
+      ...(cfg.consolidate || {}),
     },
   };
 }
 
+function loadConfig() {
+  let cfg = {};
+  if (existsSync(CONFIG_PATH)) {
+    try { cfg = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')); } catch {}
+  }
+  return normalizeConfig(cfg);
+}
+
 function saveConfig(cfg) {
+  mkdirSync(dirname(CONFIG_PATH), { recursive: true });
   writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf-8');
+}
+
+function loadConfigFromDir(dir) {
+  const p = join(dir, 'config.json');
+  let cfg = {};
+  let exists = false;
+  if (existsSync(p)) {
+    exists = true;
+    try { cfg = JSON.parse(readFileSync(p, 'utf-8')); } catch {}
+  }
+  return { path: p, exists, config: normalizeConfig(cfg) };
+}
+
+function saveConfigToDir(dir, cfg) {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'config.json'), JSON.stringify(cfg, null, 2), 'utf-8');
+}
+
+function loadAllInstanceConfigs() {
+  return AGGREGATE_DIRS.map((c) => ({
+    name: c.name,
+    dir: c.dir,
+    ...loadConfigFromDir(c.dir),
+  }));
+}
+
+function mergePreserveKeys(cur, incoming) {
+  const next = {
+    ...cur,
+    embedding: { ...(cur.embedding || {}), ...(incoming.embedding || {}) },
+    reflect: { ...(cur.reflect || {}), ...(incoming.reflect || {}) },
+    triage: { ...(cur.triage || {}), ...(incoming.triage || {}) },
+    consolidate: { ...(cur.consolidate || {}), ...(incoming.consolidate || {}) },
+  };
+  const keep = (obj, old, field) => {
+    if (!obj) return;
+    if (obj[field] === '****' || obj[field] === '' || obj[field] == null) obj[field] = old?.[field] || '';
+  };
+  keep(next.embedding, cur.embedding, 'api_key');
+  keep(next.reflect, cur.reflect, 'api_key');
+  keep(next.triage, cur.triage, 'api_key');
+  return next;
 }
 
 // ═══ MCP client:调用 dist/index.js 的反思工具 ═══
@@ -427,7 +481,8 @@ function ensureLibSchema(db) {
 
 export {
   ROOT, DB_DIR, DB_PATH, CONFIG_PATH, NODE_BIN, MCP_SERVER, LEGACY_DB_PATH, PORT,
-  loadConfig, saveConfig, openDb, openLibDb, openDbByProject,
+  loadConfig, saveConfig, loadAllInstanceConfigs, saveConfigToDir, mergePreserveKeys,
+  openDb, openLibDb, openDbByProject,
   AGGREGATE_DIRS, libFiles, libFileByProject, currentInstanceLibs, findLib,
   resolveSourceFile, ensureLibSchema, safeFilePart, libFilePath, dbDirHasData,
   mcpCall, appendReflectHistory, readReflectHistory, historyEntry,

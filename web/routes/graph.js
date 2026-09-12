@@ -31,10 +31,133 @@ function instanceName() {
   return self ? self.name : 'local';
 }
 
+function isFedScope(scope) {
+  return scope === 'federation' || scope === 'all' || scope === 'fed';
+}
+function layoutGroupOf(n, fed) {
+  const proj = n.project || n.lib || '';
+  if (fed) {
+    if (proj === 'reflect') return '联邦';
+    return n.instance || '未知';
+  }
+  return proj || 'default';
+}
+function parseVec(buf) {
+  if (!buf) return null;
+  const raw = buf.buffer ? buf : Buffer.from(buf);
+  const f = new Float32Array(raw.buffer, raw.byteOffset, Math.floor(raw.byteLength / 4));
+  return f.length ? Array.from(f) : null;
+}
+function cosine(a, b) {
+  let dot = 0, ma = 0, mb = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) { dot += a[i] * b[i]; ma += a[i] * a[i]; mb += b[i] * b[i]; }
+  const d = Math.sqrt(ma) * Math.sqrt(mb);
+  return d ? dot / d : 0;
+}
+function centroid(vecs) {
+  const d = vecs[0].length;
+  const c = new Float64Array(d);
+  for (const v of vecs) for (let i = 0; i < d; i++) c[i] += v[i];
+  const n = vecs.length;
+  for (let i = 0; i < d; i++) c[i] /= n;
+  return Array.from(c);
+}
+function pcaCoords(vectors, dims = 2) {
+  const n = vectors.length;
+  const k = Math.max(1, Math.min(dims, 3));
+  if (!n) return [];
+  if (n === 1) return [Array.from({ length: k }, () => 0)];
+  if (n === 2) {
+    const row0 = Array.from({ length: k }, () => 0); row0[0] = -1;
+    const row1 = Array.from({ length: k }, () => 0); row1[0] = 1;
+    return [row0, row1];
+  }
+  const d = vectors[0].length;
+  const mean = new Float64Array(d);
+  for (let i = 0; i < n; i++) {
+    const v = vectors[i];
+    for (let t = 0; t < d; t++) mean[t] += v[t];
+  }
+  for (let t = 0; t < d; t++) mean[t] /= n;
+  const X = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const v = vectors[i], row = new Float64Array(d);
+    for (let t = 0; t < d; t++) row[t] = v[t] - mean[t];
+    X[i] = row;
+  }
+  const G = Array.from({ length: n }, () => new Float64Array(n));
+  for (let i = 0; i < n; i++) {
+    for (let j = i; j < n; j++) {
+      let s = 0;
+      const a = X[i], b = X[j];
+      for (let t = 0; t < d; t++) s += a[t] * b[t];
+      G[i][j] = G[j][i] = s;
+    }
+  }
+  function power(excludes) {
+    const list = excludes || [];
+    const u = new Float64Array(n);
+    for (let i = 0; i < n; i++) u[i] = Math.sin(i * 1.718 + 0.31);
+    function ortho(vec) {
+      for (const ex of list) {
+        let dot = 0;
+        for (let i = 0; i < n; i++) dot += vec[i] * ex[i];
+        for (let i = 0; i < n; i++) vec[i] -= dot * ex[i];
+      }
+    }
+    ortho(u);
+    let norm = 0;
+    for (let i = 0; i < n; i++) norm += u[i] * u[i];
+    norm = Math.sqrt(norm) || 1;
+    for (let i = 0; i < n; i++) u[i] /= norm;
+    for (let it = 0; it < 36; it++) {
+      const v = new Float64Array(n);
+      for (let i = 0; i < n; i++) {
+        let s = 0;
+        const row = G[i];
+        for (let j = 0; j < n; j++) s += row[j] * u[j];
+        v[i] = s;
+      }
+      ortho(v);
+      norm = 0;
+      for (let i = 0; i < n; i++) norm += v[i] * v[i];
+      norm = Math.sqrt(norm) || 1;
+      for (let i = 0; i < n; i++) u[i] = v[i] / norm;
+    }
+    let lam = 0;
+    for (let i = 0; i < n; i++) {
+      let s = 0;
+      for (let j = 0; j < n; j++) s += G[i][j] * u[j];
+      lam += u[i] * s;
+    }
+    return { u, lam };
+  }
+  const axes = [];
+  const used = [];
+  for (let a = 0; a < k; a++) {
+    const e = power(used);
+    used.push(e.u);
+    axes.push(e);
+  }
+  const scales = axes.map(e => Math.sqrt(Math.max(e.lam, 0)));
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const row = [];
+    for (let a = 0; a < k; a++) row.push(axes[a].u[i] * scales[a]);
+    out.push(row);
+  }
+  return out;
+}
+function pca2d(vectors) { return pcaCoords(vectors, 2); }
+
 router.get('/graph', (req, res) => {
-  const libs = libsForScope(graphScope(req));
+  const scope = graphScope(req);
+  const fed = isFedScope(scope);
+  const libs = libsForScope(scope);
   const nodes = [];
   const links = [];
+  const vecById = new Map();
   let totalMemories = 0;
   const categoryColors = {
     emotional: '#FF6B6B', milestone: '#FFA726', identity: '#66BB6A',
@@ -90,17 +213,23 @@ router.get('/graph', (req, res) => {
         }
       }
 
+      try {
+        const vecRows = db.prepare(`
+          SELECT m.id, v.embedding FROM memory m
+          JOIN vec_memory v ON m.rowid = v.rowid WHERE m.is_active = 1
+        `).all();
+        for (const r of vecRows) {
+          const vec = parseVec(r.embedding);
+          if (vec) vecById.set(`${lib.project}:${r.id}`, vec);
+        }
+      } catch (e) { console.error('vec load failed:', e.message); }
+
       // 库内相似度链接(该库 <=100 节点时)
       if (libNodes.length > 0 && libNodes.length <= 100) {
         try {
-          const vecRows = db.prepare(`
-            SELECT m.id, v.embedding FROM memory m
-            JOIN vec_memory v ON m.rowid = v.rowid WHERE m.is_active = 1
-          `).all();
-          const embeddings = vecRows.map(r => ({
-            id: `${lib.project}:${r.id}`,
-            vec: Array.from(new Float32Array(r.embedding.buffer, r.embedding.byteOffset, r.embedding.byteLength / 4)),
-          }));
+          const embeddings = libNodes
+            .map(n => ({ id: n.id, vec: vecById.get(n.id) }))
+            .filter(x => x.vec);
           const cosSim = (a, b) => {
             let dot = 0, ma = 0, mb = 0;
             for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; ma += a[i] * a[i]; mb += b[i] * b[i]; }
@@ -132,6 +261,69 @@ router.get('/graph', (req, res) => {
     finally { if (db) db.close(); }
   }
 
+  const byGroup = new Map();
+  for (const n of nodes) {
+    const g = layoutGroupOf(n, fed);
+    n.layoutGroup = g;
+    if (!byGroup.has(g)) byGroup.set(g, []);
+    byGroup.get(g).push(n);
+  }
+  for (const [, ns] of byGroup) {
+    const byFolder = new Map();
+    for (const n of ns) {
+      const f = n.memType || 'general';
+      if (!byFolder.has(f)) byFolder.set(f, []);
+      byFolder.get(f).push(n);
+    }
+    for (const [, fns] of byFolder) {
+      const pairs = fns.map(n => ({ n, vec: vecById.get(n.id) })).filter(p => p.vec);
+      if (pairs.length < 2) continue;
+      const coords = pca2d(pairs.map(p => p.vec));
+      pairs.forEach((p, i) => {
+        p.n.atlasX = coords[i][0];
+        p.n.atlasY = coords[i][1];
+      });
+    }
+  }
+  /* cosmograph 宇宙图:全库 embedding PCA(对应 point_x_by / point_y_by,仿真关闭)
+   * n×n Gram 矩阵,节点过多时抽样,失败不影响主图返回 */
+  try {
+    let uniPairs = nodes.map(n => ({ n, vec: vecById.get(n.id) })).filter(p => p.vec);
+    const UNI_CAP = 800;
+    if (uniPairs.length > UNI_CAP) {
+      uniPairs = uniPairs.filter((_, i) => i % Math.ceil(uniPairs.length / UNI_CAP) === 0).slice(0, UNI_CAP);
+    }
+    if (uniPairs.length >= 2) {
+      const uni = pcaCoords(uniPairs.map(p => p.vec), 3);
+      uniPairs.forEach((p, i) => {
+        p.n.universeX = uni[i][0];
+        p.n.universeY = uni[i][1];
+        p.n.universeZ = uni[i][2] || 0;
+      });
+    }
+  } catch (e) { console.error('universe PCA failed:', e.message); }
+  const gNames = [...byGroup.keys()];
+  const pairScores = [];
+  for (let i = 0; i < gNames.length; i++) {
+    for (let j = i + 1; j < gNames.length; j++) {
+      const va = byGroup.get(gNames[i]).map(n => vecById.get(n.id)).filter(Boolean);
+      const vb = byGroup.get(gNames[j]).map(n => vecById.get(n.id)).filter(Boolean);
+      if (!va.length || !vb.length) continue;
+      pairScores.push({ a: gNames[i], b: gNames[j], score: cosine(centroid(va), centroid(vb)) });
+    }
+  }
+  pairScores.sort((x, y) => y.score - x.score);
+  const parent = Object.fromEntries(gNames.map(g => [g, g]));
+  const find = (x) => (parent[x] === x ? x : (parent[x] = find(parent[x])));
+  const clusterBridges = [];
+  for (const p of pairScores) {
+    const a = find(p.a), b = find(p.b);
+    if (a === b) continue;
+    parent[a] = b;
+    clusterBridges.push(p);
+    if (clusterBridges.length >= Math.max(0, gNames.length - 1)) break;
+  }
+
   const stats = { totalNodes: nodes.length, totalLinks: links.length, byType: {}, byCategory: {}, byTier: {}, byMemType: {} };
   for (const n of nodes) {
     stats.byType[n.type] = (stats.byType[n.type] || 0) + 1;
@@ -139,7 +331,7 @@ router.get('/graph', (req, res) => {
     stats.byTier[n.tier] = (stats.byTier[n.tier] || 0) + 1;
     stats.byMemType[n.memType] = (stats.byMemType[n.memType] || 0) + 1;
   }
-  res.json({ nodes, links, stats });
+  res.json({ nodes, links, stats, clusterBridges });
 });
 
 // ═══ API: GET /api/stats ═══

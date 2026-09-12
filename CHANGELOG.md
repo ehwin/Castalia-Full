@@ -3,6 +3,20 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`D:\system\AIRI\memory`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.16.0] — 2026-09-11 cosmograph-org 宇宙图
+
+> 吸收 https://github.com/cosmograph-org/ 的宇宙图(embedding scatter + 细丝网),**不是** Obsidian 球面大陆。方案:`docs/吸收方案-Cosmograph.md`。
+
+### Added
+- **宇宙视图**:顶栏「星系 / 宇宙」。全库向量 PCA → `universeX/Y/Z`,点铺在嵌入平面上(对应 `point_x_by` / `point_y_by`,仿真关闭)
+- **度数定尺寸 + 动态标签预算**:`clamp(round(√N·2.8), 8, 15)` 常驻标签;`point_color_by`=memType
+- **宇宙网连线**:无焦点时画出全部细丝(`#2d3f5c` 风格);选中/悬停只留邻边
+- **斜上方相机**:从 XY 平面上看过去,贴近 cosmograph 的 2D 宇宙观察角
+
+### Changed
+- 撤回行星/大陆/辐条/大气层实现
+- **不换引擎**:cosmos.gl 仍是 2D GPU 力模拟;Castalia 用 3d-force-graph 承接宇宙语义
+
 ## [v1.14.0] — 2026-08-17 星图星系化大版本(布局重构 + 视觉升级 + 全项目审计)
 
 > 大版本修复:星图从"力导向乱图"重构为"三层固定星系布局",修复 3D 渲染崩溃(黑屏根因),完成六项目开源分析吸收,并对全项目做安全/一致性审计。技术报告:`docs/tech-report-v1.14.md`。
