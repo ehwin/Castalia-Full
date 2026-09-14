@@ -4,6 +4,13 @@ import { existsSync } from 'fs';
 import { createRequire } from 'module';
 import { DB_DIR, DB_PATH, LEGACY_DB_PATH, CONFIG_PATH, loadConfig, openLibDb, libFiles, currentInstanceLibs, dbDirHasData, AGGREGATE_DIRS } from './lib.js';
 
+/* 星座键:默认=文件夹(memType,通用版口径);实例设 GRAPH_CONSTELLATION=category 时按 category 分
+ * (anima 不用四个 memType 文件夹,它的分类轴是 category → AIRI 星域才不会只剩一个「通用」星座) */
+const CONS_KIND = (process.env.GRAPH_CONSTELLATION || 'memtype').toLowerCase();
+const consKeyOf = (n) => CONS_KIND === 'category'
+  ? String(n.category || 'general')
+  : String(n.memType || 'general');
+
 const router = Router();
 const NEBULA_CACHE = new Map();   /* P0:星云布局缓存(键=scope|节点数|最新时间戳;存坐标+边标记,命中时重放) */
 
@@ -321,7 +328,7 @@ function applyNebulaLayout(nodes, links, vecById) {
   const stretch = ext.map(e => Math.min(Math.max((0.6 * maxSpan) / e.span, 1), 3));
   const P = xyz.map(p => [0, 1, 2].map(a => (p[a] - ext[a].mid) * S * stretch[a]));
   /* 块 = 主文件夹/分文件夹 两层 */
-  const blobKey = (n) => `${n.layoutGroup || n.instance || n.lib || n.project || 'default'}/${n.memType || 'general'}`;
+  const blobKey = (n) => `${n.layoutGroup || n.instance || n.lib || n.project || 'default'}/${consKeyOf(n)}`;
   const groups = new Map();
   pairs.forEach((p, i) => {
     const k = blobKey(p.n);
@@ -1103,7 +1110,9 @@ const gNames = [...byGroup.keys()];
     console.error('nebula layout failed:', e.message);
     nebula = { ok: false, error: String(e.message || e) };
   }
-  res.json({ nodes, links, stats, clusterBridges, nebula });
+  res.json({
+    consKind: CONS_KIND,          // 星座口径:memtype(默认)/ category(实例开关)
+    nodes, links, stats, clusterBridges, nebula });
 });
 
 // ═══ API: GET /api/stats ═══
@@ -1135,6 +1144,7 @@ router.get('/status', (req, res) => {
     embedMode: cfg.embedding?.mode || 'ollama',
     reflectConfigured: !!(cfg.reflect?.api_key),
     instance: instanceName(),
+  consKind: CONS_KIND,
   });
 });
 
