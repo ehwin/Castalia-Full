@@ -1,0 +1,100 @@
+{
+ "generated": "2026-09-12 18:26",
+ "前端 index.md5": {
+  "Full 源(单一源)": "3bc366a8",
+  "run/Castalia(:3345 Hermes)": "3bc366a8",
+  "lobehub-run(:3346)": "3bc366a8",
+  "AIRI viz(:3344)": "3bc366a8"
+ },
+ "routes/graph.js.md5": {
+  "Full": "67c3646b",
+  "run": "67c3646b",
+  "lobehub": "67c3646b",
+  "AIRI": "67c3646b"
+ },
+ "引擎 dist.md5 矩阵": {
+  "Full 源码仓": {
+   "index.js": "cb3ac75f",
+   "search.js": "7be6b34e",
+   "store.js": "783340d6",
+   "triage.js": "38894c13",
+   "reflect.js": "83094ddc",
+   "buffer.js": "b4c9d8e9",
+   "digest.js": "e4d41c4b",
+   "autoProcessor.js": "717b9d35",
+   "configLoader.js": "4a58f8c2",
+   "reflectAll.js": "c9d8e745",
+   "federation.js": "992cbe78"
+  },
+  "Lite 源码仓": {
+   "index.js": "3543c901",
+   "search.js": "dabca60a",
+   "store.js": "4206aa49",
+   "triage.js": "8e6fe873",
+   "reflect.js": "40412aff",
+   "buffer.js": "b4c9d8e9",
+   "digest.js": "6a711c89",
+   "autoProcessor.js": "717b9d35",
+   "configLoader.js": "101fa777",
+   "reflectAll.js": "·",
+   "federation.js": "·"
+  },
+  "Anima 源码仓": {
+   "index.js": "da0d3269",
+   "search.js": "a80e3326",
+   "store.js": "970b68c5",
+   "triage.js": "2808d6b0",
+   "reflect.js": "4564d5f0",
+   "buffer.js": "b4c9d8e9",
+   "digest.js": "78e5402d",
+   "autoProcessor.js": "33849d7c",
+   "configLoader.js": "c8c3b5f2",
+   "reflectAll.js": "c9d8e745",
+   "federation.js": "992cbe78"
+  },
+  "run/Castalia": {
+   "index.js": "cb3ac75f",
+   "search.js": "7be6b34e",
+   "store.js": "783340d6",
+   "triage.js": "38894c13",
+   "reflect.js": "83094ddc",
+   "buffer.js": "b4c9d8e9",
+   "digest.js": "e4d41c4b",
+   "autoProcessor.js": "717b9d35",
+   "configLoader.js": "4a58f8c2",
+   "reflectAll.js": "c9d8e745",
+   "federation.js": "992cbe78"
+  },
+  "run/Anima": {
+   "index.js": "da0d3269",
+   "search.js": "a80e3326",
+   "store.js": "970b68c5",
+   "triage.js": "2808d6b0",
+   "reflect.js": "4564d5f0",
+   "buffer.js": "b4c9d8e9",
+   "digest.js": "78e5402d",
+   "autoProcessor.js": "33849d7c",
+   "configLoader.js": "c8c3b5f2",
+   "reflectAll.js": "c9d8e745",
+   "federation.js": "992cbe78"
+  },
+  "lobehub-run": {
+   "index.js": "cb3ac75f",
+   "search.js": "7be6b34e",
+   "store.js": "783340d6",
+   "triage.js": "38894c13",
+   "reflect.js": "83094ddc",
+   "buffer.js": "b4c9d8e9",
+   "digest.js": "e4d41c4b",
+   "autoProcessor.js": "717b9d35",
+   "configLoader.js": "4a58f8c2",
+   "reflectAll.js": "c9d8e745",
+   "federation.js": "992cbe78"
+  }
+ },
+ "src 是否新于 dist(需 rebuild)": {
+  "Full": "同步✓",
+  "Lite": "同步✓",
+  "Anima": "同步✓"
+ }
+}

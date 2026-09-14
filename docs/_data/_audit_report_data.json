@@ -1,0 +1,116 @@
+{
+ "('LobeHub盘', 'lobehub', 'feedback')": {
+  "n": 8,
+  "session_promoted": 8,
+  "airi_mentions": 0,
+  "long600": 0
+ },
+ "('LobeHub盘', 'lobehub', 'general')": {
+  "n": 17,
+  "session_promoted": 0,
+  "airi_mentions": 0,
+  "long600": 1
+ },
+ "('LobeHub盘', 'lobehub', 'project')": {
+  "n": 34,
+  "session_promoted": 32,
+  "airi_mentions": 8,
+  "long600": 0
+ },
+ "('LobeHub盘', 'lobehub', 'reference')": {
+  "n": 7,
+  "session_promoted": 7,
+  "airi_mentions": 0,
+  "long600": 0
+ },
+ "('LobeHub盘', 'lobehub', 'user')": {
+  "n": 56,
+  "session_promoted": 53,
+  "airi_mentions": 1,
+  "long600": 0
+ },
+ "('LobeHub盘', 'reflect', 'feedback')": {
+  "n": 1,
+  "session_promoted": 0,
+  "airi_mentions": 0,
+  "long600": 0
+ },
+ "('LobeHub盘', 'reflect', 'project')": {
+  "n": 3,
+  "session_promoted": 0,
+  "airi_mentions": 1,
+  "long600": 0
+ },
+ "('LobeHub盘', 'reflect', 'user')": {
+  "n": 7,
+  "session_promoted": 0,
+  "airi_mentions": 1,
+  "long600": 0
+ },
+ "('LobeHub盘', 'custom-project', 'feedback')": {
+  "n": 26,
+  "session_promoted": 23,
+  "airi_mentions": 0,
+  "long600": 0
+ },
+ "('LobeHub盘', 'custom-project', 'general')": {
+  "n": 75,
+  "session_promoted": 0,
+  "airi_mentions": 0,
+  "long600": 26
+ },
+ "('LobeHub盘', 'custom-project', 'project')": {
+  "n": 22,
+  "session_promoted": 21,
+  "airi_mentions": 0,
+  "long600": 0
+ },
+ "('LobeHub盘', 'custom-project', 'reference')": {
+  "n": 2,
+  "session_promoted": 1,
+  "airi_mentions": 0,
+  "long600": 0
+ },
+ "('LobeHub盘', 'custom-project', 'user')": {
+  "n": 83,
+  "session_promoted": 62,
+  "airi_mentions": 0,
+  "long600": 0
+ },
+ "('Hermes盘', 'hermes', 'general')": {
+  "n": 10,
+  "session_promoted": 0,
+  "airi_mentions": 0,
+  "long600": 2
+ },
+ "('Hermes盘', 'hermes', 'project')": {
+  "n": 1,
+  "session_promoted": 1,
+  "airi_mentions": 0,
+  "long600": 0
+ },
+ "('Hermes盘', 'hermes', 'user')": {
+  "n": 1,
+  "session_promoted": 1,
+  "airi_mentions": 0,
+  "long600": 0
+ },
+ "('AIRI盘', 'airi', 'general')": {
+  "n": 53,
+  "session_promoted": 0,
+  "airi_mentions": 3,
+  "long600": 1
+ },
+ "('AIRI盘', 'airi', 'project')": {
+  "n": 11,
+  "session_promoted": 0,
+  "airi_mentions": 1,
+  "long600": 0
+ },
+ "('AIRI盘', 'airi', 'user')": {
+  "n": 44,
+  "session_promoted": 1,
+  "airi_mentions": 2,
+  "long600": 0
+ }
+}

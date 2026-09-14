@@ -106,6 +106,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 .legend-item { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
 .legend-item.child { padding-left: 14px; font-size: .66rem; opacity: .92; }
 .legend-item.parent { margin-top: 7px; color: var(--t-primary); font-weight: 650; }
+.legend-item.sub { padding-left: 28px; font-size: .62rem; opacity: .86; }
 .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; box-shadow: 0 0 6px currentColor; }
 .legend-count { margin-left: auto; opacity: .6; }
 .legend-divider { border-top: 1px solid var(--border); margin: 8px 0; }
@@ -265,7 +266,7 @@ body.panel-open #stats-bar { opacity: 0; pointer-events: none; }
   <div class="legend-link">点星系看分类 · 点分类看记忆</div>
 </div>
 
-<div id="controls-hint">星云 · 纯嵌入空间 · 细网=真实关系边</div>
+<div id="controls-hint">星域→星座→星系 · 色系=星域 · 色阶=星座</div>
 
 <div id="side-panel">
   <div class="panel-header">
@@ -463,6 +464,8 @@ const MEM_TYPE_LABELS = {
   reference: '外部引用',
   general: '通用',
 };
+/* 配色口径(用户):L2 四个文件夹 = 不同色相;L3 库(同文件夹内)= 同色相深浅 */
+const MEM_TYPE_HUE = { user: 205, feedback: 26, project: 275, reference: 58, general: 158 };
 const TYPE_FALLBACK_COLORS = { episodic: '#f59e0b', semantic: '#8b5cf6', working: '#14b8a6' };
 const MEM_TYPE_ORDER = ['user', 'feedback', 'project', 'reference', 'general'];
 const MORPH_LABELS = {
@@ -510,7 +513,7 @@ const STRUCT_COLORS = {
 const STRUCT_LABELS = {
   Hermes: 'Hermes', LobeHub: 'LobeHub', AIRI: 'AIRI', 联邦: '联邦',
   hermes: 'Hermes', lobehub: '对话', airi: 'AIRI',
-  custom-project: '自定义领域', reflect: '反思', shared: '共享', default: '默认',
+  custom-project: '自定义领域', reflect: '反思产物', shared: '共享', default: '默认',
 };
 function structLabel(k) { return STRUCT_LABELS[k] || k; }
 function structKey(n) {
@@ -560,7 +563,7 @@ function linkStrength(l) {
 function isWarmLinkType(t) { return t === 'causes' || t === 'caused_by' || t === 'leads_to' || t === 'sequence'; }
 function linkTypeColor(l) { return LINK_TYPE_COLORS[l.type] || null; }
 function isSyntheticLink(l) {
-  return l.type === 'galaxy-bridge' || l.type === 'subgalaxy-spoke' || l.type === 'subgalaxy-bridge';
+  return l.type === 'galaxy-bridge' || l.type === 'subgalaxy-spoke' || l.type === 'subgalaxy-bridge' || l.type === 'nebula-spoke';
 }
 function linkSrcId(l) { return (l.source && typeof l.source === 'object') ? l.source.id : l.source; }
 function linkTgtId(l) { return (l.target && typeof l.target === 'object') ? l.target.id : l.target; }
@@ -572,6 +575,7 @@ let graphInstance = null;
 let allData = null;
 let currentView = 'nebula';
 let selectedNodeId = null;
+let selNeighbors = null;
 let panelNode = null;
 let autoTourActive = false;
 let autoTourTimer = null;
@@ -612,9 +616,40 @@ function makeLabelTexture(text, color) {
   return texture;
 }
 
+
+/* v1.17.3 色系:星域→大色相,星座→同色系色阶 */
+
+const CATEGORY_LABELS = {
+  conversation: '对话', knowledge: '知识', milestone: '里程碑', identity: '身份',
+  relationship: '关系', emotional: '情绪', mood_snapshot: '心境快照', preference: '偏好',
+  decision: '定案', mistake: '教训', session: '会话', session_promoted: '会话沉淀',
+  agent_mood: '心境', general: '通用', 'custom': 'custom', default: '默认',
+};
+function catLabel(c) { return CATEGORY_LABELS[c] || c; }
+const RG_HUE = { 'Hermes': 168, 'LobeHub': 212, 'AIRI': 335, '联邦': 44,
+  'hermes': 168, 'lobehub': 212, 'airi': 335, 'lobehub ': 212 };
+const RG_NAME = { 'Hermes': 'Hermes', 'LobeHub': 'LobeHub', 'AIRI': 'AIRI', '联邦': '总反思', 'federation': '联邦总图',
+  'hermes': 'Hermes', 'lobehub': 'LobeHub', 'airi': 'AIRI' };
+function regionHueOf(rg) { return RG_HUE[rg] != null ? RG_HUE[rg] : Math.floor(hash01(String(rg), 7) * 360); }
+function regionColorOf(rg) { return 'hsl(' + regionHueOf(rg) + ', 72%, 56%)'; }
+function consShadeOf(rg, cons, ci, total) {
+  const h = regionHueOf(rg);
+  const drift = (ci % 2 === 0 ? -1 : 1) * (4 + (ci % 3) * 3);
+  const t = total > 1 ? ci / (total - 1) : 0.4;
+  return 'hsl(' + ((h + drift + 360) % 360) + ', ' + Math.round(66 - 10 * t) + '%, ' + Math.round(50 + 30 * t) + '%)';
+}
+function LIB_COLOR_SAFE(lib) {
+  const fixed = { reflect: '#F5B942', shared: '#8A94A3', custom-project: '#E8A54B', hermes: '#3EE8C8', lobehub: '#5B8CFF', airi: '#A78BFA', default: '#6B7585' };
+  if (fixed[lib]) return fixed[lib];
+  let h = 2166136261;
+  const s = String(lib);
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  const palette = ['#5cd6c0', '#8fd7ff', '#c9a6ff', '#ffd08a', '#ffb0c4', '#a6e6a3', '#9aa8ff'];
+  return palette[(h >>> 0) % palette.length];
+}
 function memColor(node) {
-  if (node.group === 'galaxy-core') return node.__galaxyColor || '#fbbf24';
-  if (node.group === 'subgalaxy-core') return node.__galaxyColor || '#64748b';
+  if (node.group === 'galaxy-core' || node.group === 'nebula-inst-core') return node.__galaxyColor || '#fbbf24';
+  if (node.group === 'subgalaxy-core' || node.group === 'nebula-lib-core') return node.__galaxyColor || '#64748b';
   if (node.memType && MEM_TYPE_COLORS[node.memType]) return MEM_TYPE_COLORS[node.memType];
   if (node.type && TYPE_FALLBACK_COLORS[node.type]) return TYPE_FALLBACK_COLORS[node.type];
   return '#64748b';
@@ -683,13 +718,46 @@ function onSubGalaxyCoreClick(node) {
   showPanel(node);
 }
 
+/* 星云结构核心点击:v1.17.2 三层下钻 */
+function onNebulaStructClick(node) {
+  if (!node) return;
+  stopAutoTour();
+  const isInst = node.group === 'nebula-inst-core';
+  selectedNodeId = node.id;
+  if (isInst) {
+    /* 实例:过滤到该软件 */
+    instanceFilter = node.__struct;
+    typeFilter = null; projectFilter = null;
+  } else {
+    /* 文件夹:过滤到该库(instance+lib) */
+    instanceFilter = node.instance;
+    projectFilter = node.lib;
+    typeFilter = null;
+  }
+  recomputeDim();
+  updateNebulaState((allData.nodes || []).filter(n => !n.group));
+  flyTo(node, 900);
+  showPanel(node);
+}
+
 /* 语义簇色板(renderStar 聚类时使用,下标与 __clusterColorKey 对应) */
 const CLUSTER_COLORS_GLOBAL = ['#5cdbd3', '#ffa940', '#b37feb', '#69c0ff', '#ff85c0', '#95de64', '#ffd666', '#f759ab', '#40a9ff', '#a0d911'];
 
 function buildNode(node) {
   if (typeof THREE === 'undefined') return null; // CDN 失败时回退默认球体
-  if (node.group === 'galaxy-core') return buildGalaxyCore(node);
-  if (node.group === 'subgalaxy-core') return buildSubGalaxyCore(node);
+  if (node.group === 'galaxy-core') return buildCoreNode(node, 5.6, 5);
+  if (node.group === 'subgalaxy-core' || node.group === 'nebula-lib-core') {
+    const grp = buildCoreNode(node, node.__labelAlways ? 2.2 : 2.6, 3.4);
+    /* v1.17.5:星座名常驻——标签更大更靠上,以星团为锚 */
+    if (node.__labelAlways && node.__labelSprite) {
+      const nm = catLabel(node.lib || node.project || '');
+      const w = Math.max(18, Math.min(40, 12 + String(nm).length * 2.2));
+      node.__labelSprite.scale.set(w, 5, 1);
+      node.__labelSprite.position.set(0, -(node.size + 10), 0);
+      node.__importantLabel = true;
+    }
+    return grp;
+  }
   const size = node.size || 6;
   const color = memColor(node);
   const important = (node.importance || 0) >= 0.85;   // V3:重要记忆更强发光
@@ -767,14 +835,15 @@ function applyNodeVisual(node) {
   // 簇成员:基础光晕色 = 簇色(非 dim/导览/选中/悬停态时显示簇色扎堆)
   const baseGlowColor = node.__cluster ? (CLUSTER_COLORS_GLOBAL[node.__clusterColorKey || 0] || base) : base;
   const glowColor = isDim ? '#3c3c46' : (isTour ? '#fbbf24' : baseGlowColor);
+  const isNbr = !isSel && !isHover && !isDim && selNeighbors != null && selNeighbors.has(node.id);
   const baseGlow = node.__important ? 0.28 : 0.12;
-  const glowOpacity = isDim ? 0.03 : (isTour ? 0.88 : (isSel ? 0.78 : (isHover ? 0.58 : baseGlow)));
+  const glowOpacity = isDim ? 0.03 : (isTour ? 0.88 : (isSel ? 0.95 : (isHover ? 0.58 : (isNbr ? 0.30 : baseGlow))));
   node.__glowMat.color.set(glowColor);
   node.__glowMat.opacity = glowOpacity;
   if (node.__coreMat) node.__coreMat.color.set(isDim ? '#3c3c46' : (isTour ? '#fbbf24' : base));
-  // 标签:核心/高 degree 常驻;其余选中/悬停才显示(dim 时隐藏)
+  // 标签:结构核心/高 degree 常驻;其余选中/悬停才显示(dim 时隐藏)
   if (node.__labelSprite) {
-    const always = node.group === 'galaxy-core' || node.group === 'subgalaxy-core' || node.__importantLabel;
+    const always = node.group === 'galaxy-core' || node.group === 'subgalaxy-core' || node.__importantLabel || node.__labelAlways;
     node.__labelSprite.visible = always ? !isDim : (!isDim && (isSel || isHover));
   }
   if (node.__labelMat) node.__labelMat.opacity = isDim ? 0 : 0.95;
@@ -858,13 +927,17 @@ function cameraDist() {
 }
 function lodVisible(n) {
   if (n.group === 'galaxy-core' || n.group === 'subgalaxy-core') return true;
+  if (n.group === 'nebula-inst-core' || n.group === 'nebula-lib-core') return true;
   if (currentView === 'nebula') return n.__shown !== false;
   if (expandedKey && n.__clusterKey === expandedKey) return true;
   return n.__shown !== false;
 }
 function lodLinkVisible(l) {
   if (currentView === 'nebula') {
-    if (!hoverSet && !selectedNodeId) return true;
+    /* 星云视图:力导连线**默认全隐**(结构与干道由 addNebulaWeb 的管线层负责),
+     * 只有 hover/选中时才出"点对点"。原实现在无 hover 时 return true,
+     * 一旦 linkWidth 非 0 就会退化成满屏跨团直线。 */
+    if (!hoverSet && !selectedNodeId) return false;
     const s = linkSrcId(l), t = linkTgtId(l);
     if (selectedNodeId) return s === selectedNodeId || t === selectedNodeId;
     return hoverSet.has(s) && hoverSet.has(t);
@@ -1041,6 +1114,7 @@ function recomputeDim() {
     let dim = false;
     if (searchQuery && !matchesNode(n, searchQuery)) dim = true;
     if (hoverSet != null && !hoverSet.has(n.id) && n.group !== 'galaxy-core' && n.group !== 'subgalaxy-core') dim = true;
+    if (selNeighbors != null && selNeighbors.has(n.id)) dim = false; /* v1.18.8 邻居弱亮档 */
     if (typeFilter) {
       if (n.group === 'subgalaxy-core' && n.memType !== typeFilter) dim = true;
       if (!n.group && (n.memType || 'general') !== typeFilter) dim = true;
@@ -1166,9 +1240,13 @@ function onStarNodeClick(node) {
   if (!node) return;
   if (node.group === 'galaxy-core') return onGalaxyCoreClick(node);
   if (node.group === 'subgalaxy-core') return onSubGalaxyCoreClick(node);
+  if (node.group === 'nebula-inst-core' || node.group === 'nebula-lib-core') return onNebulaStructClick(node);
   stopAutoTour();
   selectedNodeId = node.id;
-  hoverSet = oneHopNeighbors(node.id);
+  /* v1.18.8 选中态三档亮度:主点 0.95 / 一跳邻居 0.30 弱亮 / 其余 dim——
+     修复"点一个点跳出一堆亮点"(原来邻居与主点同亮) */
+  hoverSet = null;
+  selNeighbors = oneHopNeighbors(node.id);
   refreshNodeVisuals();
   showPanel(node);
   if (graphInstance) {
@@ -1761,9 +1839,15 @@ function syncViewButtons() {
   if (uni) uni.classList.toggle('active', currentView === 'nebula');
   const hint = document.getElementById('controls-hint');
   if (hint) {
-    hint.textContent = currentView === 'nebula'
-      ? '星云 · 纯嵌入空间 · 细网=真实关系边'
-      : '星系 · 座内按文件夹分区 · 座间主桥';
+    if (currentView === 'nebula') {
+      const nb = (allData && allData.nebula) || null;
+      const badge = (nb && nb.ok)
+        ? ' · 布局:' + (nb.usedUmap ? 'UMAP3D' : 'PCA3D') + ' ' + ((nb.blobs || []).length) + '块 深度' + (nb.zRatio != null ? nb.zRatio : '?') + '%' + (nb.extents ? ' (' + nb.extents.join('/') + ')' : '')
+        : ' · 布局:未生效';
+      hint.textContent = '星域→文件夹→库 · 色相=文件夹 · 深浅=库' + badge;
+    } else {
+      hint.textContent = '星系 · 座内按文件夹分区 · 座间主桥';
+    }
   }
 }
 
@@ -1789,13 +1873,14 @@ function setView(mode) {
 
 /* ═══════════════════ 星云视图 (agent-skills-network 语义:纯嵌入坐标 + 点云辉光 + 雾深) ═══════════════════ */
 let nebulaPoints = null, nebulaGlow = null, nebulaWeb = null;
+let nebulaTrunk = null, nebulaIntra = null, nebulaSparse = null;
 function removeNebulaObjects() {
   if (!graphInstance) return;
   const scene = graphInstance.scene();
-  for (const obj of [nebulaPoints, nebulaGlow, nebulaWeb]) {
-    if (obj) { if (obj.parent) obj.parent.remove(obj); }
+  for (const obj of [nebulaPoints, nebulaGlow, nebulaWeb, nebulaTrunk, nebulaIntra, nebulaSparse]) {
+    if (obj && obj.parent) obj.parent.remove(obj);
   }
-  nebulaPoints = nebulaGlow = nebulaWeb = null;
+  nebulaPoints = nebulaGlow = nebulaWeb = nebulaTrunk = nebulaIntra = nebulaSparse = null;
 }
 function makeNebulaSpriteTexture(size = 128) {
   const c = document.createElement('canvas');
@@ -1849,37 +1934,144 @@ function renderNebula(data) {
   window.__galaxyMode = false;
   hoverSet = null; hoveredNodeId = null;
   removeNebulaObjects();
-  /* 星云 = 嵌入真值:纯 universeX/Y/Z,无任何二次布局(PCA 即地面真值) */
   const real = (data.nodes || []).filter(n => !n.group);
   const deg = computeDegrees(real, data.links || []);
   const labelBudget = Math.min(15, Math.max(8, Math.round(Math.sqrt(Math.max(real.length, 1)) * 2.8)));
   const ranked = real.slice().sort((a, b) => (deg[b.id] || 0) - (deg[a.id] || 0));
   const importantIds = new Set(ranked.slice(0, labelBudget).map(n => n.id));
   real.forEach(node => {
-    node.__struct = structKey(node);
     node.__shown = true;
     node.__degree = deg[node.id] || 0;
     node.__importantLabel = importantIds.has(node.id) || !!node.starred;
     node.starred = (node.importance || 0.5) >= 0.9;
     node.size = 1.15 + Math.sqrt(Math.min(node.__degree, 16)) * 0.95 + (node.importance || 0.5) * 0.9;
   });
-  layoutNebula(real, window.__nebulaSpace || 520);
-  const links = (data.links || []).filter(l => !isSyntheticLink(l) && l.type !== 'galaxy-bridge');
+  layoutNebula(real, window.__nebulaSpace || 620);
+  const links = (data.links || []).filter(l => !isSyntheticLink(l));
+
+/* v1.17.5:无星域大星;星座中星保留 + 常驻文字标签贴团,代表"这一团是谁" */
+  /* v1.18.11 四层:星域(instance)→星座(多库=主文件夹/库,单库=category)→星系(多库=memType 副文件夹)→恒星(记忆) */
+  const structNodes = [];
+  const byRegion = new Map();
+  const libSetByRg = new Map();
+  real.forEach(n => {
+    const rg = String(n.layoutGroup || n.instance || (n.lib || 'default'));
+    if (!libSetByRg.has(rg)) libSetByRg.set(rg, new Set());
+    libSetByRg.get(rg).add(String(n.lib || 'default'));
+  });
+  const isMultiRg = (rg) => (libSetByRg.get(rg)?.size || 0) > 1;
+  real.forEach(n => {
+    const rg = String(n.layoutGroup || n.instance || (n.lib || 'default'));
+    /* 方案③(用户 2026-09-13 定稿):L2 = **四个文件夹(memType)= 星座**;库(lib)退到星座**内部**做细分。
+     * 原实现星座=库(custom-project/对话),文件夹只当子行 → 多出一层,且"自定义领域/对话"看起来像两个平级星座。 */
+    const cons = String(n.memType || 'general');          /* 星座 = 四个文件夹(用户画像/反馈纠偏/项目上下文/外部引用/通用) */
+    const consLib = String(n.lib || 'default');           /* 细分 = 库(lobehub/custom-project/reflect…) */
+    n.__region = rg; n.__constellation = cons; n.__consLib = consLib;
+    n.__galaxy = consLib;
+    if (!byRegion.has(rg)) byRegion.set(rg, new Map());
+    const m = byRegion.get(rg);
+    m.set(cons, (m.get(cons) || 0) + 1);
+    if (!n.__struct) n.__struct = cons;
+  });
+  for (const rg of byRegion.keys()) {
+    const members = real.filter(n => n.__region === rg);
+    const consList = [...byRegion.get(rg).keys()].sort((a,b)=>(byRegion.get(rg).get(b)-byRegion.get(rg).get(a)));
+    const rgName = RG_NAME[rg] || structLabel(rg) || rg;
+    consList.forEach((cons, ci) => {
+      const cm = members.filter(n => n.__constellation === cons && n.__region === rg);
+      /* 配色口径:L2(文件夹)= 不同色相;L3(库)= 同色相的深浅 */
+      const libsHere = [...new Set(cm.map(n => String(n.__galaxy || 'default')))].sort();
+      const hue = (MEM_TYPE_HUE[cons] != null) ? MEM_TYPE_HUE[cons] : regionHueOf(rg);
+      cm.forEach(n => {
+        const k = Math.max(0, libsHere.indexOf(String(n.__galaxy || 'default')));
+        n.__nebulaTint = 'hsl(' + ((hue + k * 16) % 360) + ', ' + Math.round(74 - k * 9) + '%, ' + Math.round(50 + k * 13) + '%)';
+      });
+      const shade = cm[0] ? cm[0].__nebulaTint : regionColorOf(rg);
+      const cx = cm.reduce((a, n) => a + (n.x || 0), 0) / cm.length;
+      const cy = cm.reduce((a, n) => a + (n.y || 0), 0) / cm.length;
+      const cz = cm.reduce((a, n) => a + (n.z || 0), 0) / cm.length;
+      const consNode = {
+        id: 'nebcons:' + rg + '/' + cons, rawId: 'nebcons:' + rg + '/' + cons,
+        instance: rg, lib: cons, project: cons, __struct: rg + ' / ' + cons,
+        shortLabel: catLabel(cons),
+        label: catLabel(cons) + ' · ' + cm.length,
+        fullText: rgName + ' · ' + catLabel(cons) + ' 星座 · ' + cm.length + ' 星系',
+        group: 'nebula-lib-core', memType: 'general', category: 'constellation',
+        size: 5 + Math.log2(cm.length + 1) * 1.2, importance: 0.9,
+        __galaxyColor: shade,
+        x: cx, y: cy, z: cz, fx: cx, fy: cy, fz: cz,
+        __labelAlways: true,
+      };
+      structNodes.push(consNode);
+    });
+  }
+  /* v1.18.11 星系层锚(多库星域):副文件夹(memType)团锚 —— "这团是哪个副文件夹" 常驻标签 */
+  const galAnchorNodes = [];
+  {
+    const rgMap = new Map();
+    real.forEach(n => {
+      if (!n.__galaxy) return;
+      if (!rgMap.has(n.__region)) rgMap.set(n.__region, new Map());
+      const lm = rgMap.get(n.__region);
+      if (!lm.has(n.__consLib)) lm.set(n.__consLib, new Map());
+      const gm = lm.get(n.__consLib);
+      if (!gm.has(n.__galaxy)) gm.set(n.__galaxy, []);
+      gm.get(n.__galaxy).push(n);
+    });
+    for (const [rg, lm] of rgMap) {
+      for (const [lib, gm] of lm) {
+        for (const [gal, members] of gm) {
+          const cx = members.reduce((a, n) => a + (n.x || 0), 0) / members.length;
+          const cy = members.reduce((a, n) => a + (n.y || 0), 0) / members.length;
+          const cz = members.reduce((a, n) => a + (n.z || 0), 0) / members.length;
+          galAnchorNodes.push({
+            id: 'nebgal:' + rg + '/' + lib + '/' + gal,
+            rawId: 'nebgal:' + rg + '/' + lib + '/' + gal,
+            instance: rg, lib, project: lib, memType: gal,
+            __struct: lib, __region: rg, __constellation: lib, __consLib: lib, __galaxy: gal,
+            shortLabel: MEM_TYPE_LABELS[gal] || gal,
+            label: (MEM_TYPE_LABELS[gal] || gal) + ' · ' + members.length,
+            fullText: (STRUCT_LABELS[rg] || rg) + ' · ' + (STRUCT_LABELS[lib] || lib) + ' · ' + (MEM_TYPE_LABELS[gal] || gal) + ' 星系 · ' + members.length + ' 恒星',
+            group: 'nebula-gal-core', category: 'galaxy',
+            size: 2.6 + Math.log2(members.length + 1) * 0.9,
+            importance: 0.75,
+            __galaxyColor: MEM_TYPE_COLORS[gal] || '#64748b',
+            __labelAlways: true,
+            x: cx, y: cy, z: cz, fx: cx, fy: cy, fz: cz,
+          });
+        }
+      }
+    }
+  }
+  const allNodes = structNodes.concat(galAnchorNodes, real);
 
   graphInstance = (graphInstance || new ForceGraph3D(document.getElementById('graph')))
-    .graphData({ nodes: real, links: [] })          /* 引擎层不画线;点也交由 sprite 点云,节点本体仅作拾取代理 */
-    .nodeRelSize(3)
+    .graphData({ nodes: allNodes, links: [] })
+    .backgroundColor(document.fullscreenElement ? '#000000' : '#07090D')
     .nodeThreeObject(n => buildNode(n))
     .nodeThreeObjectExtend(false)
-    .nodeVal(n => 2 + (n.importance || 0.5) * 3)
-    .nodeColor(n => memColor(n))
+    .nodeRelSize(3)
+    .nodeVal(n => {
+      if (n.group === 'nebula-inst-core') return 24;
+      if (n.group === 'nebula-lib-core') return 12;
+      return 3 + (n.importance || 0.5) * 4;
+    })
+    .nodeColor(n => selectedNodeId === n.id ? '#ffffff' : (n.__nebulaTint || memColor(n)))
     .nodeOpacity(1)
-    .nodeLabel(n => (n.fullText || n.label || '').slice(0, 80))
+    .nodeLabel(n => {
+      if (n.group === 'nebula-inst-core' || n.group === 'nebula-lib-core') return n.label || '';
+      return (n.fullText || n.label || '').slice(0, 80);
+    })
     .enablePointerInteraction(true)
     .enableNodeDrag(false)
-    .linkColor(() => 'rgba(0,0,0,0)')
-    .linkWidth(0)
+    .linkColor(l => currentView === 'nebula'
+      ? (lodLinkVisible(l) ? 'rgba(196,210,238,0.55)' : 'rgba(0,0,0,0)')
+      : (l.type === 'nebula-spoke' ? 'rgba(200,210,240,0.4)' : 'rgba(0,0,0,0)'))
+    .linkWidth(l => currentView === 'nebula'
+      ? (lodLinkVisible(l) ? 0.8 : 0)
+      : (l.type === 'nebula-spoke' ? 0.9 : 0))
     .linkDirectionalParticles(0)
+    .linkOpacity(0.6)
     .showNavInfo(false)
     .onNodeClick(node => onStarNodeClick(node))
     .onNodeHover(node => {
@@ -1887,9 +2079,10 @@ function renderNebula(data) {
       onHoverNode(node);
       updateNebulaState(real);
     })
+    .onLinkClick(l => { if (l && graphInstance && typeof graphInstance.emitParticle === 'function') graphInstance.emitParticle(l); })
     .onBackgroundClick(() => {
       if (hoveredNodeId) {
-        const n = (allData.nodes || []).find(x => x.id === hoveredNodeId);
+        const n = allNodes.find(x => x.id === hoveredNodeId);
         if (n) { onStarNodeClick(n); return; }
       }
       selectedNodeId = null;
@@ -1897,8 +2090,11 @@ function renderNebula(data) {
       updateNebulaState(real);
     });
   addStarField();
+  /* 顺序要紧:addNebulaWeb() 内部第一行就 removeNebulaObjects()(清上一帧),
+   * 若放在 addNebulaClouds() 之后会**把刚建好的记忆点云/辉光删掉** → 症状"记忆点不出现"、
+   * 且 nebulaPoints 恒为 null 让 updateNebulaState() 早退(悬停/选中高亮也失效)。 */
+  addNebulaWeb(real, links, data.nebula);
   addNebulaClouds(real);
-  addNebulaWeb(real, links);
   startOrbit();
   bindInteraction();
   softenControls();
@@ -1908,15 +2104,15 @@ function renderNebula(data) {
     graphInstance.d3Force('link', null);
     if (typeof graphInstance.warmupTicks === 'function') graphInstance.warmupTicks(0);
     if (typeof graphInstance.cooldownTicks === 'function') graphInstance.cooldownTicks(0);
-    real.forEach(n => { if (n.fx != null) { n.x = n.fx; n.y = n.fy; n.z = n.fz; } });
+    allNodes.forEach(n => { if (n.fx != null) { n.x = n.fx; n.y = n.fy; n.z = n.fz; } });
     graphInstance.nodeVisibility(n => lodVisible(n));
   } catch (e) { console.error('nebula force:', e.message); }
   try {
     let maxR = 1;
-    real.forEach(n => { maxR = Math.max(maxR, Math.hypot(n.x || 0, n.y || 0, n.z || 0)); });
+    allNodes.forEach(n => { maxR = Math.max(maxR, Math.hypot(n.x || 0, n.y || 0, n.z || 0)); });
     window.__universeR = maxR;
     window.__layoutRadius = maxR;
-    graphInstance.cameraPosition({ x: maxR * 1.1, y: maxR * 0.72, z: maxR * 1.5 }, { x: 0, y: 0, z: 0 }, 0);
+    graphInstance.cameraPosition({ x: maxR * 1.05, y: maxR * 0.68, z: maxR * 1.42 }, { x: 0, y: 0, z: 0 }, 0);
     const ctrl = graphInstance.controls();
     if (ctrl) { ctrl.target.set(0, 0, 0); }
   } catch (e) {}
@@ -1925,34 +2121,37 @@ function renderNebula(data) {
   renderNebulaLegend(data, real);
   updateNebulaState(real);
 }
-/* 纯 PCA 布点(layoutUniverse 语义,留锚定/兜底,无弹簧) */
+
 function layoutNebula(nodes, SPACE) {
   SPACE = SPACE || 520;
-  const has = nodes.filter(n => Number.isFinite(n.universeX) && Number.isFinite(n.universeY));
+  const has = nodes.filter(n => Number.isFinite(n.nebulaX) && Number.isFinite(n.nebulaY));
   let minx=Infinity,maxx=-Infinity,miny=Infinity,maxy=-Infinity,minz=Infinity,maxz=-Infinity;
   has.forEach(n => {
-    minx=Math.min(minx,n.universeX);maxx=Math.max(maxx,n.universeX);
-    miny=Math.min(miny,n.universeY);maxy=Math.max(maxy,n.universeY);
-    const z = Number.isFinite(n.universeZ) ? n.universeZ : 0;
+    minx=Math.min(minx,n.nebulaX);maxx=Math.max(maxx,n.nebulaX);
+    miny=Math.min(miny,n.nebulaY);maxy=Math.max(maxy,n.nebulaY);
+    const z = Number.isFinite(n.nebulaZ) ? n.nebulaZ : 0;
     minz=Math.min(minz,z);maxz=Math.max(maxz,z);
   });
   const dx=Math.max(maxx-minx,1e-6),dy=Math.max(maxy-miny,1e-6),dz=Math.max(maxz-minz,1e-6);
   const span=Math.max(dx,dy,dz,1e-3);
-  const s=SPACE/span;
+  const s=Math.min(1, SPACE/span);
   has.forEach(n => {
-    n.x=(n.universeX-(minx+maxx)/2)*s;
-    n.y=(n.universeY-(miny+maxy)/2)*s;
-    n.z=((Number.isFinite(n.universeZ)?n.universeZ:0)-(minz+maxz)/2)*s;
+    n.x=(n.nebulaX-(minx+maxx)/2)*s;
+    n.y=(n.nebulaY-(miny+maxy)/2)*s;
+    n.z=((Number.isFinite(n.nebulaZ)?n.nebulaZ:0)-(minz+maxz)/2)*s;
     n.fx=n.x; n.fy=n.y; n.fz=n.z;
   });
+  /* 把这次用的平移/缩放存下来 —— 服务端给的门(gateA/gateB)是**原始星云坐标**,
+   * 管线必须走同一个变换,否则线会整体偏离一个值(用户:"线全部偏离了一个值")。 */
+  window.__nebulaXform = { cx: (minx + maxx) / 2, cy: (miny + maxy) / 2, cz: (minz + maxz) / 2, s };
   const missing = nodes.filter(n => !has.includes(n));
   missing.forEach(n => {
-    n.x=(hash01(n.id,1)-0.5)*SPACE*0.7;
-    n.y=(hash01(n.id,2)-0.5)*SPACE*0.7;
-    n.z=(hash01(n.id,3)-0.5)*SPACE*0.7;
+    n.x=(hash01(n.id,1)-0.5)*SPACE*0.8;
+    n.y=(hash01(n.id,2)-0.5)*SPACE*0.8;
+    n.z=(hash01(n.id,3)-0.5)*SPACE*0.8;
     n.fx=n.x;n.fy=n.y;n.fz=n.z;
   });
-  window.__universeR = SPACE/2;
+  window.__universeR = Math.max(span, SPACE/2)/2 * (1/s > 0 ? 2 : 1);
 }
 /* 点云本体 + 外晕(ShaderMaterial,agent-skills-network 双层辉光) */
 function addNebulaClouds(real) {
@@ -1961,7 +2160,10 @@ function addNebulaClouds(real) {
     const scene = graphInstance.scene();
     const N = real.length;
     if (!N) return;
-    const SPRITE = nebulaSprite();
+    /* 点精灵尺寸必须随场景尺度走:shader 是 gl_PointSize = aSize*mult/-mv.z,
+     * mult 写死 52 时,场景半径 ~430 + 相机距离 ~700 → 屏幕只有 ~0.2px(等于隐形),
+     * 这是"记忆点不出现"的第二层原因。mult 按实测半径推,视觉尺寸 ≈ aSize*mult/dist。 */
+    const sceneR = Math.max(1, real.reduce((m, n) => Math.max(m, Math.hypot(n.x || 0, n.y || 0, n.z || 0)), 1));
     const positions = new Float32Array(N*3);
     const colors = new Float32Array(N*3);
     const sizes = new Float32Array(N);
@@ -1979,12 +2181,20 @@ function addNebulaClouds(real) {
     geo.setAttribute('aSize', new THREE.BufferAttribute(sizes,1));
     geo.setAttribute('aAlpha', new THREE.BufferAttribute(alphas,1));
     const mkMat = (sizeMult, alphaScale) => new THREE.ShaderMaterial({
-      uniforms: { uMap: { value: SPRITE }, uPixelRatio: { value: window.graphInstance ? 1 : 1 } },
-      vertexShader: `attribute float aSize; attribute float aAlpha; varying vec3 vColor; varying float vAlpha; void main(){ vColor=color; vAlpha=aAlpha; vec4 mv=modelViewMatrix*vec4(position,1.0); gl_PointSize = aSize*${sizeMult}/-mv.z; gl_Position = projectionMatrix*mv; }`,
-      fragmentShader: `uniform sampler2D uMap; varying vec3 vColor; varying float vAlpha; void main(){ vec4 tex=texture2D(uMap,gl_PointCoord); if(tex.a<0.01) discard; vec3 c=vColor*(0.55+0.45*tex.a); gl_FragColor=vec4(c, tex.a*vAlpha*${alphaScale}); }`,
+      /* uScale 由场景半径推出(不写死):gl_PointSize = aSize*uScale/视深,
+       * 视觉尺寸 ≈ aSize*uScale/相机距离 —— 写死常量时换布局尺度就会变成亚像素隐形。 */
+      uniforms: { uScale: { value: sizeMult } },
+      vertexShader: `attribute float aSize; attribute float aAlpha; uniform float uScale; varying vec3 vColor; varying float vAlpha;
+        void main(){ vColor=color; vAlpha=aAlpha; vec4 mv=modelViewMatrix*vec4(position,1.0);
+        gl_PointSize=aSize*uScale/max(1.0,-mv.z); gl_Position=projectionMatrix*mv; }`,
+      /* 程序化径向衰减:不再依赖 sprite 贴图(sprite 一旦是空贴图,tex.a<0.01 会把整层 discard 掉,
+       * 症状就是"记忆点一个都不出现"且无任何报错)。 */
+      fragmentShader: `varying vec3 vColor; varying float vAlpha;
+        void main(){ float d=length(gl_PointCoord-vec2(0.5)); float a=smoothstep(0.5,0.04,d);
+        if(a<0.02) discard; gl_FragColor=vec4(vColor*(0.55+0.45*a), a*vAlpha*${alphaScale}); }`,
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, vertexColors: true,
     });
-    nebulaPoints = new THREE.Points(geo, mkMat('52.0', '0.40'));
+    nebulaPoints = new THREE.Points(geo, mkMat(String(sceneR * 4.0), '0.65'));
     scene.add(nebulaPoints);
     const glowGeo = new THREE.BufferGeometry();
     glowGeo.setAttribute('position', geo.attributes.position);
@@ -1993,52 +2203,283 @@ function addNebulaClouds(real) {
     glowGeo.setAttribute('aSize', new THREE.BufferAttribute(gSize,1));
     const gAlpha = new Float32Array(N); for (let i=0;i<N;i++) gAlpha[i]=1;
     glowGeo.setAttribute('aAlpha', new THREE.BufferAttribute(gAlpha,1));
-    nebulaGlow = new THREE.Points(glowGeo, mkMat('140.0', '0.05'));
+    nebulaGlow = new THREE.Points(glowGeo, mkMat(String(sceneR * 110), '0.07'));
     scene.add(nebulaGlow);
   } catch (e) { console.error('nebula clouds:', e.message); }
 }
-/* 真实语义边网(细淡 LineSegments;不再与引擎线叠加) */
-function addNebulaWeb(real, links) {
+/* v1.18.0 星系走线·高速公路模型(用户方案完整版)
+ * 结构: 记忆点 → 出港 gwA(团外缘) ──主干(共享亮管)── 入港 gwB → 记忆点
+ * 主干数: 两星座间按路由方向聚类 —— 夹角 < 25° 的并为一根(近夹角=无效操作),
+ *         只有 ≥25° 的大夹角才保留为独立管线;中轴簇(直穿)单独成中线
+ * 三级样式: 星团内短线(极淡 0.20) / 孤立长单线(近隐形 0.10) / 主干亮核(0.90,三重描边) */
+function addNebulaWeb(real, links, nebulaMeta) {
   if (!graphInstance || typeof THREE === 'undefined') return;
   try {
     const scene = graphInstance.scene();
+    removeNebulaObjects();
     const byId = new Map(real.map(n => [n.id, n]));
-    const pos = [];
-    const col = [];
-    (links||[]).forEach(l => {
+    /* v1.18.12 分团键对齐布局的"可见中间层":多库星域=副文件夹(memType),单库星域=category。
+     * 之前用 __constellation(=库) → LobeHub 上管道连的是两个巨库质心,与用户看到的团无关(AIRI 单库恰好一致故正常) */
+    const clKey = (n) => libKeyOf(n) + '/' + String(n.__galaxy || n.__constellation || n.lib || '?');
+    /* v1.18.12 库球几何(region+lib):跨库管道的星门要推到"本库球面",否则门埋在库内别的团里 */
+    const libs = new Map();
+    for (const n of real) {
+      const lk = String(n.__region || n.lib || '?') + '/' + String(n.__consLib || n.lib || '?');
+      if (!libs.has(lk)) libs.set(lk, { pts: [], c: null, R: 10 });
+      libs.get(lk).pts.push(n);
+    }
+    for (const [, rec] of libs) {
+      rec.c = [0, 1, 2].map(i => rec.pts.reduce((a, p) => a + (p[['x', 'y', 'z'][i]] || 0), 0) / rec.pts.length);
+      const dl = rec.pts.map(p => Math.hypot((p.x || 0) - rec.c[0], (p.y || 0) - rec.c[1], (p.z || 0) - rec.c[2])).sort((a, b) => a - b);
+      rec.R = Math.max(10, dl[Math.floor(dl.length * 0.9)] || 10);
+    }
+    const libKeyOf = (n) => String(n.__region || n.lib || '?') + '/' + String(n.__consLib || n.lib || '?');
+    /* 星座几何 */
+    const cons = new Map();
+    const regC = (name) => {
+      if (!cons.has(name)) cons.set(name, { pts: [], tint: null, n: 0, c: null, R: 10 });
+      return cons.get(name);
+    };
+    for (const n of real) {
+      const c = clKey(n);
+      const rec = regC(c);
+      rec.pts.push(n); rec.n++;
+      if (!rec.tint && n.__nebulaTint) rec.tint = n.__nebulaTint;
+    }
+    for (const [name, rec] of cons) {
+      rec.c = [0, 1, 2].map(i => rec.pts.reduce((a, p) => a + (p[['x','y','z'][i]] || 0), 0) / rec.n);
+      /* v1.18.7 星团半径改 p90:σ×2.2 对非正态点云(14 点带远置点)严重低估(p50=12.7 却给 R=9.5)
+       * → 星门钻进星团腹地被实点围住("一条管对应 4 个点")。R=p90 实测分布,直接决定门推进量 */
+      const dAll = rec.pts.map(p => Math.hypot((p.x || 0) - rec.c[0], (p.y || 0) - rec.c[1], (p.z || 0) - rec.c[2])).sort((a, b) => a - b);
+      const p90 = dAll[Math.floor(dAll.length * 0.9)] || dAll[dAll.length - 1] || 10;
+      rec.R = Math.max(10, p90);
+    }
+    const tintOf = (name) => { const t = cons.get(name)?.tint; return t ? new THREE.Color(t) : new THREE.Color('#8fb4d8'); };
+    /* 边分类 */
+    const intra = [];
+    const pairs = new Map();
+    for (const l of (links || [])) {
       const s = byId.get(linkSrcId(l)), t = byId.get(linkTgtId(l));
-      if (!s || !t) return;
-      pos.push((s.x||0),(s.y||0),(s.z||0),(t.x||0),(t.y||0),(t.z||0));
-      const sim = l.type === 'similarity';
-      const c = sim ? [0.30,0.66,0.86] : [0.55,0.88,1.0];
-      col.push(c[0],c[1],c[2],c[0],c[1],c[2]);
+      if (!s || !t) continue;
+      const cs = clKey(s);
+      const ct = clKey(t);
+      if (cs === ct) { intra.push({ s, t }); continue; }
+      const k = [cs, ct].sort().join('=>');
+      const [ca] = k.split('=>');
+      /* v1.18.1 方向归一: s/t 按 ca 侧对齐,否则 sBar 混团、喇叭从 B 直奔 A 出港 */
+      const sa = (cs === ca) ? s : t;
+      const ta = (cs === ca) ? t : s;
+      if (!pairs.has(k)) pairs.set(k, []);
+      pairs.get(k).push({ s: sa, t: ta, l });
+    }
+    const MIN_ANG = 25 * Math.PI / 180;
+    const MARGIN = 7;
+    const posI = [], colI = [];
+    const posS = [], colS = [];
+    const posF = [], colF = [];
+    const posT = [], colT = [];
+    const seg = (pos, col, a, b, c) => { pos.push(a[0], a[1], a[2], b[0], b[1], b[2]); col.push(c[0], c[1], c[2], c[0], c[1], c[2]); };
+    /* v1.18.9 双色段:节点端压暗到 f,门端全亮——匝道"渗出"而非硬穿星团 */
+    const seg2 = (pos, col, a, b, ca, cb, f) => {
+      pos.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+      col.push(ca[0] * f, ca[1] * f, ca[2] * f, cb[0], cb[1], cb[2]);
+    };
+    const v3 = (n) => [n.x || 0, n.y || 0, n.z || 0];
+    const mid3 = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+    const norm3 = (v) => { const d = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / d, v[1] / d, v[2] / d]; };
+    const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const perpU = (v, u) => { const d = dot3(v, u); return [v[0] - u[0] * d, v[1] - u[1] * d, v[2] - u[2] * d]; };
+    
+    /* 1) 星团内短线:极淡背景 */
+    for (const { s, t } of intra) seg(posI, colI, v3(s), v3(t), [0.12, 0.16, 0.22]);
+    let pipeTotal = 0;
+    const __pdbg = [];  /* 管道自检转储:window.__pipeDebug 供取证 */
+    /* ── v1.19 干道层(重写):团表面 → 团表面,一对一束,总数受控 ──────────────
+     * 旧实现叠了四层启发式(中轴簇 / 侧向簇按角度合并 / 侧偏编排 / 跨库推到库球面),
+     * 管子端点会被推到团外很远的位置 → 满屏横穿全场的长直线(用户口中的"星门很乱")。
+     * 现在只做一件事:两团之间画 1~3 根平行细管,端点落在两团表面,亮度按捆绑边数分级。
+     * 口径:座间只留 2~3 条干道;点对点关系在 hover/选中时才出现(lodLinkVisible + linkWidth)。 */
+    /* ── v1.22 干道:直接用服务端的门 gateA/gateB,客户端不再自己算团心/半径 ──────────
+     * 病根:客户端用 p90 当门半径、服务端 blobs.r 用最大半径(实测 p90/rmax = 0.69~0.87)
+     * → 81% 的管子端点落在本团真实范围之内,观感就是"从人堆里冒尖"。
+     * 现在端点 = 服务端用**分离后团心** + **沿 V 最靠外的实点(支撑点)** 算出的门,每对只画 1 条。
+     * 点对点关系不再常驻(节点→门那层细丝已删),交给 hover:lodLinkVisible + linkWidth。
+     * 为什么不能用记忆点当端点:节点被推到"朝所有对端的加权平均方向"(同时连 B、C 就落在 B、C 之间),
+     * 而线要连的是真实对端 → 几何上必然斜切(实测夹角中位 41°)。 */
+    /* ── v1.23 干道 = 服务端门 + 坐标系对齐 + 长线收集(公共走廊)──────────────────
+     * ①门来自服务端 metaEdges.gateA/gateB,是**原始星云坐标** → 必须套 layoutNebula 的
+     *   (v-mid)×s 变换,否则整片线偏离一个值(用户实测:"线全部偏离了一个值")。
+     * ②长线收集(B档,收紧到"真同路"):方向夹角 <8° **且** 中点垂直距离 <max(6, 0.05×中位管长) 才合并;
+     *   每根走 门A→投影点→(沿走廊)→投影点→门B;中段重合处加性混合自然变亮,成为一条干线。
+     * ③不用记忆点当端点(节点被推到的是"朝所有对端的平均方向",几何上必然斜切)。 */
+    const X = window.__nebulaXform || { cx: 0, cy: 0, cz: 0, s: 1 };
+    const metas = (nebulaMeta && nebulaMeta.metaEdges) || [];
+    const toScene = (g) => [(g[0] - X.cx) * X.s, (g[1] - X.cy) * X.s, (g[2] - X.cz) * X.s];
+    const tintByBlob = new Map();
+    for (const n of real) if (n.blobId && !tintByBlob.has(n.blobId)) tintByBlob.set(n.blobId, n.__nebulaTint || null);
+    const tintOfBlob = (bk) => { const t = tintByBlob.get(bk); return t ? new THREE.Color(t) : new THREE.Color('#9fb4d8'); };
+    const dv = (p, q) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+    const P3 = (metas || []).filter(m => m.gateA && m.gateB).map(m => {
+      const a = toScene(m.gateA), b = toScene(m.gateB);
+      const v = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+      const L = Math.hypot(v[0], v[1], v[2]) || 1e-6;
+      return { m, a, b, u: [v[0] / L, v[1] / L, v[2] / L], L,
+               mid: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2] };
     });
-    if (pos.length < 6) return;
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
-    geo.setAttribute('color', new THREE.Float32BufferAttribute(col,3));
-    const mat = new THREE.LineBasicMaterial({ vertexColors:true, transparent:true, opacity:0.30, blending: THREE.AdditiveBlending, depthWrite: false });
-    if (nebulaWeb && nebulaWeb.parent) nebulaWeb.parent.remove(nebulaWeb);
-    nebulaWeb = new THREE.LineSegments(geo, mat);
-    scene.add(nebulaWeb);
-    const fog = scene.fog || new THREE.FogExp2(0x07090D, 0.00042);
-    if (!scene.fog) scene.fog = fog;
+    const maxN = Math.max(1, ...P3.map(x => x.m.count || 1));
+    const colOf = (x) => {
+      const w = 0.25 + 0.75 * Math.min(1, (x.m.count || 1) / Math.min(8, maxN));
+      const c = tintOfBlob(x.m.a).lerp(tintOfBlob(x.m.b), 0.5).lerp(new THREE.Color('#ffffff'), 0.55);
+      return [c.r * w, c.g * w, c.b * w];
+    };
+    const medL = P3.length ? P3.map(x => x.L).sort((q, r) => q - r)[Math.floor(P3.length / 2)] : 100;
+    const perpThr = Math.max(6, medL * 0.05);
+    const groups = [];
+    const taken = new Set();
+    for (let q = 0; q < P3.length; q++) {
+      if (taken.has(q)) continue;
+      const grp = [q]; taken.add(q);
+      for (let r2 = q + 1; r2 < P3.length; r2++) {
+        if (taken.has(r2)) continue;
+        const par = Math.abs(dv(P3[q].u, P3[r2].u));
+        if (Math.acos(Math.min(1, par)) * 180 / Math.PI > 8) continue;
+        const w = [P3[r2].mid[0] - P3[q].mid[0], P3[r2].mid[1] - P3[q].mid[1], P3[r2].mid[2] - P3[q].mid[2]];
+        const t = dv(w, P3[q].u);
+        const perp = Math.hypot(w[0] - P3[q].u[0] * t, w[1] - P3[q].u[1] * t, w[2] - P3[q].u[2] * t);
+        if (perp > perpThr) continue;
+        grp.push(r2); taken.add(r2);
+      }
+      groups.push(grp);
+    }
+    for (const grp of groups) {
+      const col = colOf(P3[grp[0]]);
+      if (grp.length === 1) {
+        const x = P3[grp[0]];
+        seg(posT, colT, x.a, x.b, col);
+        pipeTotal++;
+      } else {
+        let um = [0, 0, 0];
+        const cen0 = [0, 0, 0];
+        let nP = 0;
+        for (const q2 of grp) {
+          const sgn = dv(P3[q2].u, P3[grp[0]].u) < 0 ? -1 : 1;
+          um[0] += P3[q2].u[0] * sgn; um[1] += P3[q2].u[1] * sgn; um[2] += P3[q2].u[2] * sgn;
+          for (const pt of [P3[q2].a, P3[q2].b]) { cen0[0] += pt[0]; cen0[1] += pt[1]; cen0[2] += pt[2]; nP++; }
+        }
+        const ul = Math.hypot(um[0], um[1], um[2]) || 1;
+        um = [um[0] / ul, um[1] / ul, um[2] / ul];
+        cen0[0] /= nP; cen0[1] /= nP; cen0[2] /= nP;
+        /* 走廊区间 = 所有成员端点投影的极值;投影必须夹在这段里
+         * (不夹的话,有些管子的投影会落到走廊起点之外 → 路径先前行再回头 = 锐角折角) */
+        let tMin = Infinity, tMax = -Infinity;
+        for (const q2 of grp) for (const pt of [P3[q2].a, P3[q2].b]) {
+          const t = dv([pt[0] - cen0[0], pt[1] - cen0[1], pt[2] - cen0[2]], um);
+          if (t < tMin) tMin = t; if (t > tMax) tMax = t;
+        }
+        if (tMax - tMin < 1) { tMax = tMin + 1; }
+        const proj = (pt) => {
+          let t = dv([pt[0] - cen0[0], pt[1] - cen0[1], pt[2] - cen0[2]], um);
+          t = Math.max(tMin, Math.min(tMax, t));
+          return [cen0[0] + um[0] * t, cen0[1] + um[1] * t, cen0[2] + um[2] * t];
+        };
+        /* 完全无折角:整条路径不是"三段折线+圆角",而是一条**向心 Catmull-Rom 样条**
+         * (过 门A → 走廊投影点 → 对方投影点 → 门B),α=0.5 的参数化避免过冲/尖点,
+         * 采样后处处连续可导 → 任何角度看都没有拐点。 */
+        const catmull = (pts, col) => {
+          const Q = [pts[0], ...pts, pts[pts.length - 1]];      /* 端点复制 → 自然收尾 */
+          const SEG = 14;
+          const ALPHA = 0.5;
+          const dist = (a, b) => Math.pow(Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]), ALPHA) || 1e-4;
+          const lp = (a, b, u) => [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u];
+          let prev = pts[0];
+          for (let i = 1; i + 2 < Q.length; i++) {
+            const p0 = Q[i - 1], p1 = Q[i], p2 = Q[i + 1], p3 = Q[i + 2];
+            const t0 = 0, t1 = t0 + dist(p0, p1), t2 = t1 + dist(p1, p2), t3 = t2 + dist(p2, p3);
+            for (let k3 = 1; k3 <= SEG; k3++) {
+              const t = t1 + (t2 - t1) * (k3 / SEG);
+              const A1 = lp(p0, p1, (t - t0) / (t1 - t0));
+              const A2 = lp(p1, p2, (t - t1) / (t2 - t1));
+              const A3 = lp(p2, p3, (t - t2) / (t3 - t2));
+              const B1 = lp(A1, A2, (t - t0) / (t2 - t0));
+              const B2 = lp(A2, A3, (t - t1) / (t3 - t1));
+              const C = lp(B1, B2, (t - t1) / (t2 - t1));
+              seg(posT, colT, prev, C, col);
+              prev = C;
+            }
+          }
+          seg(posT, colT, prev, pts[pts.length - 1], col);
+        };
+        let sumL = 0;
+        for (const q2 of grp) {
+          const x = P3[q2]; const c2 = colOf(x);
+          catmull([x.a, proj(x.a), proj(x.b), x.b], c2);
+          pipeTotal += 3; sumL += x.L;
+        }
+        __pdbg.push({ kind: 'bundle', n: grp.length, pairs: grp.map(q2 => P3[q2].m.a + '=>' + P3[q2].m.b), avgLen: Math.round(sumL / grp.length) });
+      }
+      __pdbg.push({ kind: 'pipe', pair: P3[grp[0]].m.a + '=>' + P3[grp[0]].m.b, n: P3[grp[0]].m.count, dist: P3[grp[0]].m.dist });
+    }
+    /* 建对象(四个 LineSegments = 三级样式 + 喇叭层) */
+    const mk = (pos, col, opacity) => {
+      if (pos.length < 6) return null;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      return new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false }));
+    };
+    nebulaIntra = mk(posI, colI, 0.20);  if (nebulaIntra) scene.add(nebulaIntra);
+    nebulaSparse = mk(posS, colS, 0.10); if (nebulaSparse) scene.add(nebulaSparse);
+    nebulaWeb = mk(posF, colF, 0.38);    if (nebulaWeb) scene.add(nebulaWeb);
+    nebulaTrunk = mk(posT, colT, 0.90);  if (nebulaTrunk) scene.add(nebulaTrunk);
+    if (!scene.fog) scene.fog = new THREE.FogExp2(0x07090D, 0.00042);
+    window.__pipeCount = pipeTotal;
+    window.__pipeDebug = __pdbg;
+    window.__nebulaDbg = { cons: [...cons.entries()].map(([k, v]) => ({ k, n: v.n, R: +v.R.toFixed(1), c: v.c.map(x => +x.toFixed(1)) })), pairCount: pairs.size };
   } catch (e) { console.error('nebula web:', e.message); }
 }
+
 function renderNebulaLegend(data, real) {
-  const items = [];
-  MEM_TYPE_ORDER.forEach(mt => {
-    const c = (real||[]).filter(n => (n.memType||'general')===mt).length;
-    if (!c) return;
-    items.push({ color: MEM_TYPE_COLORS[mt], label: MEM_TYPE_LABELS[mt]||mt, count: c, cls: 'parent', filter: { kind:'type', id: mt } });
+  const byRegion = new Map();
+  (real || []).forEach(n => {
+    const rg = String(n.__region || (IS_FED ? (n.layoutGroup || n.instance || 'default') : String(n.lib || 'default')));
+    const cons = String(n.__constellation || n.lib || 'default');
+    if (!byRegion.has(rg)) byRegion.set(rg, new Map());
+    const m = byRegion.get(rg);
+    m.set(cons, (m.get(cons) || 0) + 1);
   });
+  const items = [];
+  const rgs = [...byRegion.keys()].sort((a, b) => {
+    const w = (x) => (x === '联邦' ? 1 : 0);
+    return w(a) - w(b) || a.localeCompare(b);
+  });
+  for (const rg of rgs) {
+    const total = [...byRegion.get(rg).values()].reduce((a, b) => a + b, 0);
+    items.push({ color: regionColorOf(rg), label: (RG_NAME[rg] || structLabel(rg) || rg) + ' 星域', count: total, cls: 'parent', filter: { kind: IS_FED ? 'instance' : 'project', id: IS_FED ? rg : rg } });
+    const consList = [...byRegion.get(rg).keys()].sort();
+    consList.forEach(cons => {
+      const cm = (real || []).filter(n => n.__region === rg && String(n.__constellation || n.lib) === cons);
+      const rep = cm.find(n => n.__nebulaTint);
+      /* 方案③:星座 = 四个文件夹(memType);子行 = 库(lobehub/custom-project/reflect…)
+       * —— 用户原话"你明明可以把 custom-project 放到项目文件夹或者通用文件夹里面区分"。 */
+      const consName = MEM_TYPE_LABELS[cons] || cons;
+      items.push({ color: (rep && rep.__nebulaTint) || '#8A94A3',
+        label: consName + ' 星座',
+        count: cm.length, cls: 'child', filter: { kind: 'project', id: cons } });
+      const subs = new Map();
+      cm.forEach(n => { const g = String(n.__galaxy || n.lib || 'default'); if (!subs.has(g)) subs.set(g, { n: 0, tint: n.__nebulaTint }); subs.get(g).n++; });
+      [...subs.entries()].sort((a, b) => b[1].n - a[1].n).forEach(([g, rec]) => {
+        items.push({ color: rec.tint || '#8A94A3', label: '└ ' + structLabel(g), count: rec.n, cls: 'sub' });
+      });
+    });
+  }
   const titleEl = document.getElementById('legend-struct-title');
-  if (titleEl) titleEl.textContent = '星云 · 嵌入空间';
+  if (titleEl) titleEl.textContent = '星云 · 星域 / 星座 / 星系';
   fillLegendList(document.getElementById('legend-struct'), items);
   const linkEl = document.querySelector('#legend .legend-link');
-  if (linkEl) linkEl.textContent = '点密度=语义,细网=真实关系边';
+  if (linkEl) linkEl.textContent = '色相=文件夹 · 深浅=库 · 点核心下钻';
 }
-/* ═══════════════════ 初始加载 ═══════════════════ */
 function __init() {
 fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE) + '&layout=folder-wedges')
   .then(r => r.json())
@@ -2189,7 +2630,7 @@ window.panelGoBack = panelGoBack;
 
 function showPanel(node) {
   panelNode = node;
-  const color = memColor(node);
+  const color = node.__nebulaTint || node.__galaxyColor || memColor(node);
   const starred = !!(node.starred);
   const isStruct = node.group === 'galaxy-core' || node.group === 'subgalaxy-core';
   const panel = sidePanel;
@@ -2203,15 +2644,22 @@ function showPanel(node) {
   document.getElementById('panel-star-btn').style.display = isStruct ? 'none' : '';
   document.getElementById('panel-del-btn').style.display = isStruct ? 'none' : '';
 
-  if (node.group === 'galaxy-core') {
+  if (node.group === 'galaxy-core' || node.group === 'nebula-inst-core') {
     const p = node.__struct || node.project || node.lib || '';
-    const nMem = (allData.nodes || []).filter(n => !n.group && structKey(n) === p).length;
-    document.getElementById('panel-badge').textContent = (structLabel(p) + ' · ' + (MORPH_LABELS[node.__morph] || '星系')).toUpperCase();
+    const nMem = (allData.nodes || []).filter(n => !n.group &&
+      (node.group === 'nebula-inst-core' ? (n.instance || n.layoutGroup) === p : structKey(n) === p)).length;
+    document.getElementById('panel-badge').textContent = (structLabel(p) + ' · ' + (node.group === 'nebula-inst-core' ? '星域' : (MORPH_LABELS[node.__morph] || '星系'))).toUpperCase();
     document.getElementById('panel-text').textContent = nMem + ' 条记忆';
-  } else if (node.group === 'subgalaxy-core') {
-    const mt = node.memType || 'general';
-    document.getElementById('panel-badge').textContent = (MEM_TYPE_LABELS[mt] || mt).toUpperCase();
-    document.getElementById('panel-text').textContent = (node.__struct || '') + ' · ' + ((allData.nodes || []).filter(n => n.__clusterKey === node.__clusterKey || (structKey(n) === node.__struct && (n.memType || 'general') === mt && !n.group)).length) + ' 条记忆';
+  } else if (node.group === 'subgalaxy-core' || node.group === 'nebula-lib-core') {
+    if (node.group === 'nebula-lib-core') {
+      const lm = (allData.nodes || []).filter(n => !n.group && (n.instance || n.layoutGroup || n.lib) === node.instance && (n.lib || 'default') === node.lib);
+      document.getElementById('panel-badge').textContent = (structLabel(node.lib) || node.lib).toUpperCase();
+      document.getElementById('panel-text').textContent = (RG_NAME[node.instance] || node.instance || '') + ' 星域 / ' + (structLabel(node.lib) || node.lib) + ' 星座 · ' + lm.length + ' 星系';
+    } else {
+      const mt = node.memType || 'general';
+      document.getElementById('panel-badge').textContent = (MEM_TYPE_LABELS[mt] || mt).toUpperCase();
+      document.getElementById('panel-text').textContent = (node.__struct || '') + ' · ' + ((allData.nodes || []).filter(n => n.__clusterKey === node.__clusterKey || (structKey(n) === node.__struct && (n.memType || 'general') === mt && !n.group)).length) + ' 条记忆';
+    }
   } else {
     document.getElementById('panel-badge').textContent = `${(node.memType || node.type || 'general').toUpperCase()} · ${(node.type || '').toUpperCase()}`;
     document.getElementById('panel-text').textContent = node.fullText || node.text || '';
@@ -2360,6 +2808,7 @@ function closePanel() {
   sidePanel.classList.remove('open');
   document.body.classList.remove('panel-open');
   selectedNodeId = null;
+  selNeighbors = null;
   panelNode = null;
   panelStack = [];
   refreshNodeVisuals();
@@ -2701,10 +3150,6 @@ function refreshGraph() {
     }
   }).catch(() => {});
 }
-</script>
-</body>
-</html>
-
 </script>
 </body>
 </html>

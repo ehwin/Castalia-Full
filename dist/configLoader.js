@@ -126,6 +126,7 @@ try {
             process.env.BUFFER_TOKENS = String(tri.bufferTokens);
         if (tri.sessionTtlDays != null)
             process.env.SESSION_MEMORY_TTL_DAYS = String(tri.sessionTtlDays);
+        // v1.10: 记忆整合配置(可选,给 admin 界面留路;没有则用 env/默认值)
         const cons = cfg.consolidate || {};
         if (cons.minMemories != null)
             process.env.CONSOLIDATE_MIN_MEMORIES = String(cons.minMemories);

@@ -1,0 +1,7 @@
+{
+ "name": "umap-js-vendored",
+ "version": "1.4.0",
+ "type": "commonjs",
+ "private": true,
+ "note": "vendored from npm umap-js@1.4.0 (offline)"
+}

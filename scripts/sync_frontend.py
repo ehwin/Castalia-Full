@@ -31,7 +31,7 @@ SRC_ROOT = os.path.normpath(os.path.join(HERE, '..', 'web'))
 # 三端活体目录(viz 根)。保持与 castalia_tray.py 的 viz 定义一致。
 TARGETS = {
     'run/Castalia (Hermes :3345)':    os.path.normpath(os.path.join(HERE, '..', '..', 'run', 'Castalia', 'viz')),
-    'lobehub-run (LobeHub :3346)':    os.path.normpath(HERE.rsplit(os.sep, 3)[0] and os.path.join('D:', os.sep, 'AI', 'lobehub-run', 'viz')),
+    'run/LobeHub (LobeHub :3346)':    os.path.normpath(os.path.join(HERE, '..', '..', 'run', 'LobeHub', 'viz')),
     'AIRI viz (:3344)':              os.path.normpath(os.path.join('D:', os.sep, 'system', 'AIRI', 'viz')),
 }
 
