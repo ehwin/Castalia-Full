@@ -134,6 +134,11 @@ try {
             process.env.CONSOLIDATE_SIMILARITY = String(cons.similarity);
         if (cons.autoOnStart != null)
             process.env.CONSOLIDATE_AUTO_ON_START = (cons.autoOnStart === false || cons.autoOnStart === 0 || cons.autoOnStart === '0') ? '0' : '1';
+        // 衰减范围(哪些分类库参与衰减/升华):默认只 general,四个语义分类库永不衰减
+        if (cons.decayMemTypes != null) {
+            const dm = cons.decayMemTypes;
+            process.env.CONSOLIDATE_DECAY_MEMTYPES = Array.isArray(dm) ? dm.join(',') : String(dm);
+        }
         console.error(`[config] loaded ${CONFIG_PATH} (embed=${emb.mode || 'ollama'}, reflect=${ref.model || 'unset'}, facts=${process.env.REFLECT_FACT_EXTRACTION || 'auto'}, consolidate=${process.env.CONSOLIDATE_MIN_MEMORIES || '15'}/${process.env.CONSOLIDATE_SIMILARITY || '0.88'}, triage=${tri.model || 'unset'}, buffer=${process.env.BUFFER_SIZE || '5'}, sessionTtl=${process.env.SESSION_MEMORY_TTL_DAYS || '7'}d)`);
     }
 }
