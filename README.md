@@ -13,6 +13,8 @@ Designed after studying Claude Code's memory architecture (closed memory types, 
 
 ---
 
+以上参数也可写进 `memory/config.json` 的 `consolidate` 段(与 `minMemories`/`similarity` 同处),例如 `"decayMidpointDays": 180`、`"decayMemTypes": ["general"]`。
+
 ## Quick Start
 
 ### 1. Build + verify
@@ -198,6 +200,14 @@ Memories are **strictly layered** — nothing falls into an unclassified pile, e
 | `BUFFER_SIZE` | `5` | **v1.11** Session memory buffer threshold (turns per incremental reflection) |
 | `SESSION_MEMORY_TTL_DAYS` | `7` | **v1.11** Orphan session-memory TTL (swept at startup) |
 | `CONSOLIDATE_MIN_MEMORIES` | `15` | **v1.10** Auto-consolidation threshold at startup |
+| `CONSOLIDATE_DECAY_MEMTYPES` | `general` | 哪些分类库参与衰减+升华(逗号列表或 `all`);user/feedback/project/reference 默认永不衰减 |
+| `CONSOLIDATE_DECAY_STEEPNESS` | `0.04` | sigmoid 衰减陡度(越大衰减越快) |
+| `CONSOLIDATE_DECAY_MIDPOINT_DAYS` | `90` | sigmoid 中点(天),调大 = 衰减更慢 |
+| `CONSOLIDATE_DECAY_MIN_IMPORTANCE` | `0.15` | 衰减后低于此重要度才允许剪枝 |
+| `CONSOLIDATE_DECAY_MIN_AGE_DAYS` | `60` | 年龄不足此天数的记忆绝不剪枝 |
+| `CONSOLIDATE_PROMOTE_REF_COUNT` | `2` | 引用次数超过它触发升华 |
+| `CONSOLIDATE_PROMOTE_BOOST` | `0.1` | 每次升华的重要性增量 |
+| `CONSOLIDATE_PROMOTE_CAP` | `0.95` | 升华后的重要性上限 |
 | `CONSOLIDATE_SIMILARITY` | `0.88` | **v1.10** Vector similarity threshold for merge candidates |
 | `MCP_TOOLS` | `agent` | Tool visibility: `agent` / `harness` / `admin` / `all` / comma list |
 

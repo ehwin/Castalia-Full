@@ -139,6 +139,21 @@ try {
             const dm = cons.decayMemTypes;
             process.env.CONSOLIDATE_DECAY_MEMTYPES = Array.isArray(dm) ? dm.join(',') : String(dm);
         }
+        // 衰减/升华参数(可自定义;详见 consolidate.ts 顶部默认值)
+        const DECAY_MAP = {
+            decaySteepness: 'CONSOLIDATE_DECAY_STEEPNESS',
+            decayMidpointDays: 'CONSOLIDATE_DECAY_MIDPOINT_DAYS',
+            decayMinImportance: 'CONSOLIDATE_DECAY_MIN_IMPORTANCE',
+            decayMinAgeDays: 'CONSOLIDATE_DECAY_MIN_AGE_DAYS',
+            promoteRefCount: 'CONSOLIDATE_PROMOTE_REF_COUNT',
+            promoteBoost: 'CONSOLIDATE_PROMOTE_BOOST',
+            promoteCap: 'CONSOLIDATE_PROMOTE_CAP',
+        };
+        for (const [k, envName] of Object.entries(DECAY_MAP)) {
+            const v = cons[k];
+            if (v != null)
+                process.env[envName] = String(v);
+        }
         console.error(`[config] loaded ${CONFIG_PATH} (embed=${emb.mode || 'ollama'}, reflect=${ref.model || 'unset'}, facts=${process.env.REFLECT_FACT_EXTRACTION || 'auto'}, consolidate=${process.env.CONSOLIDATE_MIN_MEMORIES || '15'}/${process.env.CONSOLIDATE_SIMILARITY || '0.88'}, triage=${tri.model || 'unset'}, buffer=${process.env.BUFFER_SIZE || '5'}, sessionTtl=${process.env.SESSION_MEMORY_TTL_DAYS || '7'}d)`);
     }
 }
