@@ -50,17 +50,14 @@ const limit = Number(arg('--limit', '0')) || 0;
 const dryRun = process.argv.includes('--dry-run');
 const types = arg('--types', 'user,feedback,project,reference,general').split(',').map(s => s.trim()).filter(Boolean);
 const hint = arg('--hint', '');
-const profile = arg('--profile', 'standard'); // standard=通用四类 | anima=情感版口径
 
 /* Anima(情感版)的 memType 语义与通用版**不同**(v1.18 定制):project=情感分区、user=AI 对用户的画像。
  * 用通用四类去分情感库会整体错位,所以按 profile 换口径块。 */
-const TYPE_BLOCK = profile === 'anima'
-  ? `- user — AI 对用户的画像:AI 对用户的情感 + 关于用户本人的特征(偏好/习惯/性格/技术栈/行为模式/人物关系)
-- feedback — 行为纠正:用户对 agent 行为的纠正或肯定
-- project — **情感分区**:所有情感记忆(情绪/情感经历/情绪快照/里程碑/关系)
-- reference — 外部指针:URL/ID/文档链接
-- general — 其他(知识/事实/事件/无法归类)`
-  : `- user — 用户画像:关于用户**本人是什么样的人**(偏好/习惯/性格/技术栈/行为模式/人物关系/他的命盘八字等个人资料)
+/* 口径:与引擎的 memType.ts / 分拣提示词一致(两版定义相同)。
+ * 注意:曾错误地引入过"anima=情感分区"的 profile(2026-09-14 已删) ——
+ * 那是误解,导致 AIRI 库的人设/情感记忆被倒进 project(项目上下文)。
+ * 需要偏向某种归类时用 --hint 传提示,不要再改口径块。 */
+  const TYPE_BLOCK = `- user — 用户画像:关于用户**本人是什么样的人**(偏好/习惯/性格/技术栈/行为模式/人物关系/他的命盘八字等个人资料)
 - feedback — 行为纠正:用户对 agent 行为的纠正或肯定
 - project — 项目上下文:某个项目/任务的约定、截止时间、环境、领域工作内容
 - reference — 外部指针:URL/ID/文档链接/古籍出处
@@ -115,7 +112,7 @@ for (const mt of types) {
   }
   console.log(`  ${mt}: 活跃 ${beforeTotal[mt]} 条(纳入分类 ${got.length - skippedCritical - skippedDup},critical 保护 ${skippedCritical},双活跃跳过 ${skippedDup})`);
 }
-console.log(`\n目标 ${key} · 待分类 ${rows.length} 条 · 批大小 20 · profile=${profile} · ${dryRun ? 'DRY-RUN' : '实跑'}\n`);
+console.log(`\n目标 ${key} · 待分类 ${rows.length} 条 · 批大小 20 · ${dryRun ? 'DRY-RUN' : '实跑'}\n`);
 
 const channel = makeLlmChannel('triage');
 const batchSize = 20;
