@@ -265,7 +265,7 @@ body.panel-open #stats-bar { opacity: 0; pointer-events: none; }
   <div class="legend-link">点星系看分类 · 点分类看记忆</div>
 </div>
 
-<div id="controls-hint">星域→星座→星系 · 色系=星域 · 色阶=星座</div>
+<div id="controls-hint">星域→星座→星系 · 色系=星域 · 色阶=星座 · 点=星座色</div>
 
 <div id="side-panel">
   <div class="panel-header">
@@ -1851,7 +1851,7 @@ function syncViewButtons() {
       const badge = (nb && nb.ok)
         ? ' · 布局:' + (nb.usedUmap ? 'UMAP3D' : 'PCA3D') + ' ' + ((nb.blobs || []).length) + '块 深度' + (nb.zRatio != null ? nb.zRatio : '?') + '%' + (nb.extents ? ' (' + nb.extents.join('/') + ')' : '')
         : ' · 布局:未生效';
-      hint.textContent = '星域→文件夹→库 · 色相=文件夹 · 深浅=库' + badge;
+      hint.textContent = '星域→星座→库 · 色系=星域 · 色阶=星座 · 点=星座色' + badge;
     } else {
       hint.textContent = '星系 · 座内按文件夹分区 · 座间主桥';
     }
@@ -1988,13 +1988,11 @@ function renderNebula(data) {
     const rgName = RG_NAME[rg] || structLabel(rg) || rg;
     consList.forEach((cons, ci) => {
       const cm = members.filter(n => n.__constellation === cons && n.__region === rg);
-      /* 配色口径:L2(文件夹)= 不同色相;L3(库)= 同色相的深浅 */
+      /* 配色口径(用户 2026-09-14 定):**星域=一个色系**(色相)→ **星座=该色系内不同色阶** →
+       * **点=所属星座的颜色**(同星座内统一,不再按库分深浅;库的区分保留在图例子行与星系视图) */
       const libsHere = [...new Set(cm.map(n => String(n.__galaxy || 'default')))].sort();
-      const hue = (MEM_TYPE_HUE[cons] != null) ? MEM_TYPE_HUE[cons] : regionHueOf(rg);
-      cm.forEach(n => {
-        const k = Math.max(0, libsHere.indexOf(String(n.__galaxy || 'default')));
-        n.__nebulaTint = 'hsl(' + ((hue + k * 16) % 360) + ', ' + Math.round(74 - k * 9) + '%, ' + Math.round(50 + k * 13) + '%)';
-      });
+      const tint = consShadeOf(rg, cons, ci, consList.length);
+      cm.forEach(n => { n.__nebulaTint = tint; });
       const shade = cm[0] ? cm[0].__nebulaTint : regionColorOf(rg);
       const cx = cm.reduce((a, n) => a + (n.x || 0), 0) / cm.length;
       const cy = cm.reduce((a, n) => a + (n.y || 0), 0) / cm.length;
@@ -2487,7 +2485,7 @@ function renderNebulaLegend(data, real) {
   if (titleEl) titleEl.textContent = '星云 · 星域 / 星座 / 星系';
   fillLegendList(document.getElementById('legend-struct'), items);
   const linkEl = document.querySelector('#legend .legend-link');
-  if (linkEl) linkEl.textContent = '色相=文件夹 · 深浅=库 · 点核心下钻';
+  if (linkEl) linkEl.textContent = '色系=星域 · 色阶=星座 · 点=星座色 · 点核心下钻';
 }
 function __init() {
 fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE) + '&layout=folder-wedges')
