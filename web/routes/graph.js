@@ -7,9 +7,15 @@ import { DB_DIR, DB_PATH, LEGACY_DB_PATH, CONFIG_PATH, loadConfig, openLibDb, li
 /* 星座键:默认=文件夹(memType,通用版口径);实例设 GRAPH_CONSTELLATION=category 时按 category 分
  * (anima 不用四个 memType 文件夹,它的分类轴是 category → AIRI 星域才不会只剩一个「通用」星座) */
 const CONS_KIND = (process.env.GRAPH_CONSTELLATION || 'memtype').toLowerCase();
-const consKeyOf = (n) => CONS_KIND === 'category'
-  ? String(n.category || 'general')
-  : String(n.memType || 'general');
+/* 按实例分类星座的名单:联邦视图由一个进程渲染多个星域,不同星域口径可能不同(如 AIRI 用 category)
+ * 用法:GRAPH_CATEGORY_INSTANCES=airi  → 该实例的节点按 category 分星座,其余实例照旧按文件夹 */
+const CATEGORY_INSTANCES = (process.env.GRAPH_CATEGORY_INSTANCES || '')
+  .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+const consKeyOf = (n) => {
+  const inst = String(n.layoutGroup || n.instance || n.lib || n.project || '').toLowerCase();
+  const byCat = CONS_KIND === 'category' || CATEGORY_INSTANCES.includes(inst);
+  return byCat ? String(n.category || 'general') : String(n.memType || 'general');
+};
 
 const router = Router();
 const NEBULA_CACHE = new Map();   /* P0:星云布局缓存(键=scope|节点数|最新时间戳;存坐标+边标记,命中时重放) */

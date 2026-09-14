@@ -468,8 +468,8 @@ const MEM_TYPE_LABELS = {
    全部挂 window,避免跨 <script> 的作用域/TDZ 问题;复用已有的 CATEGORY_LABELS。 */
 window.CONS_KIND = 'memtype';
 window.consLabel = function (k) {
-  var m = (window.CONS_KIND === 'category') ? CATEGORY_LABELS : MEM_TYPE_LABELS;
-  return m[k] || k;
+  /* 联邦里各星域口径可能不同(有的按文件夹、有的按 category),两套表都试,键名不冲突 */
+  return CATEGORY_LABELS[k] || MEM_TYPE_LABELS[k] || k;
 };;
 /* 配色口径(用户):L2 四个文件夹 = 不同色相;L3 库(同文件夹内)= 同色相深浅 */
 const MEM_TYPE_HUE = { user: 205, feedback: 26, project: 275, reference: 58, general: 158 };
@@ -1971,7 +1971,9 @@ function renderNebula(data) {
     const rg = String(n.layoutGroup || n.instance || (n.lib || 'default'));
     /* 方案③(用户 2026-09-13 定稿):L2 = **四个文件夹(memType)= 星座**;库(lib)退到星座**内部**做细分。
      * 原实现星座=库(custom-project/对话),文件夹只当子行 → 多出一层,且"自定义领域/对话"看起来像两个平级星座。 */
-    const cons = String(window.CONS_KIND === 'category' ? (n.category || 'general') : (n.memType || 'general'));  /* 星座=文件夹(默认)/category(实例开关) */
+    /* 星座键:服务端已按实例口径算进 blobId(星域/星座),优先用它;没有则退回本页口径 */
+  const cons = String(n.blobId ? String(n.blobId).split('/').slice(1).join('/') || 'general'
+                               : (window.CONS_KIND === 'category' ? (n.category || 'general') : (n.memType || 'general')));
     const consLib = String(n.lib || 'default');           /* 细分 = 库(lobehub/custom-project/reflect…) */
     n.__region = rg; n.__constellation = cons; n.__consLib = consLib;
     n.__galaxy = consLib;
