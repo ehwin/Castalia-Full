@@ -202,7 +202,6 @@ body.panel-open #stats-bar { opacity: 0; pointer-events: none; }
 </style>
 </head>
 <body>
-
 <div id="loading">Castalia 正在展开星图</div>
 <div id="graph"></div>
 <div id="vignette"></div>
@@ -464,22 +463,14 @@ const MEM_TYPE_LABELS = {
   reference: '外部引用',
   general: '通用',
 }
-
-/* category 口径(anima 用):实例设 GRAPH_CONSTELLATION=category 时,星座按 category 分 */
-CATEGORY_LABELS = {
-  identity: '人设/身份',
-  milestone: '里程碑',
-  relationship: '关系',
-  emotional: '情感',
-  knowledge: '知识',
-  preference: '偏好',
-  conversation: '对话',
-  plan: '计划',
-  agent_mood: '心情',
-  general: '通用',
-}
-let CONS_KIND = 'memtype';
-function consLabel(k) { return (CONS_KIND === 'category' ? CATEGORY_LABELS[k] : MEM_TYPE_LABELS[k]) || k; };
+/* 星座口径:memtype(默认,= 四个文件夹) / category(实例设 GRAPH_CONSTELLATION=category 时,
+   服务端会在响应里带 consKind → AIRI 这种"不用四个文件夹"的实例按 category 分星座)。
+   全部挂 window,避免跨 <script> 的作用域/TDZ 问题;复用已有的 CATEGORY_LABELS。 */
+window.CONS_KIND = 'memtype';
+window.consLabel = function (k) {
+  var m = (window.CONS_KIND === 'category') ? CATEGORY_LABELS : MEM_TYPE_LABELS;
+  return m[k] || k;
+};;
 /* 配色口径(用户):L2 四个文件夹 = 不同色相;L3 库(同文件夹内)= 同色相深浅 */
 const MEM_TYPE_HUE = { user: 205, feedback: 26, project: 275, reference: 58, general: 158 };
 const TYPE_FALLBACK_COLORS = { episodic: '#f59e0b', semantic: '#8b5cf6', working: '#14b8a6' };
@@ -1305,7 +1296,6 @@ function renderStar(data) {
   });
 
   data.nodes.forEach(n => {
-      if (data.consKind) CONS_KIND = String(data.consKind).toLowerCase();
     n.size = 2.2 + (n.importance || 0.5) * 2.4;
     n.starred = (n.importance || 0.5) >= 0.9;
   });
@@ -1512,9 +1502,9 @@ function renderStar(data) {
       instance: IS_FED ? cl.p : '',
       __struct: cl.p,
       __clusterKey: key,
-      shortLabel: consLabel(cl.mt),
-      label: consLabel(cl.mt) + ' · ' + cl.nodes.length,
-      fullText: `${cl.p} · ${consLabel(cl.mt)} · ${cl.nodes.length} 条`,
+      shortLabel: MEM_TYPE_LABELS[cl.mt] || cl.mt,
+      label: (MEM_TYPE_LABELS[cl.mt] || cl.mt) + ' · ' + cl.nodes.length,
+      fullText: `${cl.p} · ${MEM_TYPE_LABELS[cl.mt] || cl.mt} · ${cl.nodes.length} 条`,
       group: 'subgalaxy-core',
       memType: cl.mt,
       category: 'subgalaxy',
@@ -1837,7 +1827,7 @@ function renderStarLegend(data) {
       if (!c) return;
       items.push({
         color: MEM_TYPE_COLORS[mt],
-        label: consLabel(mt),
+        label: MEM_TYPE_LABELS[mt] || mt,
         count: c,
         cls: 'child',
         filter: { kind: 'nested', struct: k, type: mt },
@@ -1981,7 +1971,7 @@ function renderNebula(data) {
     const rg = String(n.layoutGroup || n.instance || (n.lib || 'default'));
     /* 方案③(用户 2026-09-13 定稿):L2 = **四个文件夹(memType)= 星座**;库(lib)退到星座**内部**做细分。
      * 原实现星座=库(custom-project/对话),文件夹只当子行 → 多出一层,且"自定义领域/对话"看起来像两个平级星座。 */
-    const cons = String((CONS_KIND === 'category' ? (n.category || 'general') : (n.memType || 'general')));  /* 星座 = 文件夹(默认)/ category(实例开关) */
+    const cons = String(window.CONS_KIND === 'category' ? (n.category || 'general') : (n.memType || 'general'));  /* 星座=文件夹(默认)/category(实例开关) */
     const consLib = String(n.lib || 'default');           /* 细分 = 库(lobehub/custom-project/reflect…) */
     n.__region = rg; n.__constellation = cons; n.__consLib = consLib;
     n.__galaxy = consLib;
@@ -2480,7 +2470,7 @@ function renderNebulaLegend(data, real) {
       const rep = cm.find(n => n.__nebulaTint);
       /* 方案③:星座 = 四个文件夹(memType);子行 = 库(lobehub/custom-project/reflect…)
        * —— 用户原话"你明明可以把 custom-project 放到项目文件夹或者通用文件夹里面区分"。 */
-      const consName = consLabel(cons);
+      const consName = window.consLabel(cons);
       items.push({ color: (rep && rep.__nebulaTint) || '#8A94A3',
         label: consName + ' 星座',
         count: cm.length, cls: 'child', filter: { kind: 'project', id: cons } });
@@ -2501,6 +2491,7 @@ function __init() {
 fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE) + '&layout=folder-wedges')
   .then(r => r.json())
   .then(data => {
+      if (data.consKind) window.CONS_KIND = String(data.consKind).toLowerCase();
     if (data.error || !data.nodes) throw new Error(data.error || '无法读取记忆库');
     allData = data;
     updateStats(data.nodes.length, data.stats.totalLinks);
@@ -2674,7 +2665,7 @@ function showPanel(node) {
       document.getElementById('panel-text').textContent = (RG_NAME[node.instance] || node.instance || '') + ' 星域 / ' + (structLabel(node.lib) || node.lib) + ' 星座 · ' + lm.length + ' 星系';
     } else {
       const mt = node.memType || 'general';
-      document.getElementById('panel-badge').textContent = consLabel(mt).toUpperCase();
+      document.getElementById('panel-badge').textContent = (MEM_TYPE_LABELS[mt] || mt).toUpperCase();
       document.getElementById('panel-text').textContent = (node.__struct || '') + ' · ' + ((allData.nodes || []).filter(n => n.__clusterKey === node.__clusterKey || (structKey(n) === node.__struct && (n.memType || 'general') === mt && !n.group)).length) + ' 条记忆';
     }
   } else {
