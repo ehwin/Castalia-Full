@@ -1,11 +1,15 @@
 @echo off
 chcp 65001 >nul
-title AI-Memory Embed Server
+title Castalia Embed Server
 rem --- 清除 PYTHONPATH 污染（Hermes 注入的 venv 路径会让 Python310 加载错误二进制） ---
 set PYTHONPATH=
+rem --- Python:优先 PYTHON 环境变量,其次 PATH 里的 python ---
+if not defined PYTHON set PYTHON=python
+for /f "delims=" %%i in ('where %PYTHON% 2^>nul') do if not defined PYEXE set PYEXE=%%i
+if not defined PYEXE set PYEXE=python
 
 echo ========================================
-echo   AI Memory — Embed Server (Yuan-EB 2.0-zh)
+echo   Castalia — Embed Server (Ollama-compatible, 1024-dim)
 echo ========================================
 echo.
 
@@ -16,7 +20,7 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":11436" ^| findstr "LISTENIN
 timeout /t 1 /nobreak >nul
 
 rem --- 启动嵌入服务(无窗口,日志落 embed-server.log) ---
-start "YuanEmbed" "C:/Users/contributor/AppData/Local/Programs/Python/Python310/pythonw.exe" "%~dp0yuan_embed_server.py" 11436
+start "CastaliaEmbed" "%PYEXE%" "%~dp0yuan_embed_server.py" 11436
 
 echo  嵌入服务启动中,首次加载模型约 30-60 秒...
 timeout /t 5 /nobreak >nul
@@ -24,10 +28,10 @@ timeout /t 5 /nobreak >nul
 curl -s http://127.0.0.1:11436/health || echo  服务未就绪,查看 embed-server.log
 echo.
 echo  就绪后,在你的 MCP 客户端里配置:
-echo    node "/path/to/castalia\Castalia-Full\dist\index.js"
+echo    node "<this repo>\dist\index.js"
 echo    env: OLLAMA_URL=http://127.0.0.1:11436
 echo         EMBEDDING_MODEL=yuan-embedding-2.0-zh
-echo         MEMORY_DB_PATH=/path/to/castalia\Castalia-Full\memory.sqlite
+echo         MEMORY_DB_DIR=<this repo>\memory
 echo         CHAR_ID=你的角色ID(可选,默认 airi)
 echo.
 echo  完整示例见 mcp-config.example.json

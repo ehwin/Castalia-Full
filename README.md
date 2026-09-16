@@ -15,6 +15,8 @@ Designed after studying Claude Code's memory architecture (closed memory types, 
 
 以上参数也可写进 `memory/config.json` 的 `consolidate` 段(与 `minMemories`/`similarity` 同处),例如 `"decayMidpointDays": 180`、`"decayMemTypes": ["general"]`。
 
+> 📦 **New here? Read [INSTALL.md](INSTALL.md)** — full setup steps, including the npm 12 native-module pitfall that makes the engine fail to start.
+
 ## Quick Start
 
 ### 1. Build + verify
