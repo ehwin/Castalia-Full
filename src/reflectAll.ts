@@ -15,7 +15,7 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import fs from 'node:fs';
 import path from 'node:path';
-import { resolveFedLibraries, FedLibrary } from './federation.js';
+import { resolveFedLibraries, type FedLibrary } from './federation/index.js';
 import { currentMemDir, DatabaseManager, generateId, initProjectSchema, memTypeDir } from './db.js';
 import { makeLlmChannel, callLlm } from './reflectDriver.js';
 import { normalizeMemType, MemType } from './memType.js';
