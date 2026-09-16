@@ -128,7 +128,7 @@ register('memory_search', 'agent', 'Search past memories using tag-first then ve
     category: z.string().optional().describe('Filter by category'),
     memType: z.enum(MEM_TYPES).optional().describe('Filter by usage dimension: user/feedback/project/reference/general'),
     project: z.string().optional().describe('Project namespace (default: CASTALIA_PROJECT env or "default")'),
-    projects: z.array(z.string()).optional().describe('Cross-library search: search several libraries in one call (e.g. ["default","custom-project"]). "*" or ["all"] = every library of this instance. Omit for single-library search. Each result carries its source library in "project".'),
+    projects: z.array(z.string()).optional().describe('Cross-library search: search several libraries in one call (e.g. ["default","shared"]). "*" or ["all"] = every library of this instance. Omit for single-library search. Each result carries its source library in "project".'),
 }, async (args) => {
     try {
         const base = { query: args.query, topK: args.topK ?? 5, category: args.category, memType: args.memType, characterId: CHAR_ID };

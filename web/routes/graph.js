@@ -721,7 +721,7 @@ router.get('/graph', (req, res) => {
         }
       } catch (e) { console.error('vec load failed:', e.message); }
 
-      // 库内相似度链接(v1.18.11:上限 100→400,custom-project 173 等大库不再整库断链)
+      // 库内相似度链接(v1.18.11:上限 100→400,大库不再整库断链)
       if (libNodes.length > 0 && libNodes.length <= 400) {
         try {
           const embeddings = libNodes
