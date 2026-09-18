@@ -7,6 +7,14 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <link rel="icon" type="image/png" href="/favicon.png">
 <style>
+/* 深色滚动条(Chromium/WebView2 默认是白的,在深色界面里很突兀) */
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#333a44;border-radius:6px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:#454e5b;background-clip:content-box}
+::-webkit-scrollbar-corner{background:transparent}
+*{scrollbar-width:thin;scrollbar-color:#333a44 transparent}
+
 :root {
   --bg: #07090D;
   --elev: #0B0E14;
@@ -199,6 +207,10 @@ body.panel-open #stats-bar { opacity: 0; pointer-events: none; }
 .cfg-chip { font-size: .72rem; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--t-secondary); }
 .cfg-chip.on { border-color: rgba(62,232,200,.35); color: var(--accent); background: var(--accent-dim); }
 .cfg-chip.warn { border-color: rgba(245,185,66,.4); color: var(--gold); }
+
+/* 嵌入式(被控制台外壳承载)时隐藏自带 rail —— 导航交给外壳,避免两条侧栏并排 */
+body.embed { --rail: 0px !important; }
+body.embed #rail { display: none !important; }
 </style>
 </head>
 <body>
@@ -421,6 +433,28 @@ body.panel-open #stats-bar { opacity: 0; pointer-events: none; }
 </div>
 
 <script type="module">
+/* ?embed=1 → 嵌入式模式(见上方 body.embed 样式) */
+try { if (new URLSearchParams(location.search).has('embed')) document.body.classList.add('embed'); } catch (e) {}
+
+/* 嵌入式模式下:星图自己顶栏/rail 里的站内链接要带上 embed 参数,
+   否则一跳转就丢掉了 embed(自带 rail 会重新冒出来,形成双侧边栏) */
+(function () {
+  if (!document.body.classList.contains('embed')) return;
+  function patch() {
+    document.querySelectorAll('a[href]').forEach(function (a) {
+      const h = a.getAttribute('href') || '';
+      if (!h || h.indexOf('embed=') >= 0) return;
+      if (!/^https?:\/\/127\.0\.0\.1:\d+\//.test(h) && !h.startsWith('/')) return;
+      a.setAttribute('href', h + (h.indexOf('?') >= 0 ? '&' : '?') + 'embed=1');
+    });
+  }
+  patch();
+  setTimeout(patch, 800);   // 顶栏/抽屉里的链接可能是稍后渲染的
+})();
+
+
+
+
   /* 最新版: three r160 + 3d-force-graph 1.80, esbuild 全打进单文件(自包含,零外部依赖) */
   import ForceGraph3D, { THREE } from '/vendor/fg-1.80-full-v2.mjs';
   window.THREE = THREE;
@@ -673,9 +707,10 @@ function buildCoreNode(node, R, labelW) {
   const glow2 = new THREE.Mesh(sphereGeo(R * 2.2), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.11, blending: THREE.AdditiveBlending, depthWrite: false }));
   group.add(glow2);
   const name = (node.shortLabel || node.label || node.project || '').split('·')[0].trim();
+  let spr = null;   /* v1.28:提到外层 —— 标签 sprite 必须存回节点,否则分级标签管不到它 */
   if (name) {
     const mat = new THREE.SpriteMaterial({ map: makeLabelTexture(name, color), transparent: true, depthTest: false, sizeAttenuation: true });
-    const spr = new THREE.Sprite(mat);
+    spr = new THREE.Sprite(mat);
     const w = Math.max(16, Math.min(32, 10 + name.length * 1.5));
     spr.scale.set(w, 4.2, 1);
     spr.position.set(0, -(R + 5), 0);
@@ -685,6 +720,10 @@ function buildCoreNode(node, R, labelW) {
   node.__coreMesh = core;
   node.__glowMesh = glow1;
   node.__baseColor = color;
+  /* v1.28 修:核心节点的标签 sprite 之前**没有存回节点**(buildNode 里那句
+   * `if (node.__labelAlways && node.__labelSprite)` 因此永远为假 = 死代码),
+   * 导致星座名既不归分级标签管、也一直是建图时的小尺寸(远看等于没有)。 */
+  if (spr) { node.__labelSprite = spr; node.__labelMat = spr.material; }
   return group;
 }
 
@@ -753,6 +792,17 @@ const CLUSTER_COLORS_GLOBAL = ['#5cdbd3', '#ffa940', '#b37feb', '#69c0ff', '#ff8
 function buildNode(node) {
   if (typeof THREE === 'undefined') return null; // CDN 失败时回退默认球体
   if (node.group === 'galaxy-core') return buildCoreNode(node, 5.6, 5);
+  if (node.group === 'nebula-inst-core') {
+    /* v1.28 星域级标签:只出名字(不复活 v1.17.5 删掉的"星域大星"),尺寸由 updateLabelScales 按屏幕像素给 */
+    const g = new THREE.Group();
+    const color = node.__galaxyColor || '#fbbf24';
+    const mat = new THREE.SpriteMaterial({ map: makeLabelTexture(node.shortLabel || node.label || '', color), transparent: true, depthTest: false, sizeAttenuation: true });
+    const spr = new THREE.Sprite(mat);
+    spr.scale.set(200, 25, 1);
+    g.add(spr);
+    node.__group = g; node.__labelSprite = spr; node.__labelMat = mat; node.__labelLevel = 'region';
+    return g;
+  }
   if (node.group === 'subgalaxy-core' || node.group === 'nebula-lib-core') {
     const grp = buildCoreNode(node, node.__labelAlways ? 2.2 : 2.6, 3.4);
     /* v1.17.5:星座名常驻——标签更大更靠上,以星团为锚 */
@@ -833,11 +883,22 @@ function buildNode(node) {
 
 /* 单节点视觉状态刷新(选中/导览金高亮/搜索变灰) — 直接改材质,不重建几何/纹理 */
 function applyNodeVisual(node) {
-  if (!node.__glowMat) return;
   const isDim = !!node.dimmed;
   const isTour = autoTargetId != null && node.id === autoTargetId;
   const isSel = selectedNodeId != null && node.id === selectedNodeId;
   const isHover = hoveredNodeId != null && node.id === hoveredNodeId;
+  /* v1.28 标签分级:结构标签(星域/星座/星系)按缩放档位显隐;记忆点名称只 hover/选中(近档才常驻重要记忆) */
+  if (node.__labelSprite) {
+    const lv = node.__labelLevel;
+    if (lv) node.__labelSprite.visible = !isDim && labelVisibleAt(lv);
+    else {
+      const isCore = node.group === 'galaxy-core' || node.group === 'subgalaxy-core';
+      const canAlways = !!(node.__importantLabel || node.__labelAlways);
+      node.__labelSprite.visible = !isDim && (isSel || isHover || isCore || (canAlways && labelTier === 'near'));
+    }
+    if (node.__labelMat) node.__labelMat.opacity = isDim ? 0 : (lv ? 0.95 : (node.group === 'nebula-gal-core' ? 0.7 : 0.95));
+  }
+  if (!node.__glowMat) return;
   const base = node.__baseColor || '#64748b';
   // 簇成员:基础光晕色 = 簇色(非 dim/导览/选中/悬停态时显示簇色扎堆)
   const baseGlowColor = node.__cluster ? (CLUSTER_COLORS_GLOBAL[node.__clusterColorKey || 0] || base) : base;
@@ -848,12 +909,6 @@ function applyNodeVisual(node) {
   node.__glowMat.color.set(glowColor);
   node.__glowMat.opacity = glowOpacity;
   if (node.__coreMat) node.__coreMat.color.set(isDim ? '#3c3c46' : (isTour ? '#fbbf24' : base));
-  // 标签:结构核心/高 degree 常驻;其余选中/悬停才显示(dim 时隐藏)
-  if (node.__labelSprite) {
-    const always = node.group === 'galaxy-core' || node.group === 'subgalaxy-core' || node.__importantLabel || node.__labelAlways;
-    node.__labelSprite.visible = always ? !isDim : (!isDim && (isSel || isHover));
-  }
-  if (node.__labelMat) node.__labelMat.opacity = isDim ? 0 : 0.95;
 }
 
 function refreshNodeVisuals() {
@@ -958,6 +1013,7 @@ function lodLinkVisible(l) {
 function applyLod() {
   if (!graphInstance) return;
   const far = cameraDist() > LOD_DIST;
+  updateLabels();
   if (lodFar === far) {
     graphInstance.linkVisibility(l => lodLinkVisible(l));
     return;
@@ -966,6 +1022,126 @@ function applyLod() {
   graphInstance.nodeVisibility(n => lodVisible(n));
   graphInstance.linkVisibility(l => lodLinkVisible(l));
 }
+
+/* ═══════════ v1.28 地图式分级标签(2026-09-18)═══════════════════════════════
+ * 需求:像地图一样"缩放换标签" —— 远看只有星域名,放大一档出星座名,再放大出星系/记忆名。
+ *   远(far)  :只显示星域标签(Hermes / LobeHub / AIRI / 总反思),字号最大
+ *   中(mid)  :+ 星座标签(用户画像 / 知识 / 定案 …)
+ *   近(near) :+ 星系锚标签;记忆点名称仍只在 hover/选中时出现(不在近档也不常驻)
+ * 判据:场景半径占视口高度的比例 frac(与窗口尺寸无关的"看图比例"),相机每次变化都会重算。
+ * 关键点:标签按**屏幕像素**定尺寸(scale 随距离补偿)→ 远近都清晰,不会缩成小点。
+ * 自检:控制台 window.__labelDebug() → {tier, frac}。
+ */
+const LABEL_TIER_FRAC = { far: 0.85, near: 1.35 };   /* frac < far → 远档;> near → 近档 */
+let labelTier = 'mid';
+function labelFrac() {
+  try {
+    const cam = graphInstance.camera();
+    const h = (typeof graphInstance.height === 'function' ? graphInstance.height() : 0) || window.innerHeight || 800;
+    const R = window.__nebulaR || 900;
+    return (R / Math.max(1, cameraDist())) * (h / 2) / Math.tan((cam.fov || 50) * Math.PI / 360) / h;
+  } catch (e) { return 0.8; }
+}
+function labelTierNow() {
+  try {   /* 调试:?lbltier=far|mid|near 强制档位(用于逐档验收) */
+    const m = /[?&]lbltier=(far|mid|near)/.exec(location.search);
+    if (m) return m[1];
+  } catch (e) {}
+  const f = labelFrac();
+  return f > LABEL_TIER_FRAC.near ? 'near' : (f < LABEL_TIER_FRAC.far ? 'far' : 'mid');
+}
+function labelPxFor(n) {
+  if (n.__labelLevel === 'region') return labelTier === 'far' ? 22 : (labelTier === 'mid' ? 18 : 15);
+  if (n.__labelLevel === 'cons') return labelTier === 'near' ? 12 : 14;
+  return 11;   /* gal 星系锚 */
+}
+function labelVisibleAt(level) {
+  if (level === 'region') return true;
+  if (level === 'cons') return labelTier !== 'far';
+  return labelTier === 'near';
+}
+/* 贴图是 512×64 画布、24px 字号 → 文字约占 sprite 高度的 24/64;此处按目标"文字像素高"反推世界尺寸 */
+const LABEL_TEX_FONT_FRAC = 0.375;
+function updateLabelScales() {
+  if (!graphInstance) return;
+  const nodes = window.__nebulaNodes || (allData && allData.nodes) || [];
+  if (!nodes.length) return;
+  let cam; try { cam = graphInstance.camera(); } catch (e) { return; }
+  const h = (typeof graphInstance.height === 'function' ? graphInstance.height() : 0) || window.innerHeight || 800;
+  const k0 = 2 * Math.tan((cam.fov || 50) * Math.PI / 360) / h;   /* 世界单位 / 屏幕像素 */
+  for (const n of nodes) {
+    if (!n.__labelSprite || !n.__labelLevel) continue;
+    const d = Math.hypot(cam.position.x - (n.x || 0), cam.position.y - (n.y || 0), cam.position.z - (n.z || 0));
+    const H = (labelPxFor(n) / LABEL_TEX_FONT_FRAC) * k0 * Math.max(1, d);
+    n.__labelSprite.scale.set(H * 8, H, 1);
+  }
+}
+function updateLabels(force) {
+  const t = labelTierNow();
+  const changed = force || t !== labelTier;
+  if (changed) labelTier = t;
+  const struct = window.__nebulaNodes || [];
+  if (changed) {
+    /* 结构标签(星域常驻 / 星座中近档 / 星系锚近档) */
+    for (const n of struct) {
+      const lv = n.__labelLevel;
+      if (lv && n.__labelSprite) n.__labelSprite.visible = !n.dimmed && labelVisibleAt(lv);
+    }
+    /* 记忆点标签:近档才常驻"重要记忆"名,其余靠 hover/选中(applyNodeVisual 里判定) */
+    if (typeof refreshNodeVisuals === 'function') refreshNodeVisuals();
+  }
+  updateLabelScales();
+  labelHud();
+}
+/* 相机随时可能变(滚轮/拖拽/flyTo)→ 标签档位必须自驱:自己的轻量 rAF,
+ * 不依赖 orbitTick()(那个只在导览/自动漫步时跑,平时是停的 —— v1.28 首版就栽在这)。 */
+let labelRAF = null;
+function labelTick() {
+  labelRAF = requestAnimationFrame(labelTick);
+  try { updateLabels(); } catch (e) {}
+}
+function startLabelTick() { if (labelRAF == null) labelRAF = requestAnimationFrame(labelTick); }
+
+/* 调试 HUD:仅当 URL 带 &lblhud=1 时出现(诊断标签档位/可见性/尺寸) */
+function labelHud() {
+  try {
+    if (!/[?&]lblhud=1/.test(location.search)) return;
+    let h = document.getElementById('label-hud');
+    if (!h) {
+      h = document.createElement('div'); h.id = 'label-hud';
+      h.style.cssText = 'position:fixed;left:50%;top:76px;transform:translateX(-50%);z-index:99999;font:bold 15px/1.6 Consolas,monospace;color:#7fffd4;background:rgba(0,0,0,.85);padding:6px 10px;white-space:pre;border-radius:6px;border:1px solid #7fffd4';
+      document.body.appendChild(h);
+    }
+    const struct = (window.__nebulaNodes || []).filter(n => n.__labelLevel);
+    const cnt = {};
+    for (const n of struct) cnt[n.__labelLevel] = (cnt[n.__labelLevel] || 0) + 1;
+    const vis = struct.filter(n => n.__labelSprite && n.__labelSprite.visible).length;
+    const nospr = struct.filter(n => !n.__labelSprite).length;
+    const visLv = {};
+    for (const n of struct) if (n.__labelSprite && n.__labelSprite.visible) visLv[n.__labelLevel] = (visLv[n.__labelLevel] || 0) + 1;
+    const names = struct.filter(n => n.__labelSprite && n.__labelSprite.visible).slice(0, 3)
+      .map(n => n.__labelLevel + ':' + (n.shortLabel || n.label || '')).join(' ');
+    const line = 'lv=' + JSON.stringify(cnt) + ' visLv=' + JSON.stringify(visLv) + ' nospr=' + nospr + ' 可见例:' + names;
+    /* 关键自检:sprite 是否还挂在渲染中的节点对象上(怀疑 buildNode 被多次调用 → 引用错位) */
+    let sprScene = 0, sprSceneVis = 0, detached = 0, multi = 0;
+    try {
+      const sc = graphInstance.scene();
+      sc.traverse(o => { if (o.isSprite) { sprScene++; if (o.visible) sprSceneVis++; } });
+      for (const n of struct) {
+        const obj = n.__threeObj;
+        if (!obj) continue;
+        const sprs = (obj.children || []).filter(c => c.isSprite);
+        if (sprs.length > 1) multi++;
+        if (n.__labelSprite && sprs.indexOf(n.__labelSprite) < 0) detached++;
+      }
+    } catch (e) {}
+    h.textContent = 'tier=' + JSON.stringify(labelTier) + ' frac=' + labelFrac().toFixed(2) + ' R=' + Math.round(window.__nebulaR || 0) +
+      ' struct=' + struct.length + ' all=' + ((window.__nebulaNodes || []).length) +
+      ' | 场景sprite=' + sprScene + '(可见' + sprSceneVis + ') 失联=' + detached + ' 多sprite节点=' + multi + '\n' + line + '\n' +
+      struct.slice(0, 3).map(n => (n.shortLabel || '') + ':' + (n.__threeObj ? ('子sprite=' + (n.__threeObj.children || []).filter(c => c.isSprite).length) : '无obj')).join('  ');
+  } catch (e) {}
+}
+window.__labelDebug = () => ({ tier: labelTier, frac: +labelFrac().toFixed(3), far: LABEL_TIER_FRAC.far, near: LABEL_TIER_FRAC.near });
 
 /* ═══════════════════ 星空背景 (V2) ═══════════════════ */
 let starField = null;
@@ -1768,6 +1944,10 @@ function renderStar(data) {
   startOrbit();
   bindInteraction();
   softenControls();
+  /* v1.28 结构标签节点表:必须放在 addNebulaWeb()/addNebulaClouds() **之后**
+   * —— 它们内部会 removeNebulaObjects(),那里面会把这张表清空。 */
+  window.__nebulaNodes = allNodes;
+  try { updateLabels(true); startLabelTick(); } catch (e) {}
   try {
     ['charge', 'link', 'center', 'collide', 'subgalaxy-attract', 'galaxy-attract'].forEach(name => {
       try { graphInstance.d3Force(name, null); } catch (e) {}
@@ -1801,6 +1981,7 @@ function renderStar(data) {
   } catch (e) {}
   window.graphInstance = graphInstance;
   window.flyTo = flyTo;
+  try { startLabelTick(); } catch (e) {}
   renderStarLegend(data);
 }
 
@@ -1888,6 +2069,7 @@ function removeNebulaObjects() {
     if (obj && obj.parent) obj.parent.remove(obj);
   }
   nebulaPoints = nebulaGlow = nebulaWeb = nebulaTrunk = nebulaIntra = nebulaSparse = null;
+  window.__nebulaNodes = null;   /* v1.28 结构标签节点表(星域/星座/星系) */
 }
 function makeNebulaSpriteTexture(size = 128) {
   const c = document.createElement('canvas');
@@ -2007,7 +2189,7 @@ function renderNebula(data) {
         size: 5 + Math.log2(cm.length + 1) * 1.2, importance: 0.9,
         __galaxyColor: shade,
         x: cx, y: cy, z: cz, fx: cx, fy: cy, fz: cz,
-        __labelAlways: true,
+        __labelAlways: true, __labelLevel: 'cons',
       };
       structNodes.push(consNode);
     });
@@ -2043,14 +2225,38 @@ function renderNebula(data) {
             size: 2.6 + Math.log2(members.length + 1) * 0.9,
             importance: 0.75,
             __galaxyColor: MEM_TYPE_COLORS[gal] || '#64748b',
-            __labelAlways: true,
+            __labelAlways: true, __labelLevel: 'gal',
             x: cx, y: cy, z: cz, fx: cx, fy: cy, fz: cz,
           });
         }
       }
     }
   }
-  const allNodes = structNodes.concat(galAnchorNodes, real);
+  /* v1.28 星域级标签锚(每星域一枚,只出标签,不占力导) */
+  const instNodes = [];
+  for (const rg of byRegion.keys()) {
+    const members = real.filter(n => n.__region === rg);
+    if (!members.length) continue;
+    const cx = members.reduce((a, n) => a + (n.x || 0), 0) / members.length;
+    const cy = members.reduce((a, n) => a + (n.y || 0), 0) / members.length;
+    const cz = members.reduce((a, n) => a + (n.z || 0), 0) / members.length;
+    const rgName = RG_NAME[rg] || structLabel(rg) || rg;
+    instNodes.push({
+      id: 'nebrg:' + rg, rawId: 'nebrg:' + rg,
+      instance: rg, lib: rg, project: rg,
+      __struct: rg, __region: rg, __constellation: rg, __consLib: rg, __galaxy: rg,
+      shortLabel: rgName,
+      label: rgName + ' · ' + members.length,
+      fullText: rgName + ' 星域 · ' + members.length + ' 记忆',
+      group: 'nebula-inst-core', memType: 'general', category: 'region',
+      size: 4, importance: 0.9, __galaxyColor: regionColorOf(rg),
+      __labelLevel: 'region', __labelOnly: true,
+      x: cx, y: cy, z: cz, fx: cx, fy: cy, fz: cz,
+    });
+  }
+  /* 分级标签的"看图比例"基准:场景半径 */
+  window.__nebulaR = Math.max(1, real.reduce((m, n) => Math.max(m, Math.hypot(n.x || 0, n.y || 0, n.z || 0)), 1));
+  const allNodes = structNodes.concat(instNodes, galAnchorNodes, real);
 
   graphInstance = (graphInstance || new ForceGraph3D(document.getElementById('graph')))
     .graphData({ nodes: allNodes, links: [] })
@@ -2125,6 +2331,11 @@ function renderNebula(data) {
   } catch (e) {}
   window.graphInstance = graphInstance;
   window.flyTo = flyTo;
+  /* v1.28 结构标签节点表 + 首次定档:必须放在 addNebulaWeb() 之后
+   * —— 它内部会 removeNebulaObjects(),那里会把这张表清空(v1.28 首版就栽在这:
+   * 表被清空后 struct=0,星域名/星座名全都停在建节点时的小尺寸上 → "一个标签都看不到")。 */
+  window.__nebulaNodes = allNodes;
+  try { updateLabels(true); startLabelTick(); } catch (e) {}
   renderNebulaLegend(data, real);
   updateNebulaState(real);
 }
@@ -2299,135 +2510,17 @@ function addNebulaWeb(real, links, nebulaMeta) {
     const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
     const perpU = (v, u) => { const d = dot3(v, u); return [v[0] - u[0] * d, v[1] - u[1] * d, v[2] - u[2] * d]; };
     
-    /* 1) 星团内短线:极淡背景 */
-    for (const { s, t } of intra) seg(posI, colI, v3(s), v3(t), [0.12, 0.16, 0.22]);
+    /* 1) 星团内短线:极淡背景(开关见文件下方 v1.26 说明) */
     let pipeTotal = 0;
     const __pdbg = [];  /* 管道自检转储:window.__pipeDebug 供取证 */
-    /* ── v1.19 干道层(重写):团表面 → 团表面,一对一束,总数受控 ──────────────
-     * 旧实现叠了四层启发式(中轴簇 / 侧向簇按角度合并 / 侧偏编排 / 跨库推到库球面),
-     * 管子端点会被推到团外很远的位置 → 满屏横穿全场的长直线(用户口中的"星门很乱")。
-     * 现在只做一件事:两团之间画 1~3 根平行细管,端点落在两团表面,亮度按捆绑边数分级。
-     * 口径:座间只留 2~3 条干道;点对点关系在 hover/选中时才出现(lodLinkVisible + linkWidth)。 */
-    /* ── v1.22 干道:直接用服务端的门 gateA/gateB,客户端不再自己算团心/半径 ──────────
-     * 病根:客户端用 p90 当门半径、服务端 blobs.r 用最大半径(实测 p90/rmax = 0.69~0.87)
-     * → 81% 的管子端点落在本团真实范围之内,观感就是"从人堆里冒尖"。
-     * 现在端点 = 服务端用**分离后团心** + **沿 V 最靠外的实点(支撑点)** 算出的门,每对只画 1 条。
-     * 点对点关系不再常驻(节点→门那层细丝已删),交给 hover:lodLinkVisible + linkWidth。
-     * 为什么不能用记忆点当端点:节点被推到"朝所有对端的加权平均方向"(同时连 B、C 就落在 B、C 之间),
-     * 而线要连的是真实对端 → 几何上必然斜切(实测夹角中位 41°)。 */
-    /* ── v1.23 干道 = 服务端门 + 坐标系对齐 + 长线收集(公共走廊)──────────────────
-     * ①门来自服务端 metaEdges.gateA/gateB,是**原始星云坐标** → 必须套 layoutNebula 的
-     *   (v-mid)×s 变换,否则整片线偏离一个值(用户实测:"线全部偏离了一个值")。
-     * ②长线收集(B档,收紧到"真同路"):方向夹角 <8° **且** 中点垂直距离 <max(6, 0.05×中位管长) 才合并;
-     *   每根走 门A→投影点→(沿走廊)→投影点→门B;中段重合处加性混合自然变亮,成为一条干线。
-     * ③不用记忆点当端点(节点被推到的是"朝所有对端的平均方向",几何上必然斜切)。 */
-    const X = window.__nebulaXform || { cx: 0, cy: 0, cz: 0, s: 1 };
-    const metas = (nebulaMeta && nebulaMeta.metaEdges) || [];
-    const toScene = (g) => [(g[0] - X.cx) * X.s, (g[1] - X.cy) * X.s, (g[2] - X.cz) * X.s];
-    const tintByBlob = new Map();
-    for (const n of real) if (n.blobId && !tintByBlob.has(n.blobId)) tintByBlob.set(n.blobId, n.__nebulaTint || null);
-    const tintOfBlob = (bk) => { const t = tintByBlob.get(bk); return t ? new THREE.Color(t) : new THREE.Color('#9fb4d8'); };
-    const dv = (p, q) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
-    const P3 = (metas || []).filter(m => m.gateA && m.gateB).map(m => {
-      const a = toScene(m.gateA), b = toScene(m.gateB);
-      const v = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-      const L = Math.hypot(v[0], v[1], v[2]) || 1e-6;
-      return { m, a, b, u: [v[0] / L, v[1] / L, v[2] / L], L,
-               mid: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2] };
-    });
-    const maxN = Math.max(1, ...P3.map(x => x.m.count || 1));
-    const colOf = (x) => {
-      const w = 0.25 + 0.75 * Math.min(1, (x.m.count || 1) / Math.min(8, maxN));
-      const c = tintOfBlob(x.m.a).lerp(tintOfBlob(x.m.b), 0.5).lerp(new THREE.Color('#ffffff'), 0.55);
-      return [c.r * w, c.g * w, c.b * w];
-    };
-    const medL = P3.length ? P3.map(x => x.L).sort((q, r) => q - r)[Math.floor(P3.length / 2)] : 100;
-    const perpThr = Math.max(6, medL * 0.05);
-    const groups = [];
-    const taken = new Set();
-    for (let q = 0; q < P3.length; q++) {
-      if (taken.has(q)) continue;
-      const grp = [q]; taken.add(q);
-      for (let r2 = q + 1; r2 < P3.length; r2++) {
-        if (taken.has(r2)) continue;
-        const par = Math.abs(dv(P3[q].u, P3[r2].u));
-        if (Math.acos(Math.min(1, par)) * 180 / Math.PI > 8) continue;
-        const w = [P3[r2].mid[0] - P3[q].mid[0], P3[r2].mid[1] - P3[q].mid[1], P3[r2].mid[2] - P3[q].mid[2]];
-        const t = dv(w, P3[q].u);
-        const perp = Math.hypot(w[0] - P3[q].u[0] * t, w[1] - P3[q].u[1] * t, w[2] - P3[q].u[2] * t);
-        if (perp > perpThr) continue;
-        grp.push(r2); taken.add(r2);
-      }
-      groups.push(grp);
-    }
-    for (const grp of groups) {
-      const col = colOf(P3[grp[0]]);
-      if (grp.length === 1) {
-        const x = P3[grp[0]];
-        seg(posT, colT, x.a, x.b, col);
-        pipeTotal++;
-      } else {
-        let um = [0, 0, 0];
-        const cen0 = [0, 0, 0];
-        let nP = 0;
-        for (const q2 of grp) {
-          const sgn = dv(P3[q2].u, P3[grp[0]].u) < 0 ? -1 : 1;
-          um[0] += P3[q2].u[0] * sgn; um[1] += P3[q2].u[1] * sgn; um[2] += P3[q2].u[2] * sgn;
-          for (const pt of [P3[q2].a, P3[q2].b]) { cen0[0] += pt[0]; cen0[1] += pt[1]; cen0[2] += pt[2]; nP++; }
-        }
-        const ul = Math.hypot(um[0], um[1], um[2]) || 1;
-        um = [um[0] / ul, um[1] / ul, um[2] / ul];
-        cen0[0] /= nP; cen0[1] /= nP; cen0[2] /= nP;
-        /* 走廊区间 = 所有成员端点投影的极值;投影必须夹在这段里
-         * (不夹的话,有些管子的投影会落到走廊起点之外 → 路径先前行再回头 = 锐角折角) */
-        let tMin = Infinity, tMax = -Infinity;
-        for (const q2 of grp) for (const pt of [P3[q2].a, P3[q2].b]) {
-          const t = dv([pt[0] - cen0[0], pt[1] - cen0[1], pt[2] - cen0[2]], um);
-          if (t < tMin) tMin = t; if (t > tMax) tMax = t;
-        }
-        if (tMax - tMin < 1) { tMax = tMin + 1; }
-        const proj = (pt) => {
-          let t = dv([pt[0] - cen0[0], pt[1] - cen0[1], pt[2] - cen0[2]], um);
-          t = Math.max(tMin, Math.min(tMax, t));
-          return [cen0[0] + um[0] * t, cen0[1] + um[1] * t, cen0[2] + um[2] * t];
-        };
-        /* 完全无折角:整条路径不是"三段折线+圆角",而是一条**向心 Catmull-Rom 样条**
-         * (过 门A → 走廊投影点 → 对方投影点 → 门B),α=0.5 的参数化避免过冲/尖点,
-         * 采样后处处连续可导 → 任何角度看都没有拐点。 */
-        const catmull = (pts, col) => {
-          const Q = [pts[0], ...pts, pts[pts.length - 1]];      /* 端点复制 → 自然收尾 */
-          const SEG = 14;
-          const ALPHA = 0.5;
-          const dist = (a, b) => Math.pow(Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]), ALPHA) || 1e-4;
-          const lp = (a, b, u) => [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u];
-          let prev = pts[0];
-          for (let i = 1; i + 2 < Q.length; i++) {
-            const p0 = Q[i - 1], p1 = Q[i], p2 = Q[i + 1], p3 = Q[i + 2];
-            const t0 = 0, t1 = t0 + dist(p0, p1), t2 = t1 + dist(p1, p2), t3 = t2 + dist(p2, p3);
-            for (let k3 = 1; k3 <= SEG; k3++) {
-              const t = t1 + (t2 - t1) * (k3 / SEG);
-              const A1 = lp(p0, p1, (t - t0) / (t1 - t0));
-              const A2 = lp(p1, p2, (t - t1) / (t2 - t1));
-              const A3 = lp(p2, p3, (t - t2) / (t3 - t2));
-              const B1 = lp(A1, A2, (t - t0) / (t2 - t0));
-              const B2 = lp(A2, A3, (t - t1) / (t3 - t1));
-              const C = lp(B1, B2, (t - t1) / (t2 - t1));
-              seg(posT, colT, prev, C, col);
-              prev = C;
-            }
-          }
-          seg(posT, colT, prev, pts[pts.length - 1], col);
-        };
-        let sumL = 0;
-        for (const q2 of grp) {
-          const x = P3[q2]; const c2 = colOf(x);
-          catmull([x.a, proj(x.a), proj(x.b), x.b], c2);
-          pipeTotal += 3; sumL += x.L;
-        }
-        __pdbg.push({ kind: 'bundle', n: grp.length, pairs: grp.map(q2 => P3[q2].m.a + '=>' + P3[q2].m.b), avgLen: Math.round(sumL / grp.length) });
-      }
-      __pdbg.push({ kind: 'pipe', pair: P3[grp[0]].m.a + '=>' + P3[grp[0]].m.b, n: P3[grp[0]].m.count, dist: P3[grp[0]].m.dist });
-    }
+    /* ── v1.25 星系间连线:整体删除(2026-09-18 用户定稿)─────────────────────────
+     * 三档都试过:v1.23 每团对一条管(61 条,乱)→ v1.24 收成 6 条星域干道 + 大幅调暗
+     * (Hermes 那条色偏深、整体仍属多余)→ 结论:**星域之间不画常驻线**。
+     * 常驻线条只剩"团内短线"一层(posI);跨团关系交给 hover/选中高亮(node→node 那层)与图例计数。
+     * 恢复办法:v1.24 的实现在 _归档\index.html.bak-20260918-改干道前(改前)之后的版本 / git 历史,
+     * 搜 "v1.24 星域干道" 整块贴回这里,再把下面 nebulaTrunk 那行加回来即可。
+     */
+    /* (干道层已删 → posT/colT 恒空,window.__pipeCount 恒 0) */
     /* 建对象(四个 LineSegments = 三级样式 + 喇叭层) */
     const mk = (pos, col, opacity) => {
       if (pos.length < 6) return null;
@@ -2436,10 +2529,72 @@ function addNebulaWeb(real, links, nebulaMeta) {
       geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
       return new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false }));
     };
-    nebulaIntra = mk(posI, colI, 0.20);  if (nebulaIntra) scene.add(nebulaIntra);
+    /* ── v1.27 团内短线层(重构,2026-09-18):kNN 主干化 + 空间密度归一化 ──────────
+     * 用户反馈:右上角 Hermes 一带的线明显比别处密/亮(实测无悬停画面线像素覆盖率 7.1% vs 1.0~1.6%);
+     * 但整层关掉又"什么都没有了"。根因两层:
+     *   ① 727 条 intra 里含大量冗余长线,横穿地图,在节点交错处叠成"咽喉"(Hermes 团心 250 单位内穿过 105 条);
+     *   ② 紧凑星域本身体积小 → 单位面积线天然多。
+     * 做法(两步都在本层内,不动别的层):
+     *   1) 主干化:每个点只保留最短的 INTRA_KNN 条 intra 线 → 冗余长线自动消失(727 → 591,咽喉 105 → 66);
+     *   2) 密度归一化:线按 INTRA_CELL 切段,统计每格经过段数,段的亮度乘 sqrt(中位/本格)
+     *      (夹在 INTRA_MIN_W..1)→ 拥挤处自动变淡、稀疏处保持 → 各星域观感拉平,但线还在。
+     * 调参:INTRA_ALPHA(整层亮度)/ INTRA_KNN / INTRA_MAX_LEN / INTRA_CELL / INTRA_MIN_W。
+     * 自检:控制台 window.__intraDebug {lines, pieces, cells, medianCrowd, knn, cell}。
+     */
+    const INTRA_KNN = 2;         /* 每个点保留最短几条(0 = 全部画) */
+    const INTRA_MAX_LEN = 0;     /* >0 时丢弃更长的线(场景单位) */
+    const INTRA_CELL = 60;       /* 密度网格边长(场景单位) */
+    const INTRA_MIN_W = 0.30;    /* 拥挤格的最低亮度系数 */
+    const INTRA_BASE = [0.12, 0.16, 0.22];
+    const INTRA_ALPHA = 0.20;    /* 整层材质透明度(旧值 0.20) */
+    const intraList = [];
+    if (INTRA_KNN > 0) {
+      const byNode = new Map(), chosen = new Map();
+      for (const { s, t } of intra) {
+        const A = v3(s), B = v3(t), L = Math.hypot(B[0] - A[0], B[1] - A[1], B[2] - A[2]);
+        if (INTRA_MAX_LEN > 0 && L > INTRA_MAX_LEN) continue;
+        const key = s.id < t.id ? s.id + '|' + t.id : t.id + '|' + s.id;
+        for (const n of [s.id, t.id]) {
+          if (!byNode.has(n)) byNode.set(n, []);
+          byNode.get(n).push({ key, L, a: A, b: B });
+        }
+      }
+      for (const lst of byNode.values()) {
+        lst.sort((p, q) => p.L - q.L);
+        for (let i = 0; i < Math.min(INTRA_KNN, lst.length); i++) chosen.set(lst[i].key, lst[i]);
+      }
+      for (const c of chosen.values()) intraList.push(c);
+    } else {
+      for (const { s, t } of intra) intraList.push({ a: v3(s), b: v3(t) });
+    }
+    const intCell = (p) => Math.floor(p[0] / INTRA_CELL) + ',' + Math.floor(p[1] / INTRA_CELL) + ',' + Math.floor(p[2] / INTRA_CELL);
+    const intSplit = (a, b) => {
+      const n = Math.max(1, Math.round(Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]) / INTRA_CELL));
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        const t0 = i / n, t1 = (i + 1) / n;
+        out.push([[a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0, a[2] + (b[2] - a[2]) * t0],
+                  [a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1, a[2] + (b[2] - a[2]) * t1]]);
+      }
+      return out;
+    };
+    const intCrowd = new Map(), intPieces = [];
+    for (const it of intraList) for (const pc of intSplit(it.a, it.b)) {
+      const k = intCell([(pc[0][0] + pc[1][0]) / 2, (pc[0][1] + pc[1][1]) / 2, (pc[0][2] + pc[1][2]) / 2]);
+      intCrowd.set(k, (intCrowd.get(k) || 0) + 1);
+      intPieces.push({ pc, k });
+    }
+    const intCounts = [...intCrowd.values()].sort((a, b) => a - b);
+    const intMed = intCounts.length ? intCounts[Math.floor(intCounts.length / 2)] : 1;
+    for (const { pc, k } of intPieces) {
+      const w = Math.max(INTRA_MIN_W, Math.min(1, Math.sqrt(intMed / (intCrowd.get(k) || 1))));
+      seg(posI, colI, pc[0], pc[1], [INTRA_BASE[0] * w, INTRA_BASE[1] * w, INTRA_BASE[2] * w]);
+    }
+    window.__intraDebug = { lines: intraList.length, pieces: intPieces.length, cells: intCrowd.size,
+                            medianCrowd: intMed, knn: INTRA_KNN, cell: INTRA_CELL };
+    nebulaIntra = mk(posI, colI, INTRA_ALPHA);  if (nebulaIntra) scene.add(nebulaIntra);
     nebulaSparse = mk(posS, colS, 0.10); if (nebulaSparse) scene.add(nebulaSparse);
     nebulaWeb = mk(posF, colF, 0.38);    if (nebulaWeb) scene.add(nebulaWeb);
-    nebulaTrunk = mk(posT, colT, 0.90);  if (nebulaTrunk) scene.add(nebulaTrunk);
     if (!scene.fog) scene.fog = new THREE.FogExp2(0x07090D, 0.00042);
     window.__pipeCount = pipeTotal;
     window.__pipeDebug = __pdbg;
