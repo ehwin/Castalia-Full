@@ -137,12 +137,14 @@ router.get('/manage/memories', (req, res) => {
   const instance = String(req.query.instance || '');
   const project = String(req.query.project || '');
   const q = String(req.query.q || '').trim();
+  const memType = String(req.query.memType || '').trim();   /* 只读某个"文件夹"(user/feedback/project/reference) */
   const limit = Math.min(parseInt(req.query.limit || '500', 10) || 500, 2000);
   /* ⚠ 一个库在磁盘上是"每个 memType 一个 sqlite"(feedback/general/project/reference/user)。
    * 旧实现只取 findLib() 命中的**第一个**文件 —— 常常正好是空的 general,
    * 表现就是"点库名看不到内容"(实测 Hermes/hermes 有 22 条,接口却返回 0)。
    * 现在把匹配到的所有文件**并起来查**,再按 created_at 倒序取前 limit 条。 */
-  const libs = libFiles().filter(l => (!instance || l.instance === instance) && (!project || l.project === project));
+  const libs = libFiles().filter(l => (!instance || l.instance === instance) && (!project || l.project === project)
+    && (!memType || String(l.memType || 'general') === memType));
   if (!libs.length) return res.json({ ok: false, error: '库不存在(instance/project 未匹配)', memories: [] });
   const base = `SELECT id, substr(text,1,600) AS text, length(text) AS textLen, type, mem_type, category, tier, importance, source, created_at, updated_at FROM memory`;
   const all = [];

@@ -59,6 +59,9 @@
   .lib-row.on { background: rgba(62,232,200,.10); box-shadow: inset 2px 0 0 var(--accent); }
   .lib-row .dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; }
   .lib-row .nm { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lib-row .caret { color: var(--dim2); font-size: 10px; width: 10px; cursor: pointer; }
+  .lib-row.folder { padding-left: 30px; font-size: 12.5px; color: var(--dim); }
+  .lib-row.folder .fm { color: var(--dim); }
   .lib-row .n { margin-left: auto; color: var(--ok); font-size: 12px; font-variant-numeric: tabular-nums; }
   .toggle { display: flex; align-items: center; gap: 7px; padding: 6px 14px; color: var(--dim2); font-size: 12px; cursor: pointer; user-select: none; }
   .toggle input { accent-color: var(--accent); }
@@ -170,8 +173,10 @@ async function loadOverview() {
     const merged = new Map();
     for (const l of (d.libraries || [])) {
       const k = l.instance + '\u0000' + l.project;
-      const cur = merged.get(k) || { instance: l.instance, project: l.project, memories: 0, facts: 0, files: 0 };
+      const cur = merged.get(k) || { instance: l.instance, project: l.project, memories: 0, facts: 0, files: 0, folders: {} };
       cur.memories += l.memories || 0; cur.facts += l.facts || 0; cur.files += 1;
+      const mt = l.memType || 'general';
+      cur.folders[mt] = (cur.folders[mt] || 0) + (l.memories || 0);   /* 文件夹层:user/feedback/project/reference/general */
       merged.set(k, cur);
     }
     LIBS = [...merged.values()];
@@ -190,13 +195,24 @@ async function loadOverview() {
     for (const [inst, arr] of Object.entries(groups)) {
       html += `<div class="grp">${esc(inst)} · ${arr.length}</div>`;
       for (const l of arr) {
-        const on = SCOPE.kind === 'lib' && SCOPE.instance === l.instance && SCOPE.project === l.project;
+        const on = SCOPE.kind === 'lib' && SCOPE.instance === l.instance && SCOPE.project === l.project && !SCOPE.memType;
+        const key = l.instance + '/' + l.project;
+        const folders = Object.entries(l.folders).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
         /* ⚠ 别用 JSON.stringify 生成 onclick:它产出双引号,会把 onclick="..." 这个属性**截断**,
          * 表现就是"点库名没反应"(实测踩过)。这里用单引号拼接,名字本身也做过白名单过滤。 */
         html += `<div class="lib-row ${on ? 'on' : ''}" onclick="pickLib('${esc(l.instance)}','${esc(l.project)}')"
           title="${esc(l.instance)} / ${esc(l.project)} · ${l.files} 个 memType 文件">
+          <span class="caret" onclick="event.stopPropagation(); toggleOpen('${esc(key)}')">${folders.length ? (OPEN.has(key) ? '▾' : '▸') : ''}</span>
           <span class="dot" style="background:${colorOf(l.instance)}"></span>
           <span class="nm">${esc(l.project)}</span><span class="n">${l.memories}</span></div>`;
+        if (OPEN.has(key)) {
+          for (const [mt, n] of folders) {
+            const on2 = SCOPE.kind === 'lib' && SCOPE.instance === l.instance && SCOPE.project === l.project && SCOPE.memType === mt;
+            html += `<div class="lib-row folder ${on2 ? 'on' : ''}" onclick="pickFolder('${esc(l.instance)}','${esc(l.project)}','${esc(mt)}')"
+              title="${esc(MT_NAME[mt] || mt)} · ${n} 条">
+              <span class="fm">${esc(MT_NAME[mt] || mt)}</span><span class="n">${n}</span></div>`;
+          }
+        }
       }
     }
     box.innerHTML = html;
@@ -205,6 +221,13 @@ async function loadOverview() {
 
 /* ── 作用域切换 ── */
 function hint(t) { const e = document.getElementById('scopeHint'); if (e) e.textContent = t; }
+const MT_NAME = { user: '用户画像', feedback: '反馈纠偏', project: '项目上下文', reference: '参考资料', general: '通用', semantic: '语义', episodic: '情景', entity: '实体' };
+const OPEN = new Set();
+function toggleOpen(k) { if (OPEN.has(k)) OPEN.delete(k); else OPEN.add(k); loadOverview(); }
+function pickFolder(instance, project, memType) {
+  SCOPE = { kind: 'lib', instance, project, memType }; QUERY = ''; document.getElementById('q').value = '';
+  hint(`正在看「${project} / ${MT_NAME[memType] || memType}」· 搜索只在这里找`); render();
+}
 function pickRecent() { SCOPE = { kind: 'recent' }; QUERY = ''; document.getElementById('q').value = ''; hint('默认看最近动态 · 搜索结果显示在右侧'); render(); }
 function pickLib(instance, project) { SCOPE = { kind: 'lib', instance, project }; QUERY = ''; document.getElementById('q').value = ''; hint(`正在看「${project}」· 搜索只在库里找`); render(); }
 
@@ -219,9 +242,10 @@ async function render() {
     if (QUERY) {
       /* 全部库 → 跨库语义检索;某个库 → 库内 LIKE(用 /api/manage/memories 的 q) */
       if (SCOPE.kind === 'lib') {
-        const d = await j(`/api/manage/memories?instance=${encodeURIComponent(SCOPE.instance)}&project=${encodeURIComponent(SCOPE.project)}&q=${encodeURIComponent(QUERY)}&limit=500`);
-        if (!d.ok) { box.innerHTML = `<div class="empty">${esc(d.error || '搜索失败')}</div>`; setHead(`${SCOPE.project} · 搜索「${QUERY}」`, ''); return; }
-        setHead(`${SCOPE.project} · 搜索「${QUERY}」`, `库内命中 ${d.count ?? 0} 条`);
+        const d = await j(`/api/manage/memories?instance=${encodeURIComponent(SCOPE.instance)}&project=${encodeURIComponent(SCOPE.project)}${SCOPE.memType ? '&memType=' + encodeURIComponent(SCOPE.memType) : ''}&q=${encodeURIComponent(QUERY)}&limit=500`);
+        const where = SCOPE.project + (SCOPE.memType ? ' / ' + (MT_NAME[SCOPE.memType] || SCOPE.memType) : '');
+        if (!d.ok) { box.innerHTML = `<div class="empty">${esc(d.error || '搜索失败')}</div>`; setHead(`${where} · 搜索「${QUERY}」`, ''); return; }
+        setHead(`${where} · 搜索「${QUERY}」`, `命中 ${d.count ?? 0} 条`);
         box.innerHTML = !d.memories.length ? '<div class="empty">这个库里没有命中</div>' : d.memories.map(m => `
           <div class="row"><span class="where">${esc(m.memType || 'general')}${m.important ? ' ⭐' : ''}</span>
           <span class="txt" title="${esc(m.text)}">${esc(m.text)}</span>
@@ -235,10 +259,11 @@ async function render() {
           <div class="txt">${esc(r.text)}</div></div>`).join('');
       }
     } else if (SCOPE.kind === 'lib') {
-      const d = await j(`/api/manage/memories?instance=${encodeURIComponent(SCOPE.instance)}&project=${encodeURIComponent(SCOPE.project)}&limit=500`);
-      if (!d.ok) { box.innerHTML = `<div class="empty">${esc(d.error || '读取失败')}</div>`; setHead(SCOPE.project, ''); return; }
+      const d = await j(`/api/manage/memories?instance=${encodeURIComponent(SCOPE.instance)}&project=${encodeURIComponent(SCOPE.project)}${SCOPE.memType ? '&memType=' + encodeURIComponent(SCOPE.memType) : ''}&limit=500`);
+      const where = SCOPE.project + (SCOPE.memType ? ' / ' + (MT_NAME[SCOPE.memType] || SCOPE.memType) : '');
+      if (!d.ok) { box.innerHTML = `<div class="empty">${esc(d.error || '读取失败')}</div>`; setHead(where, ''); return; }
       const mem = d.memories || [];
-      setHead(SCOPE.project, `${SCOPE.instance} · ${d.count ?? mem.length} 条记忆`);
+      setHead(where, `${SCOPE.instance} · ${d.count ?? mem.length} 条记忆`);
       box.innerHTML = !mem.length ? '<div class="empty">这个库还没有记忆</div>' : mem.map(m => `
         <div class="row"><span class="where">${esc(m.memType || 'general')}${m.important ? ' ⭐' : ''}</span>
         <span class="txt" title="${esc(m.text)}">${esc(m.text)}</span>
