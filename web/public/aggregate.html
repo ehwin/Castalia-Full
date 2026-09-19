@@ -191,7 +191,9 @@ async function loadOverview() {
       html += `<div class="grp">${esc(inst)} · ${arr.length}</div>`;
       for (const l of arr) {
         const on = SCOPE.kind === 'lib' && SCOPE.instance === l.instance && SCOPE.project === l.project;
-        html += `<div class="lib-row ${on ? 'on' : ''}" onclick="pickLib(${JSON.stringify(l.instance)}, ${JSON.stringify(l.project)})"
+        /* ⚠ 别用 JSON.stringify 生成 onclick:它产出双引号,会把 onclick="..." 这个属性**截断**,
+         * 表现就是"点库名没反应"(实测踩过)。这里用单引号拼接,名字本身也做过白名单过滤。 */
+        html += `<div class="lib-row ${on ? 'on' : ''}" onclick="pickLib('${esc(l.instance)}','${esc(l.project)}')"
           title="${esc(l.instance)} / ${esc(l.project)} · ${l.files} 个 memType 文件">
           <span class="dot" style="background:${colorOf(l.instance)}"></span>
           <span class="nm">${esc(l.project)}</span><span class="n">${l.memories}</span></div>`;
