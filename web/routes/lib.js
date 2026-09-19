@@ -252,9 +252,8 @@ const AGGREGATE_DIRS = (() => {
     return null;
   };
   const cands = parse(process.env.FEDERATION_DIRS) || parse(process.env.AGGREGATE_DIRS) || [
-    { name: 'Hermes', dir: 'D:\\AI\\castalia\\run\\Castalia\\memory' },
-    { name: 'LobeHub', dir: 'D:\\AI\\lobehub-run\\memory' },
-    { name: 'AIRI', dir: 'D:\\AI\\castalia\\run\\Castalia-Anima\\memory' },
+    /* 公开仓不带本机路径:默认只挂本实例自己的库;多成员联邦请用 FEDERATION_DIRS 环境变量配置 */
+    { name: 'local', dir: DB_DIR },
   ];
   const norm = (d) => String(d || '').replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
   if (DB_DIR && !cands.some(c => norm(c.dir) === norm(DB_DIR))) cands.push({ name: '当前实例', dir: DB_DIR });
