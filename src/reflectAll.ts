@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { resolveFedLibraries, type FedLibrary } from './federation/index.js';
 import { currentMemDir, DatabaseManager, generateId, initProjectSchema, memTypeDir } from './db.js';
-import { makeLlmChannel, callLlm } from './reflectDriver.js';
+import { makeLlmChannel, callLlm, REFLECT_DEEP_MAX_TOKENS } from './reflectDriver.js';
 import { normalizeMemType, MemType } from './memType.js';
 
 export interface ReflectAllOptions {
@@ -247,7 +247,7 @@ export async function runReflectAll(opts?: ReflectAllOptions): Promise<ReflectAl
     return { ...base, errors: ['REFLECT LLM 未配置(REFLECT_LLM_API_KEY 缺失),无法执行跨库反思'] };
   }
   const userPrompt = buildReflectAllUserPrompt(groups).slice(0, USER_PROMPT_CUT);
-  const llm = await callLlm(buildReflectAllSystemPrompt(), userPrompt, channel);
+  const llm = await callLlm(buildReflectAllSystemPrompt(), userPrompt, channel, REFLECT_DEEP_MAX_TOKENS);
   if (!llm) {
     return { ...base, errors: ['LLM 调用失败(通道 REFLECT)'] };
   }
