@@ -156,7 +156,8 @@ const LABEL_DIM = 0.12;                          /* 被压住时淡到多低(而
 /* v1.51 前后大小关系(近大远小 + 远处略暗):按"在相机坐标系里离相机多近"给每个标签一个 depth 权重,
  * front=1 表示位于场景最靠近相机的一层。visual 上等价于地图的"近处标注大、远处小",但因为是 DOM,
  * 用的是 CSS transform: scale()(不重排、字体仍清晰),而不是改字号(改字号会每帧强制 layout)。 */
-const LABEL_DEPTH = { min: 0.78, max: 1.16, dim: 0.74 };
+const LABEL_DEPTH = { min: 0.78, max: 1.16, dim: 0.52, dimPow: 1.35 };
+/* dim = 最远处(back)的不透明度系数,dimPow>1 让"越靠后掉得越快、近处基本不动" */
 function syncDomLabels() {
   if (!graphInstance || typeof THREE === 'undefined') return;
   const nodes = (window.__nebulaNodes || []).filter(n => n.__labelLevel);
@@ -266,7 +267,7 @@ function syncDomLabels() {
       placed.push({ L: bx - c.w / 2 - PAD, R: bx + c.w / 2 + PAD, T: by - c.h / 2 - PAD, B: by + c.h / 2 + PAD });
     } else { degraded++; }
     const base = LABEL_BASE_OPACITY[(c.el.className.match(/lv-(\w+)/) || [])[1]] || 0.9;
-    const depthDim = LABEL_DEPTH.dim + (1 - LABEL_DEPTH.dim) * c.front;   /* 越靠后越暗(空气透视) */
+    const depthDim = LABEL_DEPTH.dim + (1 - LABEL_DEPTH.dim) * Math.pow(c.front, LABEL_DEPTH.dimPow);   /* 越靠后越淡(空气透视) */
     const alpha = base * c.wgt * (0.10 + 0.90 * c.dodgeK) * (ok ? 1 : LABEL_DIM) * depthDim;
     c.el.style.visibility = '';
     c.el.style.opacity = alpha.toFixed(3);
