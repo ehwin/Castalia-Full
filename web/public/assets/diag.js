@@ -16,3 +16,24 @@ window.addEventListener('viz-libs-ready', function () {
     if (el) el.innerHTML = '❌ 3D 库诊断: three=' + window.__vizDiag.three + ' | ForceGraph3D=' + window.__vizDiag.forceGraph3D + ' — 浏览器不支持 ESM(module script)或脚本被拦截,请用较新浏览器';
   }
 });
+
+/* 运行期错误上屏:JS 抛错/未处理的 Promise 拒绝 → 右上角红条显示(排查拆文件后的加载/作用域问题) */
+(function () {
+  function bar(txt) {
+    var d = document.getElementById('viz-error-bar');
+    if (!d) {
+      d = document.createElement('div'); d.id = 'viz-error-bar';
+      d.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:999999;max-width:44vw;'
+        + 'font:12px/1.5 Consolas,monospace;color:#ffd9d9;background:rgba(120,20,20,.92);'
+        + 'border:1px solid #ff6b6b;border-radius:8px;padding:8px 10px;white-space:pre-wrap;pointer-events:none';
+      (document.body || document.documentElement).appendChild(d);
+    }
+    d.textContent = (d.textContent ? d.textContent + '\n' : '') + txt;
+  }
+  window.addEventListener('error', function (e) {
+    bar('✖ ' + (e.message || e.error) + (e.filename ? '  @' + String(e.filename).split('/').pop() + ':' + e.lineno : ''));
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e.reason; bar('✖ Promise: ' + (r && (r.message || r) || 'unknown'));
+  });
+})();
