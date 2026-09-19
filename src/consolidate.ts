@@ -19,6 +19,18 @@ export const CONSOLIDATE_SIMILARITY = (() => {
   return Number.isFinite(v) && v > 0 ? v : 0.88;
 })();
 
+/**
+ * v1.11 结构兜底候选:反思/摘要写出的"报告式"记忆(表头形如 `# User Profile: …`)表头相同、内容各异,
+ * 实测组内向量余弦中位只有 0.55(远低于 0.88 阈值)、词袋重叠 0.06 —— 纯语义预筛抓不到它们,
+ * 于是这类"看着像重复"的记忆永远进不了 LLM 裁决。这里按 (memType + `# 表头`) 分桶补候选:
+ * 每桶以"最长的一条"为锚,最多补 N 对,判断权仍完全交给 LLM(它完全可以判"不是重复")。
+ * 设 0 即关闭该兜底。
+ */
+export const CONSOLIDATE_BUCKET_PAIRS = (() => {
+  const v = parseInt(process.env.CONSOLIDATE_BUCKET_PAIRS || '3', 10);
+  return Number.isFinite(v) && v >= 0 ? v : 3;
+})();
+
 /** 候选对数上限,防止相似爆炸 */
 export const CONSOLIDATE_MAX_PAIRS = (() => {
   const v = parseInt(process.env.CONSOLIDATE_MAX_PAIRS || '50', 10);
@@ -105,6 +117,44 @@ export async function findSimilarCandidates(
       seen.add(key);
       pairs.push({ idA: a, idB: b, similarity: Math.round(sim * 1000) / 1000 });
       if (pairs.length >= limit) return pairs;
+    }
+  }
+
+  // ═══ v1.11 结构兜底:同 `# 表头` + 同 memType 分桶补候选(相似度记 0,表示"结构配对"而非语义相似)═══
+  if (CONSOLIDATE_BUCKET_PAIRS > 0 && pairs.length < limit) {
+    let rows2: any[] = [];
+    try {
+      rows2 = db.prepare(`
+        SELECT id, text, mem_type FROM memory
+        WHERE is_active = 1 AND project = ? AND (locked IS NULL OR locked = 0)
+        ORDER BY created_at DESC LIMIT 500
+      `).all(proj) as any[];
+    } catch { rows2 = []; }
+    const buckets = new Map<string, any[]>();
+    for (const r of rows2) {
+      const mm = /^\s*#\s*([^:\n·]{2,26})/.exec(String(r.text || ''));
+      if (!mm) continue;
+      const head = mm[1].replace(/\s+/g, ' ').trim();
+      if (!head) continue;
+      const key = String(r.mem_type || 'general') + '\u0000' + head;
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key)!.push(r);
+    }
+    for (const [, arr] of buckets) {
+      if (arr.length < 2) continue;
+      // 锚 = 最长的一条(信息量最大),其余各与锚配一对
+      const sorted = arr.slice().sort((a, b) => String(b.text || '').length - String(a.text || '').length);
+      let added = 0;
+      for (let i = 1; i < sorted.length && added < CONSOLIDATE_BUCKET_PAIRS; i++) {
+        const a = String(sorted[0].id), b = String(sorted[i].id);
+        if (!a || !b || a === b) continue;
+        const k = a < b ? `${a}|${b}` : `${b}|${a}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        pairs.push({ idA: a, idB: b, similarity: 0 });
+        added++;
+        if (pairs.length >= limit) return pairs;
+      }
     }
   }
   return pairs;
