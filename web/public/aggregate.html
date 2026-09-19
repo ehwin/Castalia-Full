@@ -154,7 +154,18 @@ async function loadOverview() {
   const box = document.getElementById('libs');
   try {
     const d = await j('/api/aggregate/overview');
-    LIBS = d.libraries || [];
+    /* overview 是按 **(库 × memType)** 一个文件列出来的 —— 同一个库会出现 3~4 行
+     * (user/feedback/project/general 各一个 sqlite),照原样列就会看到"default ×4"这种假重复。
+     * 侧栏按 (instance, project) 归并求和,行数才是真正的库数。 */
+    const merged = new Map();
+    for (const l of (d.libraries || [])) {
+      const k = l.instance + '\u0000' + l.project;
+      const cur = merged.get(k) || { instance: l.instance, project: l.project, memories: 0, facts: 0, files: 0, lastActivity: null };
+      cur.memories += l.memories || 0; cur.facts += l.facts || 0; cur.files += 1;
+      if (l.lastActivity && (!cur.lastActivity || l.lastActivity > cur.lastActivity)) cur.lastActivity = l.lastActivity;
+      merged.set(k, cur);
+    }
+    LIBS = [...merged.values()];
     const total = LIBS.reduce((a, l) => a + (l.memories || 0), 0);
     const facts = LIBS.reduce((a, l) => a + (l.facts || 0), 0);
     document.getElementById('meta').textContent = CURRENT.kind === 'recent'
@@ -174,7 +185,7 @@ async function loadOverview() {
       html += `<div class="grp">${esc(inst)} · ${arr.length}</div>`;
       for (const l of arr) {
         const on = CURRENT.kind === 'lib' && CURRENT.instance === l.instance && CURRENT.project === l.project;
-        html += `<div class="lib-row ${on ? 'on' : ''}" onclick="showLib(${JSON.stringify(l.instance)}, ${JSON.stringify(l.project)})" title="${esc(l.instance)} / ${esc(l.project)}">
+        html += `<div class="lib-row ${on ? 'on' : ''}" onclick="showLib(${JSON.stringify(l.instance)}, ${JSON.stringify(l.project)})" title="${esc(l.instance)} / ${esc(l.project)} · ${l.files} 个 memType 文件">
           <span class="dot" style="background:${colorOf(l.instance)}"></span>
           <span class="nm">${esc(l.project)}</span>
           <span class="n">${l.memories ?? 0}</span></div>`;
