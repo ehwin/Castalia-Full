@@ -6,22 +6,26 @@
 <title>记忆总成 · Castalia</title>
 <link rel="icon" type="image/png" href="/favicon.png">
 <style>
-  /* ═══ 记忆总成(2026-09-19 改侧边栏两栏式)═════════════════════════════════
-   * 用户反馈:"条数又多、还要上滑下滚,交互不方便" → 左栏导航(搜索/库列表),右栏内容,
-   * 两栏各自滚动,页面本身不滚。交互(搜索/建库/刷新)全在左栏顶部。
+  /* ═══ 记忆总成(2026-09-19 v3:搜索在内容区顶部,侧栏管"看哪个库")═════════════
+   * 用户定的信息结构:
+   *   · 右侧内容区最上面 = 搜索框,紧随其后就是"近期内容"(最近的记忆 / 该库记忆 / 搜索结果)
+   *   · 左侧边栏 = 全部库列表(选看哪个库)+ 显示空库 / 建库 / 刷新
+   *   · 页面本身不滚(两栏各自滚)
+   * 逻辑:侧栏选"作用域"(全部库 或 某个库),搜索在当前作用域内进行 ——
+   *   全部库 → /api/aggregate/search(跨库语义检索);某个库 → /api/manage/memories?q=(库内 LIKE)
    * embed=1(外壳承载)时隐藏自带顶栏,导航交给外壳。
    * ══════════════════════════════════════════════════════════════════════ */
   :root {
-    --bg: #07090D; --panel: #12171F; --panel2: #171D27; --border: rgba(255,255,255,0.08);
+    --bg: #07090D; --panel: #12171F; --border: rgba(255,255,255,0.08);
     --text: #E8EDF2; --dim: #8A94A3; --dim2: #6B7484; --accent: #3EE8C8; --accent2: #7EB0FF;
-    --ok: #57E6C4; --warn: #F5B942; --err: #f4554f;
+    --ok: #57E6C4; --err: #f4554f;
     --hermes: #5FF5D6; --lobehub: #7EB0FF; --airi: #FF8FB8; --fed: #FFD056;
     --r: 10px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
-  body { background: var(--bg); color: var(--text); overflow: hidden;
-    font-family: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", sans-serif; display: flex; flex-direction: column; }
+  body { background: var(--bg); color: var(--text); overflow: hidden; display: flex; flex-direction: column;
+    font-family: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", sans-serif; }
 
   .app-head { display: flex; align-items: center; gap: 14px; height: 52px; flex: 0 0 52px; padding: 0 20px;
     background: #080A0F; border-bottom: 1px solid var(--border); }
@@ -35,49 +39,48 @@
 
   .layout { flex: 1; display: flex; min-height: 0; }
 
-  /* ── 左栏:交互 + 导航 ── */
-  .side { width: 296px; flex: 0 0 296px; border-right: 1px solid var(--border); background: #0B0E14;
+  /* ── 左栏:作用域(看哪个库)── */
+  .side { width: 268px; flex: 0 0 268px; border-right: 1px solid var(--border); background: #0B0E14;
     display: flex; flex-direction: column; min-height: 0; }
-  .side-top { padding: 12px 12px 10px; border-bottom: 1px solid var(--border); }
-  #q { width: 100%; background: var(--panel); border: 1px solid var(--border); color: var(--text);
-    border-radius: var(--r); padding: 10px 12px 10px 34px; font-size: 14px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238A94A3' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M20 20l-3.5-3.5'/%3E%3C/svg%3E");
-    background-repeat: no-repeat; background-position: 10px center; background-size: 16px; }
-  input[type=text] { background: var(--panel); border: 1px solid var(--border); color: var(--text);
-    border-radius: var(--r); padding: 9px 12px; font-size: 13px; }
-  input[type=text]:focus { outline: none; border-color: rgba(62,232,200,.55); box-shadow: 0 0 0 3px rgba(62,232,200,.12); }
-  button { background: var(--accent); color: #05221C; border: none; border-radius: var(--r); padding: 9px 14px;
-    font-size: 13px; font-weight: 600; cursor: pointer; }
-  button:hover { filter: brightness(1.12); }
-  button.ghost { background: transparent; border: 1px solid var(--border); color: var(--dim); font-weight: 500; }
-  button.ghost:hover { color: var(--text); border-color: rgba(255,255,255,.2); }
-  .btn-row { display: flex; gap: 6px; margin-top: 8px; }
-  .btn-row button { flex: 1; }
-
-  .libs { flex: 1; overflow-y: auto; padding: 8px 8px 4px; }
+  .side-title { padding: 12px 14px 6px; color: var(--dim2); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+  .libs { flex: 1; overflow-y: auto; padding: 4px 8px 6px; }
   .libs::-webkit-scrollbar, #list::-webkit-scrollbar { width: 9px; }
   .libs::-webkit-scrollbar-thumb, #list::-webkit-scrollbar-thumb { background: rgba(255,255,255,.10); border-radius: 6px; }
   .libs::-webkit-scrollbar-thumb:hover, #list::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.18); }
-  .libs .grp { color: var(--dim2); font-size: 11px; letter-spacing: .04em; padding: 10px 8px 4px; text-transform: uppercase; }
-  .toggle { display: flex; align-items: center; gap: 7px; padding: 8px 14px 0; color: var(--dim2); font-size: 12px; cursor: pointer; user-select: none; }
-  .toggle input { accent-color: var(--accent); }
-  .toggle .hint { margin-left: auto; }
+  .grp { color: var(--dim2); font-size: 11px; letter-spacing: .04em; padding: 10px 8px 4px; text-transform: uppercase; }
   .lib-row { display: flex; align-items: center; gap: 8px; padding: 8px 9px; border-radius: 8px; cursor: pointer; font-size: 13px; }
   .lib-row:hover { background: rgba(255,255,255,.045); }
   .lib-row.on { background: rgba(62,232,200,.10); box-shadow: inset 2px 0 0 var(--accent); }
   .lib-row .dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; }
   .lib-row .nm { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .lib-row .pj { color: var(--dim2); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .lib-row .n { margin-left: auto; color: var(--ok); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .toggle { display: flex; align-items: center; gap: 7px; padding: 6px 14px; color: var(--dim2); font-size: 12px; cursor: pointer; user-select: none; }
+  .toggle input { accent-color: var(--accent); }
+  .toggle .hint { margin-left: auto; }
   .side-foot { padding: 10px 12px; border-top: 1px solid var(--border); }
-  #newLib { width: 100%; margin-bottom: 8px; }
+  .side-foot input[type=text] { width: 100%; margin-bottom: 8px; }
   #status { display: block; margin-top: 6px; font-size: 11.5px; color: var(--dim2); }
   .ok { color: var(--ok); } .err { color: var(--err); }
 
-  /* ── 右栏:内容 ── */
+  /* ── 右栏:搜索框在最上,紧随其后是内容 ── */
   .pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-  .pane-head { flex: 0 0 auto; display: flex; align-items: baseline; gap: 12px; padding: 14px 20px 10px;
-    border-bottom: 1px solid var(--border); }
+  .pane-top { flex: 0 0 auto; padding: 14px 20px 10px; border-bottom: 1px solid var(--border); }
+  .search-row { display: flex; gap: 8px; align-items: center; }
+  #q { flex: 1; background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    border-radius: var(--r); padding: 11px 14px 11px 38px; font-size: 15px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238A94A3' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M20 20l-3.5-3.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: 12px center; background-size: 17px; }
+  input[type=text] { background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    border-radius: var(--r); padding: 9px 12px; font-size: 13px; }
+  input[type=text]:focus { outline: none; border-color: rgba(62,232,200,.55); box-shadow: 0 0 0 3px rgba(62,232,200,.12); }
+  button { background: var(--accent); color: #05221C; border: none; border-radius: var(--r); padding: 10px 16px;
+    font-size: 13px; font-weight: 600; cursor: pointer; }
+  button:hover { filter: brightness(1.12); }
+  button.ghost { background: transparent; border: 1px solid var(--border); color: var(--dim); font-weight: 500; }
+  button.ghost:hover { color: var(--text); border-color: rgba(255,255,255,.2); }
+  .btn-row { display: flex; gap: 6px; }
+  .btn-row button { flex: 1; }
+  .pane-head { display: flex; align-items: baseline; gap: 12px; margin-top: 12px; }
   .pane-head h2 { font-size: 15px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
   .pane-head h2::before { content: ""; width: 3px; height: 14px; background: var(--accent2); border-radius: 2px; }
   .pane-head .meta { color: var(--dim); font-size: 12px; margin-left: auto; white-space: nowrap; }
@@ -106,17 +109,11 @@
 </div>
 
 <div class="layout">
-  <!-- 左栏:交互置顶 + 库导航 -->
+  <!-- 左栏:全部库(选作用域) -->
   <aside class="side">
-    <div class="side-top">
-      <input type="text" id="q" placeholder="跨全部库搜索…" onkeydown="if(event.key==='Enter')doSearch(); if(event.key==='Escape')showRecent()">
-      <div class="btn-row">
-        <button onclick="doSearch()">搜索</button>
-        <button class="ghost" onclick="showRecent()">全部库</button>
-      </div>
-    </div>
-    <label class="toggle"><input type="checkbox" id="showEmpty" onchange="loadOverview()"><span>显示空库</span><span class="hint" id="emptyHint"></span></label>
+    <div class="side-title">全部库</div>
     <nav class="libs" id="libs"><div class="empty">加载中…</div></nav>
+    <label class="toggle"><input type="checkbox" id="showEmpty" onchange="loadOverview()"><span>显示空库</span><span class="hint" id="emptyHint"></span></label>
     <div class="side-foot">
       <input type="text" id="newLib" placeholder="新建库名（字母/数字/._-）" onkeydown="if(event.key==='Enter')createLib()">
       <div class="btn-row">
@@ -127,11 +124,19 @@
     </div>
   </aside>
 
-  <!-- 右栏:内容(自己滚,页面不滚) -->
+  <!-- 右栏:搜索框在最上,下面就是内容 -->
   <section class="pane">
-    <div class="pane-head">
-      <h2 id="title">最近动态</h2>
-      <span class="meta" id="meta"></span>
+    <div class="pane-top">
+      <div class="search-row">
+        <input type="text" id="q" placeholder="搜索记忆…（回车即搜，Esc 清空）"
+               onkeydown="if(event.key==='Enter')doSearch(); if(event.key==='Escape')clearSearch()">
+        <button onclick="doSearch()">搜索</button>
+        <button class="ghost" onclick="clearSearch()">清空</button>
+      </div>
+      <div class="pane-head">
+        <h2 id="title">最近动态</h2>
+        <span class="meta" id="meta"></span>
+      </div>
     </div>
     <div id="list"></div>
   </section>
@@ -142,122 +147,113 @@ try { if (new URLSearchParams(location.search).has('embed')) document.body.class
 
 const INST_COLOR = { Hermes: 'var(--hermes)', LobeHub: 'var(--lobehub)', AIRI: 'var(--airi)', federation: 'var(--fed)' };
 let LIBS = [];
-let CURRENT = { kind: 'recent' };      /* recent | lib | search */
+let SCOPE = { kind: 'recent' };        /* recent = 全部库(最近动态) | lib = 某个库 */
+let QUERY = '';                        /* 非空 = 正在看搜索结果(在当前作用域内搜) */
 
 async function j(url, opt) { const r = await fetch(url, opt); return r.json(); }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmtTime(t) { if (!t) return '—'; const d = new Date(String(t).replace(' ', 'T') + 'Z'); if (isNaN(d)) return String(t); return d.toLocaleString('zh-CN', { hour12: false }); }
-function colorOf(inst) { return INST_COLOR[inst] || 'var(--accent2)'; }
+function colorOf(i) { return INST_COLOR[i] || 'var(--accent2)'; }
+function setHead(title, meta) { document.getElementById('title').textContent = title; document.getElementById('meta').textContent = meta || ''; }
 
-/* ── 左栏库列表 ── */
+/* ── 左栏:全部库 ── */
 async function loadOverview() {
   const box = document.getElementById('libs');
   try {
     const d = await j('/api/aggregate/overview');
-    /* overview 是按 **(库 × memType)** 一个文件列出来的 —— 同一个库会出现 3~4 行
-     * (user/feedback/project/general 各一个 sqlite),照原样列就会看到"default ×4"这种假重复。
-     * 侧栏按 (instance, project) 归并求和,行数才是真正的库数。 */
+    /* overview 按 **(库 × memType)** 一个文件枚举,同一库会出现 3~5 行(每个 memType 一个 sqlite)
+     * → 按 (instance, project) 归并求和,行数才是真正的库数(实测 44 行 → 10 个库)。 */
     const merged = new Map();
     for (const l of (d.libraries || [])) {
       const k = l.instance + '\u0000' + l.project;
-      const cur = merged.get(k) || { instance: l.instance, project: l.project, memories: 0, facts: 0, files: 0, lastActivity: null };
+      const cur = merged.get(k) || { instance: l.instance, project: l.project, memories: 0, facts: 0, files: 0 };
       cur.memories += l.memories || 0; cur.facts += l.facts || 0; cur.files += 1;
-      if (l.lastActivity && (!cur.lastActivity || l.lastActivity > cur.lastActivity)) cur.lastActivity = l.lastActivity;
       merged.set(k, cur);
     }
     LIBS = [...merged.values()];
-    const total = LIBS.reduce((a, l) => a + (l.memories || 0), 0);
-    const facts = LIBS.reduce((a, l) => a + (l.facts || 0), 0);
-    document.getElementById('meta').textContent = CURRENT.kind === 'recent'
-      ? `${LIBS.length} 个库 · 记忆 ${total} 条 · 事实 ${facts} 条` : document.getElementById('meta').textContent;
+    const total = LIBS.reduce((a, l) => a + l.memories, 0);
+    if (!QUERY && SCOPE.kind === 'recent') setHead('最近动态', `全部库 · ${total} 条记忆`);
 
-    /* 空库(0 记忆 0 事实)默认不列 —— 实测 44 个库里大半是空壳,全列出来噪声太大 */
     const showEmpty = document.getElementById('showEmpty').checked;
-    const hidden = LIBS.filter(l => !(l.memories || 0) && !(l.facts || 0)).length;
-    document.getElementById('emptyHint').textContent = hidden ? `已隐藏 ${hidden}` : '';
-    const shown = showEmpty ? LIBS : LIBS.filter(l => (l.memories || 0) || (l.facts || 0));
+    const blanks = LIBS.filter(l => !l.memories && !l.facts);
+    document.getElementById('emptyHint').textContent = blanks.length ? `已隐藏 ${blanks.length}` : '';
+    const shown = showEmpty ? LIBS : LIBS.filter(l => l.memories || l.facts);
     const groups = {};
     for (const l of shown) (groups[l.instance] = groups[l.instance] || []).push(l);
-    let html = `<div class="lib-row ${CURRENT.kind === 'recent' ? 'on' : ''}" onclick="showRecent()">
-        <span class="dot" style="background:var(--accent)"></span><span class="nm">最近动态</span>
-        <span class="n">${total}</span></div>`;
+
+    let html = `<div class="lib-row ${SCOPE.kind === 'recent' ? 'on' : ''}" onclick="pickRecent()">
+        <span class="dot" style="background:var(--accent)"></span><span class="nm">最近动态</span><span class="n">${total}</span></div>`;
     for (const [inst, arr] of Object.entries(groups)) {
       html += `<div class="grp">${esc(inst)} · ${arr.length}</div>`;
       for (const l of arr) {
-        const on = CURRENT.kind === 'lib' && CURRENT.instance === l.instance && CURRENT.project === l.project;
-        html += `<div class="lib-row ${on ? 'on' : ''}" onclick="showLib(${JSON.stringify(l.instance)}, ${JSON.stringify(l.project)})" title="${esc(l.instance)} / ${esc(l.project)} · ${l.files} 个 memType 文件">
+        const on = SCOPE.kind === 'lib' && SCOPE.instance === l.instance && SCOPE.project === l.project;
+        html += `<div class="lib-row ${on ? 'on' : ''}" onclick="pickLib(${JSON.stringify(l.instance)}, ${JSON.stringify(l.project)})"
+          title="${esc(l.instance)} / ${esc(l.project)} · ${l.files} 个 memType 文件">
           <span class="dot" style="background:${colorOf(l.instance)}"></span>
-          <span class="nm">${esc(l.project)}</span>
-          <span class="n">${l.memories ?? 0}</span></div>`;
+          <span class="nm">${esc(l.project)}</span><span class="n">${l.memories}</span></div>`;
       }
     }
     box.innerHTML = html;
-  } catch (e) {
-    box.innerHTML = `<div class="empty">总览加载失败: ${esc(e.message)}</div>`;
-  }
+  } catch (e) { box.innerHTML = `<div class="empty">总览加载失败: ${esc(e.message)}</div>`; }
 }
 
-function setHead(title, meta) {
-  document.getElementById('title').textContent = title;
-  document.getElementById('meta').textContent = meta || '';
-}
+/* ── 作用域切换 ── */
+function pickRecent() { SCOPE = { kind: 'recent' }; QUERY = ''; document.getElementById('q').value = ''; render(); }
+function pickLib(instance, project) { SCOPE = { kind: 'lib', instance, project }; QUERY = ''; document.getElementById('q').value = ''; render(); }
 
-/* ── 右栏三种内容 ── */
-async function showRecent() {
-  CURRENT = { kind: 'recent' };
-  setHead('最近动态', '加载中…');
+/* ── 右栏内容:一个 render 管三种情况(最近动态 / 库内列表 / 搜索结果)── */
+async function render() {
   const box = document.getElementById('list');
+  const scopeName = SCOPE.kind === 'lib' ? `${SCOPE.project}` : '最近动态';
+  if (QUERY) setHead(`${scopeName} · 搜索「${QUERY}」`, '搜索中…');
+  else setHead(scopeName, '加载中…');
   box.innerHTML = '<div class="empty">加载中…</div>';
   try {
-    const d = await j('/api/aggregate/recent?limit=80');
-    setHead('最近动态', `全部库 · ${d.count ?? 0} 条`);
-    box.innerHTML = !d.count ? '<div class="empty">还没有记忆</div>' : d.results.map(r => `
-      <div class="row">
-        <span class="where">${esc(r.instance)}/${esc(r.project)}</span>
-        <span class="txt" title="${esc(r.text)}">${esc(r.text)}</span>
-        <span class="time">${fmtTime(r.createdAt)}</span>
-      </div>`).join('');
-  } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
-  loadOverview();
-}
-
-async function showLib(instance, project) {
-  CURRENT = { kind: 'lib', instance, project };
-  setHead(`${project}`, '加载中…');
-  const box = document.getElementById('list');
-  box.innerHTML = '<div class="empty">加载中…</div>';
-  try {
-    const d = await j(`/api/manage/memories?instance=${encodeURIComponent(instance)}&project=${encodeURIComponent(project)}&limit=500`);
-    if (!d.ok) { setHead(project, ''); box.innerHTML = `<div class="empty">${esc(d.error || '读取失败')}</div>`; loadOverview(); return; }
-    setHead(`${project}`, `${instance} · ${d.count ?? 0} 条记忆`);
-    box.innerHTML = !d.memories.length ? '<div class="empty">这个库还没有记忆</div>' : d.memories.map(m => `
-      <div class="row">
-        <span class="where">${esc(m.memType || 'general')}${m.important ? ' ⭐' : ''}</span>
+    if (QUERY) {
+      /* 全部库 → 跨库语义检索;某个库 → 库内 LIKE(用 /api/manage/memories 的 q) */
+      if (SCOPE.kind === 'lib') {
+        const d = await j(`/api/manage/memories?instance=${encodeURIComponent(SCOPE.instance)}&project=${encodeURIComponent(SCOPE.project)}&q=${encodeURIComponent(QUERY)}&limit=500`);
+        if (!d.ok) { box.innerHTML = `<div class="empty">${esc(d.error || '搜索失败')}</div>`; setHead(`${SCOPE.project} · 搜索「${QUERY}」`, ''); return; }
+        setHead(`${SCOPE.project} · 搜索「${QUERY}」`, `库内命中 ${d.count ?? 0} 条`);
+        box.innerHTML = !d.memories.length ? '<div class="empty">这个库里没有命中</div>' : d.memories.map(m => `
+          <div class="row"><span class="where">${esc(m.memType || 'general')}${m.important ? ' ⭐' : ''}</span>
+          <span class="txt" title="${esc(m.text)}">${esc(m.text)}</span>
+          <span class="time">${fmtTime(m.createdAt)}</span></div>`).join('');
+      } else {
+        const d = await j('/api/aggregate/search?q=' + encodeURIComponent(QUERY) + '&topK=30');
+        if (!d.ok) { box.innerHTML = `<div class="empty">${esc(d.error || '搜索失败')}</div>`; setHead(`搜索「${QUERY}」`, ''); return; }
+        setHead(`搜索「${QUERY}」`, `命中 ${d.count ?? 0} 条 · 全部库`);
+        box.innerHTML = !d.count ? '<div class="empty">没有命中</div>' : d.results.map(r => `
+          <div class="card"><div class="meta">[<span class="inst">${esc(r.instance)}</span> · <span class="proj">${esc(r.project)}</span>] 匹配 ${r.score} · ${fmtTime(r.createdAt)}</div>
+          <div class="txt">${esc(r.text)}</div></div>`).join('');
+      }
+    } else if (SCOPE.kind === 'lib') {
+      const d = await j(`/api/manage/memories?instance=${encodeURIComponent(SCOPE.instance)}&project=${encodeURIComponent(SCOPE.project)}&limit=500`);
+      if (!d.ok) { box.innerHTML = `<div class="empty">${esc(d.error || '读取失败')}</div>`; setHead(SCOPE.project, ''); return; }
+      const mem = d.memories || [];
+      setHead(SCOPE.project, `${SCOPE.instance} · ${d.count ?? mem.length} 条记忆`);
+      box.innerHTML = !mem.length ? '<div class="empty">这个库还没有记忆</div>' : mem.map(m => `
+        <div class="row"><span class="where">${esc(m.memType || 'general')}${m.important ? ' ⭐' : ''}</span>
         <span class="txt" title="${esc(m.text)}">${esc(m.text)}</span>
-        <span class="time">${fmtTime(m.createdAt)}</span>
-      </div>`).join('');
+        <span class="time">${fmtTime(m.createdAt)}</span></div>`).join('');
+    } else {
+      const d = await j('/api/aggregate/recent?limit=80');
+      setHead('最近动态', `全部库 · ${d.count ?? 0} 条`);
+      box.innerHTML = !d.count ? '<div class="empty">还没有记忆</div>' : d.results.map(r => `
+        <div class="row"><span class="where">${esc(r.instance)}/${esc(r.project)}</span>
+        <span class="txt" title="${esc(r.text)}">${esc(r.text)}</span>
+        <span class="time">${fmtTime(r.createdAt)}</span></div>`).join('');
+    }
   } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   loadOverview();
 }
 
-async function doSearch() {
-  const q = document.getElementById('q').value.trim();
-  if (!q) { showRecent(); return; }
-  CURRENT = { kind: 'search', q };
-  const box = document.getElementById('list');
-  setHead(`搜索：${q}`, '搜索中…');
-  box.innerHTML = '<div class="empty">搜索中…</div>';
-  try {
-    const d = await j('/api/aggregate/search?q=' + encodeURIComponent(q) + '&topK=30');
-    if (!d.ok) { box.innerHTML = `<div class="empty">${esc(d.error || '搜索失败')}</div>`; setHead(`搜索：${q}`, ''); return; }
-    setHead(`搜索：${q}`, `命中 ${d.count ?? 0} 条 · 全部库`);
-    box.innerHTML = !d.count ? '<div class="empty">没有命中</div>' : d.results.map(r => `
-      <div class="card">
-        <div class="meta">[<span class="inst">${esc(r.instance)}</span> · <span class="proj">${esc(r.project)}</span>] 匹配 ${r.score} · ${fmtTime(r.createdAt)}</div>
-        <div class="txt">${esc(r.text)}</div>
-      </div>`).join('');
-  } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+function doSearch() {
+  const v = document.getElementById('q').value.trim();
+  if (!v) { clearSearch(); return; }
+  QUERY = v; render();
 }
+function clearSearch() { QUERY = ''; document.getElementById('q').value = ''; render(); document.getElementById('q').focus(); }
 
 async function createLib() {
   const name = document.getElementById('newLib').value.trim();
@@ -275,12 +271,10 @@ async function createLib() {
 function refreshAll() {
   const st = document.getElementById('status');
   st.textContent = '刷新中…';
-  const p = CURRENT.kind === 'lib' ? showLib(CURRENT.instance, CURRENT.project)
-          : CURRENT.kind === 'search' ? doSearch() : showRecent();
-  Promise.resolve(p).then(() => { st.innerHTML = '<span class="ok">已刷新</span>'; setTimeout(() => { if (st.textContent === '已刷新') st.textContent = ''; }, 1500); });
+  Promise.resolve(render()).then(() => { st.innerHTML = '<span class="ok">已刷新</span>'; setTimeout(() => { if (st.textContent === '已刷新') st.textContent = ''; }, 1500); });
 }
 
-showRecent();
+render();
 </script>
 </body>
 </html>
