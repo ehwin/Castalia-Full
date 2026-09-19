@@ -1,3 +1,45 @@
+/* ══════════════════════════════════════════════════════════════════════════════
+ *  共享可变状态清单(app-01..07 共用一个全局作用域,这里是全部"谁都能改"的顶层变量)
+ *  —— 改前端前先扫一眼这张表:它们大多是渲染流程的临时状态,不要顺手改名/挪文件。
+ *
+ *  文件列 = 该变量声明在哪个模块(声明文件之前的模块看不到它);
+ *  提示   = 声明处的初始值。
+ *   graphInstance          02       = null;
+ *   allData                02       = null;
+ *   currentView            02       = 'nebula';
+ *   selectedNodeId         02       = null;
+ *   selNeighbors           02       = null;
+ *   panelNode              02       = null;
+ *   autoTourActive         02       = false;
+ *   autoTourTimer          02       = null;
+ *   autoTargetId           02       = null;
+ *   panelStack             02       = [];
+ *   flyingUntil            02       = 0;
+ *   lodFar                 02       = null;
+ *   labelTier              03       = 'mid';
+ *   labelRAF               03       = null;
+ *   starField              04       = null;
+ *   orbitRAF               04       = null;
+ *   orbitAngle             04       = null;
+ *   lastInteraction        04       = 0;
+ *   interactionBound       04       = false;
+ *   hoverSet               04       = null;
+ *   hoveredNodeId          04       = null;
+ *   searchQuery            04       = '';
+ *   typeFilter             04       = null;
+ *   projectFilter          04       = null;
+ *   instanceFilter         04       = null;
+ *   expandedKey            04       = null;
+ *   nebulaPoints           06       = null, nebulaGlow = null, nebulaWeb = null;
+ *   nebulaTrunk            06       = null, nebulaIntra = null, nebulaSparse = null;
+ *   _nebulaSprite          06       = null;
+ *   tourCursor             07       = null;
+ *   tourSeen               07       = new Set();
+ *   allMems                07       = [];
+ *
+ *  2026-09-19 评估过把这些收进一个 state 对象:收益(名字空间清晰)远小于风险
+ *  (全库 ~500 处引用要一起改,视觉回归难查),故保留扁平全局 + 本清单。
+ * ═══════════════════════════════════════════════════════════════════════════ */
 /* ══════════════════════════════════════════════════════════════════════════
    app-01-config.js — 常量与配色口径 / 作用域判定 / 连线语义编码
    (2026-09-19 从单文件 app.js 按段落边界切出;加载顺序即依赖顺序,

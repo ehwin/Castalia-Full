@@ -153,6 +153,10 @@ function labelPxFor(level, w) {
   return q(LABEL_PX.gal.near);
 }
 const LABEL_DIM = 0.12;                          /* 被压住时淡到多低(而不是直接隐藏) */
+/* v1.51 前后大小关系(近大远小 + 远处略暗):按"在相机坐标系里离相机多近"给每个标签一个 depth 权重,
+ * front=1 表示位于场景最靠近相机的一层。visual 上等价于地图的"近处标注大、远处小",但因为是 DOM,
+ * 用的是 CSS transform: scale()(不重排、字体仍清晰),而不是改字号(改字号会每帧强制 layout)。 */
+const LABEL_DEPTH = { min: 0.78, max: 1.16, dim: 0.74 };
 function syncDomLabels() {
   if (!graphInstance || typeof THREE === 'undefined') return;
   const nodes = (window.__nebulaNodes || []).filter(n => n.__labelLevel);
@@ -198,6 +202,11 @@ function syncDomLabels() {
     if (wgt < 0.02) { el.style.opacity = '0'; el.style.visibility = 'hidden'; el.__sx = null; continue; }
     v.set(n.x || 0, n.y || 0, n.z || 0);
     const depth = v.distanceTo(camPos);
+    /* 前后关系:场景球心在原点、半径 R;相机距离 camD → 把 depth 归一到 [0,1],front=1 最靠前 */
+    const R = window.__nebulaR || 900;
+    const camD = camPos.length();
+    const front = Math.max(0, Math.min(1, 1 - (depth - Math.max(0, camD - R)) / (2 * R)));
+    const dscale = LABEL_DEPTH.min + (LABEL_DEPTH.max - LABEL_DEPTH.min) * front;
     v.applyMatrix4(cam.matrixWorldInverse);
     if (v.z > -1) { el.style.visibility = 'hidden'; el.__sx = null; continue; }
     v.applyMatrix4(cam.projectionMatrix);
@@ -234,8 +243,8 @@ function syncDomLabels() {
     /* 位置平滑(指数滤波):相机推移/节点轻微晃动时标签不再逐帧硬跳;位移过大(就近跳转)直接吸附 */
     if (el.__sx == null || Math.abs(tx - el.__sx) > 120 || Math.abs(ty - el.__sy) > 120) { el.__sx = tx; el.__sy = ty; }
     else { el.__sx += (tx - el.__sx) * 0.35; el.__sy += (ty - el.__sy) * 0.35; }
-    cand.push({ el, w: lw, h: lh, prio: prio0[level] + cnt, tx: el.__sx, ty: el.__sy, dodgeK, wgt, depth,
-                node: n });
+    cand.push({ el, w: lw * dscale, h: lh * dscale, prio: prio0[level] + cnt, tx: el.__sx, ty: el.__sy,
+                dodgeK, wgt, depth, dscale, front, node: n });
   }
   /* 碰撞避让(地图式):优先级高的先落位;放不下先试候选锚位(上/下/左/右),仍不行才降级淡出 —— 
    * Mapbox 的 text-variable-anchor 就是这个思路:换位置优先于丢标签。 */
@@ -257,14 +266,18 @@ function syncDomLabels() {
       placed.push({ L: bx - c.w / 2 - PAD, R: bx + c.w / 2 + PAD, T: by - c.h / 2 - PAD, B: by + c.h / 2 + PAD });
     } else { degraded++; }
     const base = LABEL_BASE_OPACITY[(c.el.className.match(/lv-(\w+)/) || [])[1]] || 0.9;
-    const alpha = base * c.wgt * (0.10 + 0.90 * c.dodgeK) * (ok ? 1 : LABEL_DIM);
+    const depthDim = LABEL_DEPTH.dim + (1 - LABEL_DEPTH.dim) * c.front;   /* 越靠后越暗(空气透视) */
+    const alpha = base * c.wgt * (0.10 + 0.90 * c.dodgeK) * (ok ? 1 : LABEL_DIM) * depthDim;
     c.el.style.visibility = '';
     c.el.style.opacity = alpha.toFixed(3);
     /* 近的标签压在上面(与 3D 前景一致) */
     c.el.style.zIndex = String(Math.max(1, Math.min(999, 999 - Math.round(c.depth / 8))));
-    c.el.style.transform = 'translate(-50%,-50%) translate(' + Math.round(bx) + 'px,' + Math.round(by) + 'px)';
+    c.el.style.transform = 'translate(-50%,-50%) translate(' + Math.round(bx) + 'px,' + Math.round(by) + 'px)'
+      + ' scale(' + c.dscale.toFixed(3) + ')';
   }
   LABEL_LAYER.shown = placed.length;
+  LABEL_LAYER.sizes = cand.filter(c => c.node && c.node.__labelLevel === 'region')
+    .map(c => String(c.node.shortLabel || '').slice(0, 8) + '=' + c.dscale.toFixed(2)).join(' ');
   LABEL_LAYER.degraded = degraded;
   LABEL_LAYER.weights = { cons: +w.wCons.toFixed(2), gal: +w.wGal.toFixed(2) };
 }
@@ -296,7 +309,7 @@ function labelHud() {
     let h = document.getElementById('label-hud');
     if (!h) {
       h = document.createElement('div'); h.id = 'label-hud';
-      h.style.cssText = 'position:fixed;left:340px;top:76px;z-index:99999;font:bold 15px/1.6 Consolas,monospace;color:#7fffd4;background:rgba(0,0,0,.85);padding:6px 10px;white-space:pre;border-radius:6px;border:1px solid #7fffd4;pointer-events:none';
+      h.style.cssText = 'position:fixed;left:340px;top:76px;z-index:99999;font:bold 15px/1.6 Consolas,monospace;color:#7fffd4;background:rgba(0,0,0,.85);padding:6px 10px;white-space:pre-wrap;max-width:58vw;border-radius:6px;border:1px solid #7fffd4;pointer-events:none';
       document.body.appendChild(h);
     }
     const struct = (window.__nebulaNodes || []).filter(n => n.__labelLevel);
@@ -313,9 +326,10 @@ function labelHud() {
         const el = LABEL_LAYER.map[n.id], r2 = el.getBoundingClientRect();
         return (n.shortLabel || '') + '=' + Math.round(r2.left + r2.width / 2) + ',' + Math.round(r2.top + r2.height / 2);
       });
-    h.textContent = '档位=' + labelTier + ' frac=' + labelFrac().toFixed(2) + ' 场景半径=' + Math.round(window.__nebulaR || 0) + +
+    h.textContent = '档位=' + labelTier + ' frac=' + labelFrac().toFixed(2) + ' R=' + Math.round(window.__nebulaR || 0) +
       ' wC=' + (LABEL_LAYER.weights ? LABEL_LAYER.weights.cons : '-') + ' wG=' + (LABEL_LAYER.weights ? LABEL_LAYER.weights.gal : '-') +
-      ' deg=' + (LABEL_LAYER.degraded|0) + ' shown=' + (LABEL_LAYER.shown|0);
+      ' deg=' + (LABEL_LAYER.degraded|0) + ' shown=' + (LABEL_LAYER.shown|0) +
+      '  前后:' + (LABEL_LAYER.sizes || '-') +
       '  结构标签=' + JSON.stringify(cnt) + '  DOM标签=' + (window.__labelDomCount ? window.__labelDomCount() : 0) +
       '  屏上可见=' + ((LABEL_LAYER && LABEL_LAYER.shown) || 0) +
       '\n线层:' + JSON.stringify(window.__intraStrength || {}) + ' ' + JSON.stringify(window.__intraDebug || {}) +
