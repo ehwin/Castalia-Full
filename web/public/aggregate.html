@@ -6,63 +6,98 @@
 <title>记忆总成 · Castalia</title>
 <link rel="icon" type="image/png" href="/favicon.png">
 <style>
+  /* ═══ 记忆总成(2026-09-19 重排)═══════════════════════════════════════════
+   * 原则:需要交互的东西全部放最上面(搜索 / 建库 / 刷新),只读信息往下排。
+   * 嵌入外壳(embed=1)时隐藏自带顶栏 —— 导航交给外壳,避免两条导航并排。
+   * ══════════════════════════════════════════════════════════════════════ */
   :root {
-    --bg: #07090D; --panel: #12171F; --border: rgba(255,255,255,0.08);
-    --text: #E8EDF2; --dim: #8A94A3; --accent: #3EE8C8; --accent2: #7EB0FF;
+    --bg: #07090D; --panel: #12171F; --panel2: #171D27; --border: rgba(255,255,255,0.08);
+    --text: #E8EDF2; --dim: #8A94A3; --dim2: #6B7484; --accent: #3EE8C8; --accent2: #7EB0FF;
     --ok: #57E6C4; --warn: #F5B942; --err: #f4554f;
     --hermes: #5FF5D6; --lobehub: #7EB0FF; --airi: #FF8FB8; --fed: #FFD056;
+    --r: 10px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--text); font-family: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", sans-serif; padding: 0 28px 48px; }
-  .app-head { display: flex; align-items: center; gap: 14px; height: 56px; margin: 0 -28px 22px; padding: 0 28px;
+  body { background: var(--bg); color: var(--text); font-family: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    padding: 0 28px 56px; }
+
+  /* ── 顶栏(仅在浏览器独立打开时出现)── */
+  .app-head { display: flex; align-items: center; gap: 14px; height: 56px; margin: 0 -28px 20px; padding: 0 28px;
     background: #080A0F; border-bottom: 1px solid var(--border); }
+  body.embed .app-head { display: none; }
   .brand { font-weight: 650; color: #fff; text-decoration: none; font-size: 15px; display: inline-flex; align-items: center; gap: 10px; }
   .brand img { width: 28px; height: 28px; border-radius: 8px; }
   .brand em { font-style: normal; color: var(--accent); font-size: 12px; margin-left: 8px; font-weight: 500; }
-  .maps { display: flex; gap: 3px; background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 10px; padding: 3px; }
+  .maps { display: flex; gap: 3px; background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: var(--r); padding: 3px; }
   .maps a { color: var(--dim); text-decoration: none; font-size: 12px; padding: 5px 10px; border-radius: 8px; }
   .maps a:hover { color: var(--text); }
   .maps i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
   .pages { margin-left: auto; display: flex; gap: 6px; }
   .pages a { color: var(--dim); text-decoration: none; font-size: 13px; padding: 6px 10px; border-radius: 8px; }
   .pages a.active, .pages a:hover { color: var(--accent); }
-  header.page { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
-  h1 { font-size: 20px; color: var(--text); font-weight: 650; }
+
+  /* ── 标题 ── */
+  header.page { display: flex; align-items: baseline; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
+  h1 { font-size: 20px; font-weight: 650; }
   h1 small { color: var(--dim); font-weight: normal; font-size: 13px; margin-left: 10px; }
-  #totals { color: var(--dim); font-size: 13px; margin-left: auto; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 24px; }
-  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
-  .card h3 { font-size: 14px; margin-bottom: 8px; }
-  .card .lib { color: var(--accent); font-weight: 600; }
-  .card .proj { color: var(--dim); font-size: 12px; margin-left: 6px; }
-  .card .nums { display: flex; gap: 16px; font-size: 13px; margin-top: 6px; }
-  .card .nums b { color: var(--ok); }
-  .card .last { color: var(--dim); font-size: 11px; margin-top: 6px; }
-  .card .err { color: var(--err); font-size: 11px; margin-top: 6px; }
-  .total-banner { background: linear-gradient(135deg, rgba(124,111,247,.15), rgba(88,166,255,.1)); border: 1px solid var(--accent); border-radius: 10px; padding: 12px 16px; margin-bottom: 24px; font-size: 14px; }
-  .total-banner b { color: var(--accent); font-size: 20px; }
-  section { margin-bottom: 24px; }
-  h2 { font-size: 15px; color: var(--accent2); margin-bottom: 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
-  .search-row { display: flex; gap: 8px; margin-bottom: 10px; }
-  input[type=text] { flex: 1; background: var(--panel); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 9px 12px; font-size: 14px; }
-  input[type=text]:focus { outline: 1px solid var(--accent); }
-  button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 9px 18px; font-size: 14px; cursor: pointer; }
-  button:hover { filter: brightness(1.15); }
-  button.ghost { background: transparent; border: 1px solid var(--border); color: var(--dim); }
-  .result { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; }
-  .result .meta { font-size: 11px; color: var(--dim); margin-bottom: 4px; }
+  #totals { color: var(--dim2); font-size: 12px; margin-left: auto; }
+
+  /* ── ① 交互区(置顶,吸顶)── */
+  #toolbar { position: sticky; top: 0; z-index: 5; background: linear-gradient(var(--bg) 78%, rgba(7,9,13,.86));
+    padding: 12px 0 10px; margin-bottom: 6px; border-bottom: 1px solid var(--border); }
+  .tb-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .tb-row + .tb-row { margin-top: 8px; }
+  #q { flex: 1 1 320px; background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    border-radius: var(--r); padding: 11px 14px 11px 38px; font-size: 15px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238A94A3' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M20 20l-3.5-3.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: 12px center; background-size: 17px; }
+  input[type=text] { background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    border-radius: var(--r); padding: 9px 12px; font-size: 14px; }
+  input[type=text]:focus { outline: none; border-color: rgba(62,232,200,.55); box-shadow: 0 0 0 3px rgba(62,232,200,.12); }
+  button { background: var(--accent); color: #05221C; border: none; border-radius: var(--r); padding: 10px 18px;
+    font-size: 14px; font-weight: 600; cursor: pointer; }
+  button:hover { filter: brightness(1.12); }
+  button.ghost { background: transparent; border: 1px solid var(--border); color: var(--dim); font-weight: 500; padding: 10px 14px; }
+  button.ghost:hover { color: var(--text); border-color: rgba(255,255,255,.2); }
+  #qcount { color: var(--dim); font-size: 12px; margin-left: auto; white-space: nowrap; }
+  #status { font-size: 12px; margin-left: 4px; }
+  .ok { color: var(--ok); } .err { color: var(--err); }
+
+  /* ── ② 搜索结果(紧随交互区)── */
+  #results { margin: 4px 0 22px; }
+  .result { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    border-radius: var(--r); padding: 11px 14px; margin-bottom: 8px; }
+  .result .meta { font-size: 11px; color: var(--dim); margin-bottom: 5px; }
   .result .meta .inst { color: var(--accent2); }
   .result .meta .proj { color: var(--accent); }
-  .result .txt { font-size: 13px; line-height: 1.5; }
-  .empty { color: var(--dim); font-size: 13px; padding: 12px 0; }
-  .feed-item { display: flex; gap: 10px; align-items: baseline; padding: 7px 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
-  .feed-item .time { color: var(--dim); font-size: 11px; white-space: nowrap; }
-  .feed-item .where { color: var(--accent2); font-size: 11px; white-space: nowrap; }
-  .feed-item .txt { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .create-row { display: flex; gap: 8px; max-width: 460px; }
-  .note { color: var(--dim); font-size: 12px; margin-top: 8px; }
-  #status { font-size: 12px; margin-left: 8px; }
-  .ok { color: var(--ok); } .err { color: var(--err); }
+  .result .txt { font-size: 13px; line-height: 1.6; }
+  .empty { color: var(--dim); font-size: 13px; padding: 10px 0; }
+
+  /* ── ③ 只读信息:总览数字 / 库卡片 / 最近动态 ── */
+  .stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r); padding: 10px 14px; min-width: 116px; }
+  .stat b { display: block; font-size: 21px; color: var(--accent); line-height: 1.25; }
+  .stat span { color: var(--dim); font-size: 12px; }
+  section { margin-bottom: 24px; }
+  h2 { font-size: 14px; color: var(--accent2); margin-bottom: 10px; padding-bottom: 6px;
+    border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  h2::before { content: ""; width: 3px; height: 13px; background: var(--accent2); border-radius: 2px; }
+  h2 .hint { color: var(--dim2); font-weight: 400; font-size: 12px; margin-left: auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(212px, 1fr)); gap: 10px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r); padding: 13px 15px; }
+  .card h3 { font-size: 13.5px; margin-bottom: 7px; display: flex; align-items: baseline; gap: 6px; }
+  .card .lib { color: var(--accent); font-weight: 600; }
+  .card .proj { color: var(--dim); font-size: 12px; }
+  .card .nums { display: flex; gap: 14px; font-size: 12.5px; color: var(--dim); }
+  .card .nums b { color: var(--ok); font-weight: 600; }
+  .card .last { color: var(--dim2); font-size: 11px; margin-top: 6px; }
+  .card .err { color: var(--err); font-size: 11px; margin-top: 6px; }
+  .feed-item { display: flex; gap: 10px; align-items: baseline; padding: 8px 2px; border-bottom: 1px dashed var(--border); font-size: 13px; }
+  .feed-item:hover { background: rgba(255,255,255,.02); }
+  .feed-item .where { color: var(--accent2); font-size: 11px; white-space: nowrap; min-width: 150px; }
+  .feed-item .txt { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .feed-item .time { color: var(--dim2); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .note { color: var(--dim2); font-size: 12px; margin-top: 8px; line-height: 1.6; }
 </style>
 </head>
 <body>
@@ -79,39 +114,51 @@
     <a href="/manage.html">库管理</a>
   </nav>
 </div>
+
 <header class="page">
-  <h1>记忆总成<small>全机记忆库总览 · 跨库搜索 · 最近动态</small></h1>
+  <h1>记忆总成<small>跨库搜索 · 全机概览 · 最近动态</small></h1>
   <div id="totals"></div>
 </header>
 
-<div class="total-banner" id="banner">加载中…</div>
-
-<section>
-  <h2>📚 库管理</h2>
-  <div class="grid" id="libs"></div>
-  <div class="create-row">
-    <input type="text" id="newLib" placeholder="新库名（字母/数字/._-，如 custom-project、shared）" onkeydown="if(event.key==='Enter')createLib()">
-    <button onclick="createLib()">建库</button>
+<!-- ① 交互区:搜索(主) / 建库 / 刷新 —— 全部置顶且吸顶 -->
+<div id="toolbar">
+  <div class="tb-row">
+    <input type="text" id="q" placeholder="跨全部库搜索记忆…（回车即搜）"
+           onkeydown="if(event.key==='Enter')doSearch(); if(event.key==='Escape')clearSearch()">
+    <button onclick="doSearch()">搜索</button>
+    <button class="ghost" onclick="clearSearch()">清空</button>
+    <span id="qcount"></span>
+  </div>
+  <div class="tb-row">
+    <input type="text" id="newLib" placeholder="新建库名（字母/数字/._-，如 custom-project、shared）" style="flex:0 1 330px"
+           onkeydown="if(event.key==='Enter')createLib()">
+    <button class="ghost" onclick="createLib()">＋ 建库</button>
+    <button class="ghost" onclick="refreshAll()">↻ 刷新</button>
     <span id="status"></span>
   </div>
+</div>
+
+<!-- ② 搜索结果(紧随交互区) -->
+<div id="results"></div>
+
+<!-- ③ 只读信息 -->
+<div class="stats" id="banner"><div class="stat"><b>—</b><span>加载中…</span></div></div>
+
+<section>
+  <h2>库<span class="hint" id="libHint"></span></h2>
+  <div class="grid" id="libs"></div>
   <div class="note">约定：库名 <b>shared</b> 为共享层（互通语义待定，引擎不自动合并库）。各库记忆彼此隔离，跨库搜索需显式发起。</div>
 </section>
 
 <section>
-  <h2>🔍 聚合搜索（全部库）</h2>
-  <div class="search-row">
-    <input type="text" id="q" placeholder="输入关键词，搜全部库…" onkeydown="if(event.key==='Enter')doSearch()">
-    <button onclick="doSearch()">搜索</button>
-  </div>
-  <div id="results"></div>
-</section>
-
-<section>
-  <h2>🕐 最近动态（全部库）</h2>
+  <h2>最近动态<span class="hint">全部库 · 最近 30 条</span></h2>
   <div id="feed"></div>
 </section>
 
 <script>
+/* embed=1(被外壳承载)→ 隐藏自带顶栏,导航交给外壳 */
+try { if (new URLSearchParams(location.search).has('embed')) document.body.classList.add('embed'); } catch (e) {}
+
 async function j(url, opt) {
   const r = await fetch(url, opt);
   return r.json();
@@ -125,8 +172,12 @@ async function loadOverview() {
     const libs = d.libraries || [];
     const total = libs.reduce((a, l) => a + (l.memories || 0), 0);
     const facts = libs.reduce((a, l) => a + (l.facts || 0), 0);
-    document.getElementById('banner').innerHTML = `全机 <b>${libs.length}</b> 个库 · 记忆 <b>${total}</b> 条 · 事实 <b>${facts}</b> 条`;
+    document.getElementById('banner').innerHTML =
+      `<div class="stat"><b>${libs.length}</b><span>库</span></div>
+       <div class="stat"><b>${total}</b><span>记忆</span></div>
+       <div class="stat"><b>${facts}</b><span>事实</span></div>`;
     document.getElementById('totals').textContent = `实例: ${[...new Set(libs.map(l => l.instance))].join(' / ')}`;
+    document.getElementById('libHint').textContent = `${libs.length} 个库`;
     const box = document.getElementById('libs');
     box.innerHTML = libs.map(l => `
       <div class="card">
@@ -136,18 +187,22 @@ async function loadOverview() {
         ${l.error ? `<div class="err">⚠ ${esc(l.error)}</div>` : ''}
       </div>`).join('') || '<div class="empty">暂无库</div>';
   } catch (e) {
-    document.getElementById('banner').innerHTML = `<span class="err">总览加载失败: ${esc(e.message)}</span>`;
+    document.getElementById('banner').innerHTML = `<div class="stat"><b class="err">!</b><span>总览加载失败</span></div>`;
+    document.getElementById('results').innerHTML = `<div class="empty">总览加载失败: ${esc(e.message)}</div>`;
   }
 }
 
 async function doSearch() {
   const q = document.getElementById('q').value.trim();
   const box = document.getElementById('results');
-  if (!q) { box.innerHTML = '<div class="empty">输入关键词再搜</div>'; return; }
+  const cnt = document.getElementById('qcount');
+  if (!q) { box.innerHTML = '<div class="empty">输入关键词再搜（Esc 清空）</div>'; cnt.textContent = ''; return; }
   box.innerHTML = '<div class="empty">搜索中…</div>';
+  cnt.textContent = '';
   try {
     const d = await j('/api/aggregate/search?q=' + encodeURIComponent(q) + '&topK=10');
     if (!d.ok) { box.innerHTML = `<div class="empty">${esc(d.error || '搜索失败')}</div>`; return; }
+    cnt.textContent = `“${q}” 命中 ${d.count ?? 0} 条`;
     box.innerHTML = d.count === 0
       ? '<div class="empty">没有命中</div>'
       : d.results.map(r => `
@@ -158,6 +213,13 @@ async function doSearch() {
   } catch (e) {
     box.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
   }
+}
+
+function clearSearch() {
+  document.getElementById('q').value = '';
+  document.getElementById('results').innerHTML = '';
+  document.getElementById('qcount').textContent = '';
+  document.getElementById('q').focus();
 }
 
 async function loadFeed() {
@@ -190,6 +252,12 @@ async function createLib() {
   } catch (e) {
     st.innerHTML = `<span class="err">❌ ${esc(e.message)}</span>`;
   }
+}
+
+function refreshAll() {
+  const st = document.getElementById('status');
+  st.innerHTML = '刷新中…';
+  Promise.all([loadOverview(), loadFeed()]).then(() => { st.innerHTML = '<span class="ok">已刷新</span>'; setTimeout(() => { st.textContent = ''; }, 1500); });
 }
 
 loadOverview();
