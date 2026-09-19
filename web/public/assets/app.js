@@ -621,6 +621,10 @@ function applyLod() {
 const LABEL_TIER_FRAC = { far: 0.85, near: 1.35 };   /* frac < far → 远档;> near → 近档 */
 let labelTier = 'mid';
 function labelFrac() {
+  try {   /* 调试:?lblfrac=0.86 强行指定 frac(验收档位淡入带用) */
+    const fm = /[?&]lblfrac=([\d.]+)/.exec(location.search);
+    if (fm) return +fm[1];
+  } catch (e) {}
   try {
     const cam = graphInstance.camera();
     const h = (typeof graphInstance.height === 'function' ? graphInstance.height() : 0) || window.innerHeight || 800;
@@ -672,7 +676,7 @@ function ensureLabelLayer() {
       '#label-layer .map-label{position:absolute;left:0;top:0;white-space:nowrap;',
       'font-family:"JetBrains Mono",Consolas,monospace;font-weight:700;letter-spacing:.03em;',
       'border-radius:6px;padding:1px 6px;background:rgba(6,10,16,.58);',
-      'text-shadow:0 1px 3px rgba(0,0,0,.95);will-change:transform,opacity;transition:opacity .16s linear}',
+      'text-shadow:0 1px 3px rgba(0,0,0,.95);will-change:transform,opacity;transition:opacity .22s linear}',
       /* 边框用 currentColor + 伪元素控透明度 → 三级标签共用一套配色,只有"描边轻重"不同 */
       '#label-layer .map-label::before{content:"";position:absolute;inset:0;border-radius:inherit;',
       'border:1px solid currentColor;opacity:.40;pointer-events:none}',
@@ -684,9 +688,7 @@ function ensureLabelLayer() {
       '#label-layer .lv-gal{background:rgba(6,10,16,.46);border-radius:5px}',
       '#label-layer .lv-gal::before{opacity:.26}',
       '#label-layer .map-label i{font-style:normal;font-weight:600;opacity:.62;margin-left:.42em;font-size:.82em}',
-      '#label-layer .lv-cons,#label-layer .lv-gal{visibility:hidden}',
-      '#label-layer.tier-mid .lv-cons,#label-layer.tier-near .lv-cons{visibility:visible}',
-      '#label-layer.tier-near .lv-gal{visibility:visible}',
+      /* 档位淡入淡出由 JS 按 frac 插值(见 labelWeights),这里不再用 visibility 硬切 */
     ].join('');
     document.head.appendChild(st);
     LABEL_LAYER.css = true;
@@ -729,6 +731,34 @@ function labelDiv(n) {
 /* 各档基准不透明度(鼠标规避在此基础上再压) */
 const LABEL_BASE_OPACITY = { region: 1, cons: 0.95, gal: 0.85 };
 const _labV = { p: null };
+/* ═══ v1.49 标签渲染重做(参考 Mapbox symbol 的 cross-fade + variable-anchor)═══
+ *  旧版三个毛病:① 档位硬切(滚轮一过阈值标签"啪"地蹦出来)② 被压住直接 visibility:hidden(闪)
+ *  ③ 标签贴边被 overflow 切一半、位置每帧硬跳(轻微抖)。
+ *  现在:档位按 frac 走"淡入带"(smoothstep)+ 字号同步插值;碰撞先试 5 个候选锚位,实在放不下
+ *  才降级淡出(不闪);屏幕边 6px 内夹住不出界;位置做指数平滑(位移过大直接吸附,不拖影);
+ *  z-index 按相机距离排,近的压在上面 —— 与 3D 前景观感一致。
+ */
+const LABEL_TIER_BAND = 0.07;                    /* 档位淡入带宽度(以 frac 计) */
+const _sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+function labelWeights() {
+  const force = (() => { try { const m = /[?&]lbltier=(far|mid|near)/.exec(location.search); return m ? m[1] : null; } catch (e) { return null; } })();
+  if (force) return { wCons: force === 'far' ? 0 : 1, wGal: force === 'near' ? 1 : 0, f: labelFrac(), forced: force };
+  const f = labelFrac(), half = LABEL_TIER_BAND / 2;
+  if (!isFinite(f)) return { wCons: 0, wGal: 0, f: 0.5, forced: null };   /* 首帧相机未就绪:先按"只看星域名"处理 */
+  return {
+    wCons: _sstep(LABEL_TIER_FRAC.far - half, LABEL_TIER_FRAC.far + half, f),
+    wGal:  _sstep(LABEL_TIER_FRAC.near - half, LABEL_TIER_FRAC.near + half, f),
+    f, forced: null,
+  };
+}
+function labelPxFor(level, w) {
+  const q = v => Math.round(v * 2) / 2;          /* 量化到 .5px:字号插值时避免每帧重排 */
+  if (level === 'region') return q(LABEL_PX.region.far + (LABEL_PX.region.mid - LABEL_PX.region.far) * w.wCons
+                                     + (LABEL_PX.region.near - LABEL_PX.region.mid) * w.wGal);
+  if (level === 'cons') return q(LABEL_PX.cons.mid + (LABEL_PX.cons.near - LABEL_PX.cons.mid) * w.wGal);
+  return q(LABEL_PX.gal.near);
+}
+const LABEL_DIM = 0.12;                          /* 被压住时淡到多低(而不是直接隐藏) */
 function syncDomLabels() {
   if (!graphInstance || typeof THREE === 'undefined') return;
   const nodes = (window.__nebulaNodes || []).filter(n => n.__labelLevel);
@@ -742,12 +772,11 @@ function syncDomLabels() {
   const rect = host ? host.getBoundingClientRect() : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
   if (!_labV.p) _labV.p = new (cam.position.constructor)();
   const v = _labV.p, W = rect.width, H = rect.height;
-  const active = { region: true, cons: labelTier !== 'far', gal: labelTier === 'near' };
-  /* 鼠标规避(v1.30):光标越近越淡、并轻轻推离光标 —— 标签永远不挡你要看/要点的地方。
-   * 方向按"锚点"算(不按推完的位置),避免反馈抖动。 */
+  const w = labelWeights();
+  const lvW = { region: 1, cons: w.wCons, gal: w.wGal };
   const mp = LABEL_LAYER.mouse;
   const DODGE = 34, FADE = 110, PUSH = 16;
-  /* 星域名别被右上角统计卡片/图例压住:被压就往下让(地图里标签也会躲 UI) */
+  /* 星域名别被右上角统计卡片/图例压住:被压就往下让 */
   const uiRects = [];
   for (const id of ['stats-grid', 'stats-bar', 'top-bar', 'legend']) {
     const e = document.getElementById(id);
@@ -755,41 +784,47 @@ function syncDomLabels() {
     const r = e.getBoundingClientRect();
     if (r.width > 4 && r.height > 4) uiRects.push(r);
   }
-  const nudgeOut = (tx, ty, w, h) => {
+  const nudgeOut = (tx, ty, w2, h2) => {
     for (let i = 0; i < 6; i++) {
-      const L = tx - w / 2, R2 = tx + w / 2, T = ty - h / 2, B = ty + h / 2;
+      const L = tx - w2 / 2, R2 = tx + w2 / 2, T = ty - h2 / 2, B = ty + h2 / 2;
       let hit = null;
       for (const r of uiRects) if (L < r.right && R2 > r.left && T < r.bottom && B > r.top) { hit = r; break; }
       if (!hit) break;
-      ty = Math.round(hit.bottom + h / 2 + 8);
+      ty = Math.round(hit.bottom + h2 / 2 + 8);
     }
     return [tx, ty];
   };
   const prio0 = { region: 100000, cons: 1000, gal: 100 };
   const cand = [];
+  const camPos = cam.position;
   for (const n of nodes) {
     const el = labelDiv(n);
     const level = n.__labelLevel;
-    if (!active[level]) { el.style.visibility = ''; continue; }   /* 非本档:交给 CSS 档位样式 */
+    const wgt = lvW[level] == null ? 1 : lvW[level];
+    if (wgt < 0.02) { el.style.opacity = '0'; el.style.visibility = 'hidden'; el.__sx = null; continue; }
     v.set(n.x || 0, n.y || 0, n.z || 0);
+    const depth = v.distanceTo(camPos);
     v.applyMatrix4(cam.matrixWorldInverse);
-    if (v.z > -1) { el.style.visibility = 'hidden'; continue; }    /* 相机背后 */
+    if (v.z > -1) { el.style.visibility = 'hidden'; el.__sx = null; continue; }
     v.applyMatrix4(cam.projectionMatrix);
     const x = (v.x + 1) / 2 * W, y = (1 - v.y) / 2 * H;
-    if (x < -60 || y < -30 || x > W + 60 || y > H + 30) { el.style.visibility = 'hidden'; continue; }
-    const fs = (LABEL_PX[level] && LABEL_PX[level][labelTier]) || 12;
+    if (x < -80 || y < -50 || x > W + 80 || y > H + 50) { el.style.visibility = 'hidden'; el.__sx = null; continue; }
+    const fs = labelPxFor(level, w);
     const key = level + '|' + fs + '|' + el.textContent;
     if (el.__key !== key) {          /* 只在文案/字号变化时量一次尺寸,避免每帧强制布局 */
       el.__key = key; el.style.fontSize = fs + 'px';
       el.__w = el.offsetWidth; el.__h = el.offsetHeight;
     }
     const cnt = parseInt(String(n.label || '').split('·')[1], 10) || 0;
+    const lw = el.__w || 60, lh = el.__h || 16;
+    /* 目标位置:① 投影点 ② 夹进屏幕(留 6px 边距,地图标签不出界) */
     let tx = Math.round(rect.left + x), ty = Math.round(rect.top + y);
-    const w = el.__w || 60, h = el.__h || 16;
-    if (level === 'region') { const n2 = nudgeOut(tx, ty, w, h); tx = n2[0]; ty = n2[1]; }
+    tx = Math.max(rect.left + lw / 2 + 6, Math.min(rect.left + W - lw / 2 - 6, tx));
+    ty = Math.max(rect.top + lh / 2 + 6, Math.min(rect.top + H - lh / 2 - 6, ty));
+    if (level === 'region') { const n2 = nudgeOut(tx, ty, lw, lh); tx = n2[0]; ty = n2[1]; }
     let dodgeK = 1;
     if (mp) {
-      const L0 = tx - w / 2, R0 = tx + w / 2, T0 = ty - h / 2, B0 = ty + h / 2;
+      const L0 = tx - lw / 2, R0 = tx + lw / 2, T0 = ty - lh / 2, B0 = ty + lh / 2;
       const dx = Math.max(L0 - mp.x, 0, mp.x - R0), dy = Math.max(T0 - mp.y, 0, mp.y - B0);
       const dist = Math.hypot(dx, dy);
       if (dist < FADE) {
@@ -802,22 +837,42 @@ function syncDomLabels() {
         }
       }
     }
-    cand.push({ el, w, h, prio: prio0[level] + cnt, tx, ty, dodgeK });
+    /* 位置平滑(指数滤波):相机推移/节点轻微晃动时标签不再逐帧硬跳;位移过大(就近跳转)直接吸附 */
+    if (el.__sx == null || Math.abs(tx - el.__sx) > 120 || Math.abs(ty - el.__sy) > 120) { el.__sx = tx; el.__sy = ty; }
+    else { el.__sx += (tx - el.__sx) * 0.35; el.__sy += (ty - el.__sy) * 0.35; }
+    cand.push({ el, w: lw, h: lh, prio: prio0[level] + cnt, tx: el.__sx, ty: el.__sy, dodgeK, wgt, depth,
+                node: n });
   }
-  /* 地图式避让:优先级高的先落位(星域 > 星座按成员数 > 星系按成员数),被压住的一律隐藏 */
+  /* 碰撞避让(地图式):优先级高的先落位;放不下先试候选锚位(上/下/左/右),仍不行才降级淡出 —— 
+   * Mapbox 的 text-variable-anchor 就是这个思路:换位置优先于丢标签。 */
   cand.sort((a, b) => b.prio - a.prio);
-  const placed = [], PAD = 3;
+  const placed = [], PAD = 4, OFFS = [[0, 0], [0, -1], [0, 1], [1, 0], [-1, 0]];
+  let degraded = 0;
   for (const c of cand) {
-    const L = c.tx - c.w / 2 - PAD, R = c.tx + c.w / 2 + PAD, T = c.ty - c.h / 2 - PAD, B = c.ty + c.h / 2 + PAD;
-    let hit = false;
-    for (const q of placed) if (L < q.R && R > q.L && T < q.B && B > q.T) { hit = true; break; }
-    if (!hit) placed.push({ L, R, T, B });
-    c.el.style.visibility = hit ? 'hidden' : '';
+    const fits = (tx, ty) => {
+      const L = tx - c.w / 2 - PAD, R = tx + c.w / 2 + PAD, T = ty - c.h / 2 - PAD, B = ty + c.h / 2 + PAD;
+      for (const q of placed) if (L < q.R && R > q.L && T < q.B && B > q.T) return false;
+      return true;
+    };
+    let ok = false, bx = c.tx, by = c.ty;
+    for (const [ox, oy] of OFFS) {
+      const tx = Math.round(c.tx + ox * (c.w / 2 + PAD + 4)), ty = Math.round(c.ty + oy * (c.h + PAD + 2));
+      if (fits(tx, ty)) { ok = true; bx = tx; by = ty; break; }
+    }
+    if (ok) {
+      placed.push({ L: bx - c.w / 2 - PAD, R: bx + c.w / 2 + PAD, T: by - c.h / 2 - PAD, B: by + c.h / 2 + PAD });
+    } else { degraded++; }
     const base = LABEL_BASE_OPACITY[(c.el.className.match(/lv-(\w+)/) || [])[1]] || 0.9;
-    c.el.style.opacity = (base * (0.10 + 0.90 * (c.dodgeK == null ? 1 : c.dodgeK))).toFixed(2);
-    c.el.style.transform = 'translate(-50%,-50%) translate(' + c.tx + 'px,' + c.ty + 'px)';
+    const alpha = base * c.wgt * (0.10 + 0.90 * c.dodgeK) * (ok ? 1 : LABEL_DIM);
+    c.el.style.visibility = '';
+    c.el.style.opacity = alpha.toFixed(3);
+    /* 近的标签压在上面(与 3D 前景一致) */
+    c.el.style.zIndex = String(Math.max(1, Math.min(999, 999 - Math.round(c.depth / 8))));
+    c.el.style.transform = 'translate(-50%,-50%) translate(' + Math.round(bx) + 'px,' + Math.round(by) + 'px)';
   }
   LABEL_LAYER.shown = placed.length;
+  LABEL_LAYER.degraded = degraded;
+  LABEL_LAYER.weights = { cons: +w.wCons.toFixed(2), gal: +w.wGal.toFixed(2) };
 }
 window.__labelDomCount = () => Object.keys(LABEL_LAYER.map).length;
 
@@ -864,7 +919,9 @@ function labelHud() {
         const el = LABEL_LAYER.map[n.id], r2 = el.getBoundingClientRect();
         return (n.shortLabel || '') + '=' + Math.round(r2.left + r2.width / 2) + ',' + Math.round(r2.top + r2.height / 2);
       });
-    h.textContent = '档位=' + labelTier + ' frac=' + labelFrac().toFixed(2) + ' 场景半径=' + Math.round(window.__nebulaR || 0) +
+    h.textContent = '档位=' + labelTier + ' frac=' + labelFrac().toFixed(2) + ' 场景半径=' + Math.round(window.__nebulaR || 0) + +
+      ' wC=' + (LABEL_LAYER.weights ? LABEL_LAYER.weights.cons : '-') + ' wG=' + (LABEL_LAYER.weights ? LABEL_LAYER.weights.gal : '-') +
+      ' deg=' + (LABEL_LAYER.degraded|0) + ' shown=' + (LABEL_LAYER.shown|0);
       '  结构标签=' + JSON.stringify(cnt) + '  DOM标签=' + (window.__labelDomCount ? window.__labelDomCount() : 0) +
       '  屏上可见=' + ((LABEL_LAYER && LABEL_LAYER.shown) || 0) +
       '\n线层:' + JSON.stringify(window.__intraStrength || {}) + ' ' + JSON.stringify(window.__intraDebug || {}) +
