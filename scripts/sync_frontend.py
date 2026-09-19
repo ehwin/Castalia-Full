@@ -38,6 +38,10 @@ TARGETS = {
 # 同步范围内的相对路径。改前端新增文件时,在此登记。
 SYNC_ITEMS = [
     'public/index.html',
+    'public/assets/app.css',
+    'public/assets/app.js',
+    'public/assets/boot.js',
+    'public/assets/diag.js',
     'public/aggregate.html',
     'public/manage.html',
     'public/castalia.png',
@@ -66,8 +70,15 @@ def md5(path: str) -> str:
 
 def vendor_refs_ok(public_dir: str) -> tuple[bool, set]:
     """index.html 里引用的 vendor 文件必须实际存在(G1 崩溃事故的回归检查)。"""
-    idx = open(os.path.join(public_dir, 'index.html'), encoding='utf-8', errors='replace').read()
-    refs = set(re.findall(r'vendor/([\w.-]+\.(?:mjs|js))', idx))
+    # 拆骨后 vendor 的 import 在 assets/boot.js 里 → 扫全部前端产物
+    txt = ''
+    for root, _dirs, files in os.walk(public_dir):
+        if os.sep + 'vendor' in root:
+            continue
+        for f in files:
+            if f.endswith(('.html', '.js', '.css')):
+                txt += open(os.path.join(root, f), encoding='utf-8', errors='replace').read()
+    refs = set(re.findall(r'vendor/([\w.-]+\.(?:mjs|js))', txt))
     ok = True
     for r in refs:
         if not os.path.exists(os.path.join(public_dir, 'vendor', r)):

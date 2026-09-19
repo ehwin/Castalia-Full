@@ -42,6 +42,8 @@ app.use('/api', aggregateRouter);
 // ═══ 静态服务 ═══
 // 本地 3D 依赖(three.js / 3d-force-graph)——离线可用;文件名带版本号,升级即换名防缓存
 app.use('/vendor', express.static(join(__dirname, 'public', 'vendor'), { maxAge: '1h' }));
+// 前端自身的 CSS/JS(2026-09-19 从 index.html 内联样式/脚本抽出,便于维护;no-cache 由下面中间件统一加)
+app.use('/assets', express.static(join(__dirname, 'public', 'assets'), { maxAge: '1h' }));
 for (const f of ['castalia-mark.png', 'castalia.png', 'favicon.png']) {
   app.get('/' + f, (_req, res) => res.sendFile(join(__dirname, 'public', f)));
 }
