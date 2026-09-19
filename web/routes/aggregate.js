@@ -138,45 +138,49 @@ router.get('/manage/memories', (req, res) => {
   const project = String(req.query.project || '');
   const q = String(req.query.q || '').trim();
   const limit = Math.min(parseInt(req.query.limit || '500', 10) || 500, 2000);
-  const lib = findLib(instance, project);
-  if (!lib) return res.json({ ok: false, error: '库不存在(instance/project 未匹配)', memories: [] });
-  let db = null;
-  try {
-    db = openLibDb(lib.file);
-    if (!db) return res.json({ ok: false, error: 'open_failed', memories: [] });
-    const base = `SELECT id, substr(text,1,600) AS text, length(text) AS textLen, type, mem_type, category, tier, importance, source, created_at, updated_at FROM memory`;
-    let rows;
-    if (q) {
-      const like = `%${q}%`;
-      rows = db.prepare(`${base} WHERE is_active=1 AND (text LIKE ? OR mem_type LIKE ? OR category LIKE ? OR type LIKE ?) ORDER BY created_at DESC LIMIT ?`)
-        .all(like, like, like, like, limit);
-    } else {
-      rows = db.prepare(`${base} WHERE is_active=1 ORDER BY created_at DESC LIMIT ?`).all(limit);
-    }
-    db.close();
-    res.json({
-      ok: true, count: rows.length,
-      memories: rows.map(r => ({
-        id: r.id,
-        text: String(r.text || ''),
-        textTruncated: (r.textLen || 0) > 600,
-        type: r.type,
-        memType: r.mem_type || 'general',
-        category: r.category,
-        tier: r.tier || 'standard',
-        importance: r.importance,
-        source: r.source,
-        createdAt: r.created_at,
-        updatedAt: r.updated_at,
-      })),
-    });
-  } catch (e) {
-    if (db) { try { db.close(); } catch {} }
-    res.status(500).json({ ok: false, error: String(e.message) });
+  /* ⚠ 一个库在磁盘上是"每个 memType 一个 sqlite"(feedback/general/project/reference/user)。
+   * 旧实现只取 findLib() 命中的**第一个**文件 —— 常常正好是空的 general,
+   * 表现就是"点库名看不到内容"(实测 Hermes/hermes 有 22 条,接口却返回 0)。
+   * 现在把匹配到的所有文件**并起来查**,再按 created_at 倒序取前 limit 条。 */
+  const libs = libFiles().filter(l => (!instance || l.instance === instance) && (!project || l.project === project));
+  if (!libs.length) return res.json({ ok: false, error: '库不存在(instance/project 未匹配)', memories: [] });
+  const base = `SELECT id, substr(text,1,600) AS text, length(text) AS textLen, type, mem_type, category, tier, importance, source, created_at, updated_at FROM memory`;
+  const all = [];
+  for (const lib of libs) {
+    let db = null;
+    try {
+      db = openLibDb(lib.file);
+      if (!db) continue;
+      const rows = q
+        ? db.prepare(`${base} WHERE is_active=1 AND (text LIKE ? OR mem_type LIKE ? OR category LIKE ? OR type LIKE ?) ORDER BY created_at DESC LIMIT ?`)
+            .all(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, limit)
+        : db.prepare(`${base} WHERE is_active=1 ORDER BY created_at DESC LIMIT ?`).all(limit);
+      for (const r of rows) all.push(Object.assign({}, r, { __instance: lib.instance, __project: lib.project }));
+    } catch (e) { /* 单个文件坏掉不影响整体 */ }
+    finally { if (db) { try { db.close(); } catch (e2) {} } }
   }
+  all.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  const out = all.slice(0, limit);
+  res.json({
+    ok: true, count: out.length, files: libs.length,
+    memories: out.map(r => ({
+      id: r.id,
+      text: String(r.text || ''),
+      textTruncated: (r.textLen || 0) > 600,
+      type: r.type,
+      memType: r.mem_type || 'general',
+      category: r.category,
+      tier: r.tier || 'standard',
+      importance: r.importance,
+      source: r.source,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      instance: r.__instance,
+      project: r.__project,
+    })),
+  });
 });
 
-// ═══ POST /api/manage/memory/update ═══
 router.post('/manage/memory/update', (req, res) => {
   try {
     const { instance, project, id, memType, category, tier, importance } = req.body || {};
