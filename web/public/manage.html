@@ -93,13 +93,15 @@
   .badge-dry { background: rgba(210,153,34,.15); color: var(--warn); }
   .badge-real { background: rgba(248,81,73,.15); color: var(--err); }
 </style>
+<link rel="stylesheet" href="/assets/members.css">
 </head>
 <body>
 <div class="app-head">
-  <a class="brand" href="http://127.0.0.1:3345/?scope=federation"><img src="/castalia-mark.png" alt="">Castalia <em>库管理</em></a>
+  <a class="brand" href="http://127.0.0.1:3348/?scope=federation"><img src="/castalia-mark.png" alt="">Castalia <em>库管理</em></a>
   <nav class="maps">
-    <a href="http://127.0.0.1:3345/?scope=federation"><i style="background:var(--fed)"></i>联邦</a>
+    <a href="http://127.0.0.1:3348/?scope=federation"><i style="background:var(--fed)"></i>联邦</a>
     <a href="http://127.0.0.1:3345/?scope=local"><i style="background:var(--hermes)"></i>Hermes</a>
+    <a href="http://127.0.0.1:3347/?scope=local"><i style="background:#56b4ff"></i>DSH</a>
     <a href="http://127.0.0.1:3346/?scope=local"><i style="background:var(--lobehub)"></i>LobeHub</a>
     <a href="http://127.0.0.1:3344/?scope=local"><i style="background:var(--airi)"></i>AIRI</a>
   </nav>
@@ -112,6 +114,12 @@
   <h1>库管理<small>手动调整记忆归属 · 跨库移动 · 批量迁移 · 改分类 · 软删</small></h1>
 </header>
 
+<section class="members-section" id="membersSection">
+  <div class="members-head"><h2>🌐 总图成员</h2><button class="ghost mini" id="members-refresh" type="button">↻ 刷新</button></div>
+  <div class="members-note">添加已有记忆库后，它会自动出现在联邦总图；只注册可视化来源，不启动桥接、不复制、不迁移、不删除记忆数据。</div>
+  <form class="members-form" id="member-add"><input name="name" required maxlength="64" placeholder="成员名称，例如 NewMemory"><input name="dir" required placeholder="绝对记忆库目录，例如 /path/to/memory-banks/new"><button type="submit">＋ 接入总图</button></form>
+  <div id="members-status" class="note"></div><div class="members-list" id="members-list"></div>
+</section>
 <section id="reflectSection">
   <h2>🧠 反思（跨库整合）</h2>
   <div class="reflect-controls">
@@ -186,7 +194,15 @@ function setStatus(html) { $('status').innerHTML = html; }
 async function loadLibraries() {
   try {
     const d = await api('/api/manage/libraries');
-    state.libs = d.libraries || [];
+    const groups = new Map();
+    for (const lib of d.libraries || []) {
+      const key = JSON.stringify([lib.instance, lib.project]);
+      const group = groups.get(key) || { ...lib, active: 0, total: 0, error: '', files: 0 };
+      group.active += Number(lib.active || 0); group.total += Number(lib.total || 0); group.files++;
+      if (lib.error) group.error += (group.error ? '; ' : '') + lib.error;
+      groups.set(key, group);
+    }
+    state.libs = [...groups.values()];
     renderLibraries();
     renderTargetOptions();
   } catch (e) {
@@ -427,7 +443,7 @@ async function updateMemType(id, memType, selEl) {
   try {
     const d = await api('/api/manage/memory/update', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ instance: state.current.instance, project: state.current.project, id, memType }),
+      body: JSON.stringify({ instance: state.current.instance, project: state.current.project, id, sourceMemType: (state.memories.find(m => m.id === id) || {}).sourceMemType || (state.memories.find(m => m.id === id) || {}).memType || 'general', memType }),
     });
     setStatus(d.ok && d.updated
       ? `<span class="ok">✅ 已改类 → ${esc(memTypeLabel(memType))}</span>`
@@ -447,7 +463,7 @@ async function softDelete(id, row) {
   try {
     const d = await api('/api/manage/memory/delete', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ instance: state.current.instance, project: state.current.project, id }),
+      body: JSON.stringify({ instance: state.current.instance, project: state.current.project, id, sourceMemType: (state.memories.find(m => m.id === id) || {}).sourceMemType || (state.memories.find(m => m.id === id) || {}).memType || 'general' }),
     });
     setStatus(d.ok && d.deleted ? '<span class="ok">✅ 已软删</span>' : `<span class="err">❌ 软删失败</span>`);
     state.selected.delete(id);
@@ -631,5 +647,6 @@ loadLibraries();
 updateReflectControls();
 loadReflectHistory();
 </script>
+<script src="/assets/members.js"></script>
 </body>
 </html>

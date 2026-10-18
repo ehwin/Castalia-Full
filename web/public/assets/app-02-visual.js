@@ -57,7 +57,7 @@ const CATEGORY_LABELS = {
   conversation: '对话', knowledge: '知识', milestone: '里程碑', identity: '身份',
   relationship: '关系', emotional: '情绪', mood_snapshot: '心境快照', preference: '偏好',
   decision: '定案', mistake: '教训', session: '会话', session_promoted: '会话沉淀',
-  agent_mood: '心境', general: '通用', 'custom': 'custom', default: '默认',
+  agent_mood: '心境', general: '通用', custom: '自定义', default: '默认',
 };
 function catLabel(c) { return CATEGORY_LABELS[c] || c; }
 const RG_HUE = { 'Hermes': 168, 'LobeHub': 212, 'AIRI': 335, '联邦': 44,

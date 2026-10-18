@@ -56,7 +56,7 @@ function updateLabels(force) {
  */
 const LABEL_LAYER = { el: null, host: null, map: Object.create(null), css: false };
 const LABEL_PX = {
-  region: { far: 17, mid: 15, near: 13.5 },
+  region: { far: 19, mid: 17, near: 16 },
   cons:   { far: 12.5, mid: 12.5, near: 12 },
   gal:    { far: 11, mid: 11, near: 11 },
 };
@@ -68,20 +68,20 @@ function ensureLabelLayer() {
     st.textContent = [
       '#label-layer{position:fixed;left:0;top:0;right:0;bottom:0;pointer-events:none;overflow:hidden;z-index:6}',
       '#label-layer .map-label{position:absolute;left:0;top:0;white-space:nowrap;',
-      'font-family:"JetBrains Mono",Consolas,monospace;font-weight:700;letter-spacing:.03em;',
+      'font-family:"JetBrains Mono",Consolas,monospace;font-weight:800;letter-spacing:.03em;',
       'border-radius:6px;padding:1px 6px;background:rgba(6,10,16,.58);',
       'text-shadow:0 1px 3px rgba(0,0,0,.95);will-change:transform,opacity;transition:opacity .22s linear}',
       /* 边框用 currentColor + 伪元素控透明度 → 三级标签共用一套配色,只有"描边轻重"不同 */
       '#label-layer .map-label::before{content:"";position:absolute;inset:0;border-radius:inherit;',
-      'border:1px solid currentColor;opacity:.40;pointer-events:none}',
-      '#label-layer .lv-region{padding:1px 8px;border-radius:9px;background:rgba(6,10,16,.66);',
+      'border:1px solid var(--label-accent,currentColor);opacity:.80;pointer-events:none}',
+      '#label-layer .lv-region{padding:1px 8px;border-radius:9px;background:rgba(3,7,14,.92);',
       'box-shadow:0 0 14px rgba(0,0,0,.55)}',
       '#label-layer .lv-region::before{opacity:.92}',
-      '#label-layer .lv-cons{background:rgba(6,10,16,.52)}',
+      '#label-layer .lv-cons{background:rgba(3,7,14,.88)}',
       '#label-layer .lv-cons::before{opacity:.42}',
-      '#label-layer .lv-gal{background:rgba(6,10,16,.46);border-radius:5px}',
+      '#label-layer .lv-gal{background:rgba(3,7,14,.86);border-radius:5px}',
       '#label-layer .lv-gal::before{opacity:.26}',
-      '#label-layer .map-label i{font-style:normal;font-weight:600;opacity:.62;margin-left:.42em;font-size:.82em}',
+      '#label-layer .map-label i{font-style:normal;font-weight:600;opacity:.90;margin-left:.42em;font-size:.82em}',
       /* 档位淡入淡出由 JS 按 frac 插值(见 labelWeights),这里不再用 visibility 硬切 */
     ].join('');
     document.head.appendChild(st);
@@ -113,11 +113,13 @@ function labelDiv(n) {
   ensureLabelLayer();
   el = document.createElement('div');
   el.className = 'map-label lv-' + (n.__labelLevel || 'cons');
-  el.style.color = n.__galaxyColor || '#94a3b8';     /* 边框/文字取星域色系 */
+  el.style.color = '#f8fbff';
+  el.style.setProperty('--label-accent', n.__galaxyColor || '#94a3b8');     /* 边框/文字取星域色系 */
   const name = n.__labelLevel === 'region' ? (n.shortLabel || '')
     : (n.__labelLevel === 'cons' ? catLabel(n.lib || n.__constellation || '') : (MEM_TYPE_LABELS[n.memType] || n.shortLabel || ''));
   const cnt = String(n.label || '').split('·')[1];
-  el.innerHTML = String(name) + (cnt ? '<i>' + cnt.trim() + '</i>' : '');
+  el.textContent = String(name);
+  if (cnt) { const count = document.createElement('i'); count.textContent = cnt.trim(); el.appendChild(count); }
   LABEL_LAYER.el.appendChild(el);
   LABEL_LAYER.map[key] = el;
   return el;
@@ -156,7 +158,7 @@ const LABEL_DIM = 0.12;                          /* 被压住时淡到多低(而
 /* v1.51 前后大小关系(近大远小 + 远处略暗):按"在相机坐标系里离相机多近"给每个标签一个 depth 权重,
  * front=1 表示位于场景最靠近相机的一层。visual 上等价于地图的"近处标注大、远处小",但因为是 DOM,
  * 用的是 CSS transform: scale()(不重排、字体仍清晰),而不是改字号(改字号会每帧强制 layout)。 */
-const LABEL_DEPTH = { min: 0.78, max: 1.16, dim: 0.52, dimPow: 1.35 };
+const LABEL_DEPTH = { min: 0.92, max: 1.12, dim: 0.88, dimPow: 1.35 };
 /* dim = 最远处(back)的不透明度系数,dimPow>1 让"越靠后掉得越快、近处基本不动" */
 function syncDomLabels() {
   if (!graphInstance || typeof THREE === 'undefined') return;
@@ -268,7 +270,7 @@ function syncDomLabels() {
     } else { degraded++; }
     const base = LABEL_BASE_OPACITY[(c.el.className.match(/lv-(\w+)/) || [])[1]] || 0.9;
     const depthDim = LABEL_DEPTH.dim + (1 - LABEL_DEPTH.dim) * Math.pow(c.front, LABEL_DEPTH.dimPow);   /* 越靠后越淡(空气透视) */
-    const alpha = base * c.wgt * (0.10 + 0.90 * c.dodgeK) * (ok ? 1 : LABEL_DIM) * depthDim;
+    const alpha = base * c.wgt * (0.72 + 0.28 * c.dodgeK) * (ok ? 1 : 0.62) * depthDim;
     c.el.style.visibility = '';
     c.el.style.opacity = alpha.toFixed(3);
     /* 近的标签压在上面(与 3D 前景一致) */

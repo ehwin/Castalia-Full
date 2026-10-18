@@ -39,20 +39,8 @@ export async function runDigest(characterId: string = 'default', project?: strin
   // 1. 清理过期临时记忆(memdir:遍历项目全部分类库)
   result.cleaned = cleanupExpiredMemories(project);
 
-  // 2. 恢复被误标记的 critical 记忆(memdir:遍历项目全部分类库)
-  const proj = normalizeProject(project);
-  for (const mt of listMemTypeDirs(proj)) {
-    try {
-      const db = DatabaseManager.getInstance(proj, mt);
-      const lostCritical = db.prepare(`
-        UPDATE memory SET is_active = 1
-        WHERE tier = 'critical' AND is_active = 0
-      `).run();
-      result.restored += lostCritical.changes;
-    } catch (e: any) {
-      result.errors.push('restore critical: ' + e.message);
-    }
-  }
+  // 2. critical 记忆不再无条件复活：inactive 可能代表人工删除、合并删除或跨 memType 迁移墓碑。
+  // 只有显式人工恢复接口才能恢复，避免同一 ID 在多个分类库同时 active。
 
   return result;
 }
@@ -63,12 +51,17 @@ export function maybeDigest(characterId: string = 'default', project?: string): 
   const last = lastDigestTimeByProject.get(proj) || 0;
   if (now - last < MIN_DIGEST_GAP_MS) return null;
 
-  const db = DatabaseManager.getInstance(project);
-  const unanalyzed = (db.prepare(`
-    SELECT COUNT(*) as c FROM memory
-    WHERE is_active = 0 AND source = 'conversation_log'  /* v1.19 分隔带 */
-      AND last_accessed_at = created_at
-  `).get() as any)?.c || 0;
+  let unanalyzed = 0;
+  for (const mt of listMemTypeDirs(proj)) {
+    try {
+      const db = DatabaseManager.getInstance(proj, mt);
+      unanalyzed += (db.prepare(`
+        SELECT COUNT(*) as c FROM memory
+        WHERE is_active = 0 AND source = 'conversation_log'
+          AND last_accessed_at = created_at
+      `).get() as any)?.c || 0;
+    } catch { /* 单分类库失败不阻断其它库 */ }
+  }
 
   if (unanalyzed === 0) return null;
 
@@ -82,8 +75,9 @@ export function getRecentConversations(characterId: string, hoursBack: number = 
   const proj = normalizeProject(project);
   return db.prepare(`
     SELECT id, text, created_at, importance
-    FROM memory WHERE is_active = 1
-      AND source = 'conversation_log' AND project = ?
+    /* 对话审计带写入时 is_active=0(store.ts saveConversationTurn);
+     * 按 is_active=1 过滤会永远查不到新数据(2026-10-17 修)。 */
+    FROM memory WHERE source = 'conversation_log' AND project = ?
       AND created_at > ?
     ORDER BY created_at DESC LIMIT ?
   `).all(proj, since, limit) as any[];

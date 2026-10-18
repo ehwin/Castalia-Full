@@ -14,10 +14,18 @@ import type { FedHit, FedLibrary, FedMemberInfo, FedProvider } from './types.js'
 /** 扫描一个目录,列出其中所有标准结构的记忆库 */
 export function scanLibraries(dir: string, instance: string): FedLibrary[] {
   const libs: FedLibrary[] = [];
+  // Receipts are engine bookkeeping. Shared is a valid user namespace;
+  // reflect remains searchable, but is excluded by the reflection caller.
+  const excluded = new Set(
+    String(process.env.FEDERATION_EXCLUDE_PROJECTS || 'receipts')
+      .split(',').map(v => v.trim().toLowerCase()).filter(Boolean),
+  );
   try {
     for (const f of fs.readdirSync(dir)) {
+      if (excluded.has(f.toLowerCase())) continue;
       // 旧结构 project-<name>.sqlite
       if (f.startsWith('project-') && f.endsWith('.sqlite')) {
+        if (excluded.has(f.slice('project-'.length, -'.sqlite'.length).toLowerCase())) continue;
         libs.push({ instance, project: f.slice('project-'.length, -'.sqlite'.length), file: path.join(dir, f) });
         continue;
       }

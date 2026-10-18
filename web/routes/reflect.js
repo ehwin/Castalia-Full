@@ -11,9 +11,13 @@ router.post('/reflect/run', async (req, res) => {
     return handleReflectAll(req, res);
   }
   const toolName = mode === 'deep' ? 'reflect_deep' : 'reflect_auto';
+  if (mode !== 'auto' && mode !== 'deep') return res.status(400).json({ ok: false, error: '未知反思模式' });
   const limit = parseInt(req.body.limit || (toolName === 'reflect_deep' ? '500' : '30'), 10);
+  if (!Number.isFinite(limit) || limit < 1 || limit > 1000) return res.status(400).json({ ok: false, error: 'limit 必须为 1–1000' });
+  const project = typeof req.body.project === 'string' ? req.body.project.trim() : undefined;
+  if (project && !/^[\p{L}\p{N}_.-]+$/u.test(project)) return res.status(400).json({ ok: false, error: '项目名格式无效' });
   try {
-    const result = await mcpCall(toolName, { limit });
+    const result = await mcpCall(toolName, { limit, ...(project ? { project } : {}) }, 300000);
     const text = result?.content?.[0]?.text || '{}';
     let parsed;
     try { parsed = JSON.parse(text); } catch { parsed = { raw: text }; }

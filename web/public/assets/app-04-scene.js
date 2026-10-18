@@ -205,6 +205,8 @@ function renderStats() {
     const real = allData.nodes.filter(n => !n.group);
     addStatCell(grid, real.length, 'TOTAL', '#3EE8C8');
     if (IS_FED) {
+      const dshCount = real.filter(n => String(n.project || n.lib || '').toLowerCase() === 'dsh').length;
+      if (dshCount) addStatCell(grid, dshCount, 'DSH · 项目', '#56b4ff');
       ['Hermes', 'LobeHub', 'AIRI', '联邦'].forEach(name => {
         const c = real.filter(n => structKey(n) === name).length;
         addStatCell(grid, c, name, STRUCT_COLORS[name]);

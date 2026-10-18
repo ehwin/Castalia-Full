@@ -3,8 +3,9 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import { readFileSync, existsSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, statSync } from 'fs';
+import { dirname, join, resolve, isAbsolute } from 'path';
+import { readRegistry, scanMember } from './memberRegistry.js';
+import { readFileSync, existsSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, statSync, lstatSync, realpathSync, renameSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -158,6 +159,7 @@ function saveConfigToDir(dir, cfg) {
 }
 
 function loadAllInstanceConfigs() {
+  libFiles();
   return AGGREGATE_DIRS.map((c) => ({
     name: c.name,
     dir: c.dir,
@@ -190,6 +192,7 @@ function mcpCall(toolName, args = {}, timeoutMs = 120000) {
       cwd: ROOT,
       env: {
         ...process.env,
+        CASTALIA_BACKGROUND_TASKS: '0',
         MEMORY_DB_DIR: DB_DIR,
         ...(LEGACY_DB_PATH ? { MEMORY_DB_PATH: LEGACY_DB_PATH } : {}),
         MEMORY_CONFIG: CONFIG_PATH,
@@ -240,23 +243,27 @@ function mcpCall(toolName, args = {}, timeoutMs = 120000) {
 }
 
 // ═══ 记忆总成(聚合本机多实例库) ═══
-const AGGREGATE_DIRS = (() => {
+function sameDbDir(a, b) {
+  return resolve(String(a)).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() === resolve(String(b)).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+function getAggregateDirs() {
   const parse = (raw) => {
     if (!raw) return null;
     try {
       const d = JSON.parse(raw);
       if (Array.isArray(d) && d.length) {
-        return d.map(x => ({ name: String(x.name || ''), dir: String(x.dir || '') })).filter(x => x.dir);
+        return d.filter(x => x && typeof x === 'object').filter(x => (x.transport || (/^https?:\/\//i.test(x.target || x.url || '') ? 'mcp-http' : 'local-dir')) === 'local-dir').map(x => ({ name: String(x.label || x.name || x.id || 'member'), dir: String(x.target || x.dir || '') })).filter(x => x.dir);
       }
     } catch {}
     return null;
   };
-  const cands = parse(process.env.FEDERATION_DIRS) || parse(process.env.AGGREGATE_DIRS) || [
+  const cands = parse(process.env.FEDERATION_MEMBERS) || parse(process.env.FEDERATION_DIRS) || parse(process.env.AGGREGATE_DIRS) || [
     /* 公开仓不带本机路径:默认只挂本实例自己的库;多成员联邦请用 FEDERATION_DIRS 环境变量配置 */
     { name: 'local', dir: DB_DIR },
   ];
   const norm = (d) => String(d || '').replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
   if (DB_DIR && !cands.some(c => norm(c.dir) === norm(DB_DIR))) cands.push({ name: '当前实例', dir: DB_DIR });
+  try { for (const m of readRegistry(DB_DIR)) if (m && m.enabled !== false && m.dir) cands.push({ name: String(m.name || m.id || 'member'), dir: String(m.dir) }); } catch { /* 坏注册文件不影响既有环境成员 */ }
   const seen = new Set();
   return cands.filter(c => {
     if (!c.dir || !existsSync(c.dir)) return false;
@@ -265,7 +272,8 @@ const AGGREGATE_DIRS = (() => {
     seen.add(k);
     return true;
   });
-})();
+}
+let AGGREGATE_DIRS = getAggregateDirs();
 
 function openLibDb(file, readonly = true) {
   if (!existsSync(file)) return null;
@@ -276,8 +284,15 @@ function openLibDb(file, readonly = true) {
 }
 
 function libFiles() {
+  AGGREGATE_DIRS = getAggregateDirs();
   const out = [];
+  let registered = [];
+  try { registered = readRegistry(DB_DIR).filter(m => m.enabled !== false); } catch { /* 注册错误由 members API 报告 */ }
   for (const c of AGGREGATE_DIRS) {
+    if (registered.some(m => m.name === c.name && sameDbDir(m.dir, c.dir))) {
+      try { for (const item of scanMember(c.dir).files) out.push({ ...item, instance: c.name }); } catch {}
+      continue;
+    }
     try {
       for (const f of readdirSync(c.dir)) {
         if (f.startsWith('project-') && f.endsWith('.sqlite')) {
@@ -311,20 +326,22 @@ function libFileByProject(project, memType) {
   return lib || null;
 }
 
-function openDbByProject(project, readonly = false, id = null) {
+function openDbByProject(project, readonly = false, id = null, instance = null, memType = null) {
   if (!project) return openDb(readonly);
-  const candidates = libFiles().filter(l => l.project === project);
+  const candidates = libFiles().filter(l => l.project === project && (!instance || l.instance === instance) && (!memType || (l.memType || 'general') === memType));
   if (!candidates.length) return null;
   let lib = null;
   if (id) {
+    const hits = [];
     for (const cand of candidates) {
+      let probe = null;
       try {
-        const db = new Database(cand.file, { readonly: true });
-        const hit = db.prepare('SELECT id FROM memory WHERE id = ?').get(id);
-        db.close();
-        if (hit) { lib = cand; break; }
-      } catch {}
+        probe = openLibDb(cand.file, true);
+        if (probe && probe.prepare('SELECT id FROM memory WHERE id = ?').get(id)) hits.push(cand);
+      } finally { if (probe) probe.close(); }
     }
+    if (hits.length !== 1) return null; // 不存在或身份歧义时拒绝写入，不能回退到任意库。
+    lib = hits[0];
   }
   lib = lib || candidates.find(l => l.memType === 'general') || candidates[0];
   if (!lib || !existsSync(lib.file)) return null;
@@ -334,9 +351,9 @@ function openDbByProject(project, readonly = false, id = null) {
 }
 
 function currentInstanceLibs() {
-  const self = AGGREGATE_DIRS.find(c => c.dir === DB_DIR);
-  const selfName = self ? self.name : null;
-  return libFiles().filter(l => selfName ? l.instance === selfName : l.file.startsWith(DB_DIR));
+  const libs = libFiles();
+  const self = AGGREGATE_DIRS.find(c => sameDbDir(c.dir, DB_DIR));
+  return self ? libs.filter(l => l.instance === self.name) : [];
 }
 
 function dbDirHasData(dir) {
@@ -482,7 +499,7 @@ export {
   ROOT, DB_DIR, DB_PATH, CONFIG_PATH, NODE_BIN, MCP_SERVER, LEGACY_DB_PATH, PORT,
   loadConfig, saveConfig, loadAllInstanceConfigs, saveConfigToDir, mergePreserveKeys,
   openDb, openLibDb, openDbByProject,
-  AGGREGATE_DIRS, libFiles, libFileByProject, currentInstanceLibs, findLib,
+  AGGREGATE_DIRS, getAggregateDirs, sameDbDir, libFiles, libFileByProject, currentInstanceLibs, findLib,
   resolveSourceFile, ensureLibSchema, safeFilePart, libFilePath, dbDirHasData,
   mcpCall, appendReflectHistory, readReflectHistory, historyEntry,
 };

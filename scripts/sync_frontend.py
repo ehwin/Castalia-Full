@@ -25,15 +25,26 @@ import re
 import shutil
 import sys
 
+# Windows 控制台默认 GBK:输出里的 ▸ / ✗ / ✓ 会直接抛 UnicodeEncodeError,
+# 同步还没开始就中断(2026-10-17 实测)。改成不可编码字符替换,保证脚本可跑。
+try:
+    sys.stdout.reconfigure(errors='replace')
+    sys.stderr.reconfigure(errors='replace')
+except Exception:
+    pass
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC_ROOT = os.path.normpath(os.path.join(HERE, '..', 'web'))
 
-# 三端活体目录(viz 根)。保持与 castalia_tray.py 的 viz 定义一致。
+# 部署目标(viz 根)。默认只同步仓库内/相对路径的两端;
+# 额外实例(如 AIRI)通过环境变量 AIRI_VIZ_DIR 声明,公共仓库不写死本机路径。
 TARGETS = {
-    'run/Castalia (Hermes :3345)':    os.path.normpath(os.path.join(HERE, '..', '..', 'run', 'Castalia', 'viz')),
-    'run/LobeHub (LobeHub :3346)':    os.path.normpath(os.path.join(HERE, '..', '..', 'run', 'LobeHub', 'viz')),
-    'AIRI viz (:3344)':              os.path.normpath(os.path.join('D:', os.sep, 'system', 'AIRI', 'viz')),
+    'run/Castalia':  os.path.normpath(os.path.join(HERE, '..', '..', 'run', 'Castalia', 'viz')),
+    'run/LobeHub':   os.path.normpath(os.path.join(HERE, '..', '..', 'run', 'LobeHub', 'viz')),
 }
+_airi = os.environ.get('AIRI_VIZ_DIR')
+if _airi:
+    TARGETS['AIRI'] = os.path.normpath(_airi)
 
 # 同步范围内的相对路径。改前端新增文件时,在此登记。
 SYNC_ITEMS = [
@@ -46,6 +57,8 @@ SYNC_ITEMS = [
     'public/assets/app-05-star.js',
     'public/assets/app-06-nebula.js',
     'public/assets/app-07-panels.js',
+    'public/assets/members.js',
+    'public/assets/members.css',
     'public/assets/boot.js',
     'public/assets/diag.js',
     'public/aggregate.html',
@@ -57,13 +70,15 @@ SYNC_ITEMS = [
     'routes/lib.js',
     'routes/config.js',
     'routes/aggregate.js',
+    'routes/members.js',
+    'routes/memberRegistry.js',
     'routes/memory.js',
     'routes/reflect.js',
 ]
 
 # 这些后缀的文件出现在目标目录但不在同步清单里 → 视为滞留旧版,删除
 # (注意:_ 前缀诊断文件、备份、.gitkeep 不算滞留)
-STALE_SUFFIXES = ('.html', '.js')
+RETIRED_FILES = ()  # Only explicitly retired common files may be removed.
 
 
 def md5(path: str) -> str:
@@ -106,8 +121,9 @@ def sync(dry: bool) -> int:
             continue
         tgt_public = os.path.join(tgt, 'public')
         tgt_routes = os.path.join(tgt, 'routes')
-        os.makedirs(tgt_public, exist_ok=True)
-        os.makedirs(tgt_routes, exist_ok=True)
+        if not dry:
+            os.makedirs(tgt_public, exist_ok=True)
+            os.makedirs(tgt_routes, exist_ok=True)
 
         # 1) 同步清单内文件
         for rel in SYNC_ITEMS:
@@ -139,7 +155,7 @@ def sync(dry: bool) -> int:
                 rel = f'{sub}/{f}'
                 if rel in allowed:
                     continue
-                if f.endswith(STALE_SUFFIXES):
+                if rel in RETIRED_FILES:
                     p = os.path.join(d, f)
                     if dry:
                         print(f'    (check) 滞留: {rel}')

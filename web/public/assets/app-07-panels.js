@@ -242,7 +242,7 @@ async function toggleStar() {
   const lib = panelNode.lib;
   try {
     const r = await fetch('/api/memory/toggle_important', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, project: lib })
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, project: lib, instance: panelNode.instance, memType: panelNode.memType })
     });
     const d = await r.json();
     if (!d.ok) return;
@@ -267,15 +267,16 @@ async function deletePanelNode() {
   if (!confirm('删除这条记忆?')) return;
   try {
     const r = await fetch('/api/memory/delete', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, project: lib })
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, project: lib, instance: panelNode.instance, memType: panelNode.memType })
     });
     const d = await r.json();
     if (d.deleted) {
-      allData.nodes = allData.nodes.filter(n => n.id !== id);
+      const graphId = panelNode.id;
+      allData.nodes = allData.nodes.filter(n => n.id !== graphId);
       allData.links = (allData.links || []).filter(l => {
         const s = typeof l.source === 'object' ? l.source.id : l.source;
         const t = typeof l.target === 'object' ? l.target.id : l.target;
-        return s !== id && t !== id;
+        return s !== graphId && t !== graphId;
       });
       allData.stats = allData.stats || {};
       allData.stats.totalLinks = allData.links.length;
@@ -483,7 +484,7 @@ async function loadConfig() {
       box.innerHTML = d.instances.map((it) => {
         const cls = it.exists ? 'cfg-chip on' : 'cfg-chip warn';
         const st = it.exists ? '已有配置' : '保存时创建';
-        return `<span class="${cls}">${it.name} · ${st}</span>`;
+        return `<span class="${cls}">${escHtml(it.name)} · ${st}</span>`;
       }).join('');
       if (d.inSync === false) {
         box.innerHTML += '<span class="cfg-chip warn">各端不一致，表单显示第一份。保存到全部可对齐</span>';
@@ -560,7 +561,7 @@ async function runReflect(mode) {
     } else if (d.skipped) {
       log('⏭ 跳过: ' + (d.errors || []).join('; '), 'log-info');
     } else {
-      log(`✅ 完成! 分析 ${d.conversationCount || d.memoryCount || '?'} 条,应用了 ${d.applied}/${d.actions} 个操作`, 'log-ok');
+      log(`${d.ok === false ? '❌ 未完整完成' : '✅ 完成'}! 分析 ${d.conversationCount || d.memoryCount || '?'} 条,应用了 ${d.applied}/${d.actions} 个操作`, d.ok === false ? 'log-err' : 'log-ok');
       (d.errors || []).forEach(e => log('⚠️ ' + e, 'log-err'));
       document.getElementById('lastRun').textContent = '上次运行: ' + new Date().toLocaleString();
       refreshGraph();
@@ -577,7 +578,8 @@ let allMems = [];
 
 async function loadMems() {
   try {
-    const r = await fetch('/api/memory?limit=200');
+    /* scope=all:控制台跑在汇总星图(3348)上,它的本库是空的;管理抽屉要跨实例看全部记忆。 */
+    const r = await fetch('/api/memory?limit=200&scope=all');
     allMems = await r.json();
     renderMems(allMems);
   } catch(e) { log('记忆加载失败: '+e.message, 'log-err'); }
@@ -588,28 +590,38 @@ function filterMems() {
   renderMems(q ? allMems.filter(m => (m.text||'').toLowerCase().includes(q)) : allMems);
 }
 
+/* 记忆正文来自对话/模型,属于不可信内容 —— 进 innerHTML 前必须转义,
+ * 否则一条含 <img onerror=...> 的记忆就是本地管理面板里的存储型 XSS。 */
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
 function renderMems(list) {
   const el = document.getElementById('memList');
   el.innerHTML = list.slice(0,80).map(m => {
     return `<div class="mem-item">
       <div class="mem-body">
-        <span class="mem-cat">${m.category||'?'}</span>
+        <span class="mem-cat">${escHtml(m.category || '?')}</span>
         ${m.tier==='critical'?'<span class="badge badge-ok">critical</span>':''}
         ${m.locked?'<span style="color:#f90">🔒</span>':''}
-        <div class="mem-text">${(m.text||'').substring(0,70)}</div>
-        <div class="mem-meta">${(m.id||'').substring(0,8)} | ${(m.createdAt||'').substring(0,10)} | ${(m.source||'').substring(0,12)}</div>
+        <div class="mem-text">${escHtml((m.text||'').substring(0,70))}</div>
+        <div class="mem-meta">${escHtml((m.id||'').substring(0,8))} | ${escHtml((m.createdAt||'').substring(0,10))} | ${escHtml((m.source||'').substring(0,12))}</div>
       </div>
       <div class="mem-actions">
-        <button class="btn btn-danger" onclick="delMem('${m.id}')">✕</button>
+        <button class="btn btn-danger" onclick="delMem('${escHtml(m.id)}','${escHtml(m.project||'')}','${escHtml(m.memType||'')}','${escHtml(m.instance||'')}')">✕</button>
       </div>
     </div>`;
   }).join('');
 }
 
-async function delMem(id) {
+async function delMem(id, project, memType, instance) {
   if (!confirm('删除这条记忆?')) return;
   try {
-    const r = await fetch('/api/memory/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id}) });
+    /* 必须带 project/memType/instance:记忆按 project×memType 分库,只传 id 会落到
+     * 默认库(project-default.sqlite)而删不到任何东西(2026-10-17 实测)。 */
+    const r = await fetch('/api/memory/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id, project, memType, instance}) });
     const d = await r.json();
     log(d.deleted ? '已删除: '+id.substring(0,8) : '删除失败', d.deleted ? 'log-ok' : 'log-err');
     loadMems();
@@ -618,7 +630,7 @@ async function delMem(id) {
 }
 
 function refreshGraph() {
-  fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE) + '&layout=folder-wedges').then(r => r.json()).then(data => {
+  fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE) + '&project=' + encodeURIComponent(GRAPH_PROJECT) + '&instance=' + encodeURIComponent(new URLSearchParams(location.search).get('instance') || '') + '&layout=folder-wedges').then(r => r.json()).then(data => {
     allData = data;
     updateStats(data.nodes.length, data.stats ? data.stats.totalLinks : data.links.length);
     if (currentView === 'nebula') {

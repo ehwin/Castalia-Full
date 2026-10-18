@@ -8,6 +8,8 @@ Designed after studying Claude Code's memory architecture (closed memory types, 
 
 > **Full edition (this repo):** adds **cross-library federation** — `reflect_all` (LLM-driven cross-library reflection into the `reflect` project) + `memory_search_all` (federation search over `FEDERATION_DIRS`). For the single-instance lite edition see **[Castalia](https://github.com/ehwin/Castalia)**. For the emotional variant (agent state / bias layer / emotion-weighted search), see **[Castalia-Anima](https://github.com/ehwin/Castalia-Anima)**.
 
+Full owns its aggregate bank and reflection pipeline. Source banks are read-only inputs; Full's outputs stay in its own `reflect` project and never replace Anima or a neutral harness's local reflection. Consumers such as AIRI read Full and Anima separately and keep their provenance distinct. Full's aggregation prompt is independent of any consumer's persona.
+
 > 📖 详细技术设计见 [docs/TECHNICAL.md](docs/TECHNICAL.md)(架构/数据模型/管线/决策记录)。
 
 

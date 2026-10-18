@@ -1,7 +1,7 @@
 /* routes/aggregate.js — /api/aggregate/* /api/manage/* */
 import { Router } from 'express';
 import {
-  AGGREGATE_DIRS, libFiles, openLibDb, findLib, mcpCall,
+  AGGREGATE_DIRS, libFiles, openLibDb, openDbByProject, findLib, mcpCall,
 } from './lib.js';
 
 const router = Router();
@@ -27,25 +27,56 @@ router.get('/aggregate/overview', (req, res) => {
 
 // ═══ /api/aggregate/graph ═══
 router.get('/aggregate/graph', (req, res) => {
-  const instTotal = {};
-  const projTotal = {};
-  const links = [];
+  const instTotal = new Map();
+  // A project name is only unique inside an instance. Keep the instance in the
+  // key so (for example) Hermes/dsh and another member's dsh never collapse.
+  const libraries = new Map();
   for (const l of libFiles()) {
     let db = null;
     let count = 0;
     try {
       db = openLibDb(l.file);
-      if (db) count = db.prepare('SELECT COUNT(*) c FROM memory WHERE is_active=1').get().c;
+      if (db) count = Number(db.prepare('SELECT COUNT(*) c FROM memory WHERE is_active=1').get().c || 0);
     } catch { count = 0; }
     finally { if (db) db.close(); }
-    instTotal[l.instance] = (instTotal[l.instance] || 0) + count;
-    projTotal[l.project] = (projTotal[l.project] || 0) + count;
-    links.push({ source: `software:${l.instance}`, target: `library:${l.project}`, value: count });
+
+    const instance = String(l.instance || 'unknown');
+    const project = String(l.project || 'default');
+    const key = JSON.stringify([instance, project]);
+    instTotal.set(instance, (instTotal.get(instance) || 0) + count);
+    let library = libraries.get(key);
+    if (!library) {
+      library = { instance, project, value: 0, memTypes: {} };
+      libraries.set(key, library);
+    }
+    library.value += count;
+    const memType = String(l.memType || 'general');
+    library.memTypes[memType] = (library.memTypes[memType] || 0) + count;
   }
+
+  // Encode both dimensions in the node id while retaining human-readable
+  // instance/project fields for consumers that render labels or filters.
+  const libraryId = (instance, project) =>
+    `library:${encodeURIComponent(instance)}:${encodeURIComponent(project)}`;
   const nodes = [
-    ...AGGREGATE_DIRS.map(c => ({ id: `software:${c.name}`, group: 'software', label: c.name, value: instTotal[c.name] || 0 })),
-    ...Object.keys(projTotal).sort().map(p => ({ id: `library:${p}`, group: 'library', label: p, value: projTotal[p] })),
+    ...AGGREGATE_DIRS.map(c => ({
+      id: `software:${c.name}`, group: 'software', label: c.name,
+      instance: c.name, value: instTotal.get(c.name) || 0,
+    })),
+    ...Array.from(libraries.values())
+      .sort((a, b) => a.instance.localeCompare(b.instance) || a.project.localeCompare(b.project))
+      .map(l => ({
+        id: libraryId(l.instance, l.project), group: 'library',
+        label: l.project, instance: l.instance, project: l.project,
+        value: l.value, memTypes: l.memTypes,
+      })),
   ];
+  const links = Array.from(libraries.values()).map(l => ({
+    source: `software:${l.instance}`,
+    target: libraryId(l.instance, l.project),
+    value: l.value,
+    memTypes: l.memTypes,
+  }));
   res.json({ ok: true, nodes, links });
 });
 
@@ -157,7 +188,7 @@ router.get('/manage/memories', (req, res) => {
         ? db.prepare(`${base} WHERE is_active=1 AND (text LIKE ? OR mem_type LIKE ? OR category LIKE ? OR type LIKE ?) ORDER BY created_at DESC LIMIT ?`)
             .all(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, limit)
         : db.prepare(`${base} WHERE is_active=1 ORDER BY created_at DESC LIMIT ?`).all(limit);
-      for (const r of rows) all.push(Object.assign({}, r, { __instance: lib.instance, __project: lib.project }));
+      for (const r of rows) all.push(Object.assign({}, r, { __instance: lib.instance, __project: lib.project, __memType: lib.memType || 'general', __file: lib.file }));
     } catch (e) { /* 单个文件坏掉不影响整体 */ }
     finally { if (db) { try { db.close(); } catch (e2) {} } }
   }
@@ -179,20 +210,21 @@ router.get('/manage/memories', (req, res) => {
       updatedAt: r.updated_at,
       instance: r.__instance,
       project: r.__project,
+       sourceMemType: r.__memType,
+       sourceFile: r.__file,
     })),
   });
 });
 
 router.post('/manage/memory/update', (req, res) => {
   try {
-    const { instance, project, id, memType, category, tier, importance } = req.body || {};
+    const { instance, project, id, sourceMemType, memType, category, tier, importance } = req.body || {};
     if (!id) return res.json({ ok: false, error: 'id 必填' });
-    const lib = findLib(String(instance || ''), String(project || ''));
-    if (!lib) return res.json({ ok: false, error: '库不存在' });
-    const db = openLibDb(lib.file, false);
-    if (!db) return res.json({ ok: false, error: 'open_failed' });
+    if (!instance || !project || !sourceMemType) return res.json({ ok: false, error: '缺少源实例/项目/分类' });
+    const db = openDbByProject(project, false, id, instance, sourceMemType);
+    if (!db) return res.json({ ok: false, error: '源记忆不存在或定位不唯一' });
     const sets = [], vals = [];
-    if (memType !== undefined && memType !== null) { sets.push('mem_type = ?'); vals.push(String(memType)); }
+    if (memType !== undefined && memType !== null && memType !== sourceMemType) { db.close(); return res.json({ ok: false, requiresMove: true, error: '改分类需要物理迁移，当前不允许仅修改分类字段' }); }
     if (category !== undefined && category !== null) { sets.push('category = ?'); vals.push(String(category)); }
     if (tier !== undefined && tier !== null) { sets.push('tier = ?'); vals.push(String(tier)); }
     if (importance !== undefined && importance !== null) { sets.push('importance = ?'); vals.push(Number(importance)); }
@@ -210,12 +242,11 @@ router.post('/manage/memory/update', (req, res) => {
 // ═══ POST /api/manage/memory/delete ═══
 router.post('/manage/memory/delete', (req, res) => {
   try {
-    const { instance, project, id } = req.body || {};
+    const { instance, project, id, sourceMemType } = req.body || {};
     if (!id) return res.json({ ok: false, error: 'id 必填' });
-    const lib = findLib(String(instance || ''), String(project || ''));
-    if (!lib) return res.json({ ok: false, error: '库不存在' });
-    const db = openLibDb(lib.file, false);
-    if (!db) return res.json({ ok: false, error: 'open_failed' });
+    if (!instance || !project || !sourceMemType) return res.json({ ok: false, error: '缺少源实例/项目/分类' });
+    const db = openDbByProject(project, false, id, instance, sourceMemType);
+    if (!db) return res.json({ ok: false, error: '源记忆不存在或定位不唯一' });
     const r = db.prepare('UPDATE memory SET is_active = 0, updated_at = ? WHERE id = ?').run(new Date().toISOString(), id);
     try { db.prepare('DELETE FROM vec_memory WHERE rowid = (SELECT rowid FROM memory WHERE id = ?)').run(id); } catch {}
     db.close();

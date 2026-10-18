@@ -13,7 +13,8 @@
  *
  * 回退逻辑:isTriageConfigured() = 有 TRIAGE key 或 REFLECT key。
  */
-import { callLlm, makeLlmChannel, LlmChannel } from './reflectDriver.js';
+import { callLlm, makeLlmChannel, LlmChannel } from './reflectionLlm.js';
+import { reflectionFidelityPrompt, reflectionPolicy } from './reflectionFidelity.js';
 import { isMemType, isClosedMemType, normalizeMarkdown, MemType } from './memType.js';
 import { getSessionMemory, upsertSessionMemory, promoteToProject, deleteSessionFragments, applyIdentityActions, saveMemory } from './store.js';
 import { normalizeProject } from './env.js';
@@ -220,9 +221,11 @@ function normalizeText(s: string): string {
  * 任何异常 → 返回 false(不阻断晋升)。
  */
 export async function isDuplicate(proj: string, text: string, memType: string): Promise<boolean> {
+  proj = normalizeProject(proj);
+  const preserve = reflectionPolicy(proj) !== 'standard';
   const hasVec = typeof embed === 'function' && typeof cosineSimilarity === 'function';
   try {
-    const candidates = DatabaseManager.getInstance(proj).prepare(`
+    const candidates = DatabaseManager.getInstance(proj, memType).prepare(`
       SELECT text FROM memory
       WHERE is_active = 1 AND mem_type = ? AND project = ?
         AND COALESCE(source, '') NOT IN ('conversation_log', 'auto_process', 'session_memory')
@@ -230,10 +233,18 @@ export async function isDuplicate(proj: string, text: string, memType: string): 
     if (!candidates || candidates.length === 0) return false;
 
     // ① 文本查重
-    const nText = normalizeText(text);
+    // Store/promote paths wrap closed mem types in Markdown. Compare the same
+    // representation that is actually persisted, otherwise every promoted item
+    // with an auto-generated heading appears new on the next reflection pass.
+    const normalizedText = normalizeMarkdown(text, memType);
+    const nText = normalizeText(normalizedText);
     for (const row of candidates) {
       const cand = row?.text;
       if (typeof cand !== 'string') continue;
+      if (preserve) {
+        if (normalizedText.trim() === cand.trim()) return true;
+        continue;
+      }
       const nCand = normalizeText(cand);
       if (nCand.length === 0) continue;
       if (nText === nCand) return true;
@@ -245,7 +256,7 @@ export async function isDuplicate(proj: string, text: string, memType: string): 
     }
 
     // ② 向量增强(embed/无缓存失败 → 跳过,文本查重兜底)
-    if (!hasVec) return false;
+    if (!hasVec || preserve) return false;
     const db = DatabaseManager.getInstance(proj);
     const queryVec = await embed(text, proj);
     for (const row of candidates) {
@@ -267,7 +278,7 @@ export async function isDuplicate(proj: string, text: string, memType: string): 
 
 /**
  * 增量反思(渐进式临时反思)主流程:
- * 取最近 delta(最多 10 条)→ triage 通道调 LLM → 解析 → 晋升(promote+即删)→ 滚动覆盖。
+ * 完整最近 delta → triage 通道调 LLM → 解析 → 晋升 → 滚动快照。
  * 无 key / 解析失败 → 静默跳过(console.error),绝不影响主流程。
  * characterId 可选:默认 env CHAR_ID(与 MCP 流程的 auto_process 一致)。
  */
@@ -286,7 +297,7 @@ export async function runIncrementalReflection(
   }
 
   try {
-    const recent = (recentMessages || []).slice(-10);
+    const recent = recentMessages || [];
     if (recent.length === 0) {
       return { ...base, ok: true, skipped: true, reason: '无最近消息' };
     }
@@ -295,7 +306,7 @@ export async function runIncrementalReflection(
 
     const lines = recent.map(m => {
       const who = m.role === 'user' ? 'USER' : m.role === 'assistant' ? 'ASSISTANT' : String(m.role || '').toUpperCase();
-      return `${who}: ${(m.content || '').slice(0, 2000)}`;
+      return `${who}: ${m.content || ''}`;
     }).join('\n');
     // v1.15: 注入既有身份列表(update/remove 的 id 白名单,防 LLM 幻觉 id)
     let identityList = '(无既有身份记忆)';
@@ -312,11 +323,13 @@ export async function runIncrementalReflection(
 <transcript>
 ${lines}
 </transcript>`;
-    const promptWithIdentity = INCREMENTAL_REFLECT_PROMPT.replace('{{identityList}}', identityList);
+    const promptWithIdentity = INCREMENTAL_REFLECT_PROMPT.replace('{{identityList}}', identityList) + '\n' + reflectionFidelityPrompt(proj) + '\n' +
+      '快照仅作导航。上述长度和不存路径要求不适用于逐字/证据策略；promoted 逐条保留原话、条件、验证与修正。';
 
     const llm = await callLlm(promptWithIdentity, userPrompt, channel);
     if (!llm) return { ...base, errors: ['LLM 调用失败'] };
-    const parsed = parseIncrementalReflection(llm.content || llm.reasoning);
+    if (llm.finishReason === 'length') return { ...base, errors: ['增量反思输出截断，未更新会话或记忆'] };
+    const parsed = parseIncrementalReflection(llm.content);
     if (!parsed) return { ...base, errors: ['增量反思输出解析失败'] };
 
     // sessionMemory:滚动状态(可省略)
@@ -345,7 +358,7 @@ ${lines}
       try {
         const ids = promoteToProject(proj, promoted, characterId);
         promotedCount = ids.length;
-        if (ids.length > 0) {
+        if (ids.length === promoted.length && reflectionPolicy(proj) === 'standard') {
           try { deleteSessionFragments(proj, sessionId); }
           catch (e: any) { console.error('[reflect-incremental] 晋升即删失败:', e.message); }
         }
@@ -366,7 +379,7 @@ ${lines}
     }
 
     // ③ v1.15: 身份维护(identity CRUD,白名单校验在 applyIdentityActions)
-    const idResult = parsed.identity && typeof parsed.identity === 'object'
+    const idResult = reflectionPolicy(proj) === 'standard' && parsed.identity && typeof parsed.identity === 'object'
       ? await (async () => {
           const ida = parsed.identity as any;
           try {

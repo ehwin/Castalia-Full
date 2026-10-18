@@ -89,11 +89,11 @@ function renderNebula(data) {
   real.forEach(n => {
     const rg = String(n.layoutGroup || n.instance || (n.lib || 'default'));
     /* 方案③(用户 2026-09-13 定稿):L2 = **四个文件夹(memType)= 星座**;库(lib)退到星座**内部**做细分。
-     * 原实现星座=库(custom-project/对话),文件夹只当子行 → 多出一层,且"自定义领域/对话"看起来像两个平级星座。 */
+     * 原实现星座=库,文件夹只当子行 → 多出一层,两个库名看起来像两个平级星座。 */
     /* 星座键:服务端已按实例口径算进 blobId(星域/星座),优先用它;没有则退回本页口径 */
   const cons = String(n.blobId ? String(n.blobId).split('/').slice(1).join('/') || 'general'
                                : (window.CONS_KIND === 'category' ? (n.category || 'general') : (n.memType || 'general')));
-    const consLib = String(n.lib || 'default');           /* 细分 = 库(lobehub/custom-project/reflect…) */
+    const consLib = String(n.lib || 'default');           /* 细分 = 库 */
     n.__region = rg; n.__constellation = cons; n.__consLib = consLib;
     n.__galaxy = consLib;
     if (!byRegion.has(rg)) byRegion.set(rg, new Map());
@@ -197,6 +197,30 @@ function renderNebula(data) {
       __labelLevel: 'region', __labelOnly: true,
       x: cx, y: cy, z: cz, fx: cx, fy: cy, fz: cz,
     });
+  }
+  // DSH is a project inside Hermes, not another storage instance. Give it a
+  // persistent locator in the federation view without changing node ownership.
+  if (IS_FED) {
+    const dshByInstance = new Map();
+    for (const n of real) {
+      if (String(n.project || n.lib || '').toLowerCase() !== 'dsh') continue;
+      const owner = n.instance || n.__region || 'Hermes';
+      if (!dshByInstance.has(owner)) dshByInstance.set(owner, []);
+      dshByInstance.get(owner).push(n);
+    }
+    for (const [owner, members] of dshByInstance) {
+      const center = axis => members.reduce((sum, n) => sum + (n[axis] || 0), 0) / members.length;
+      const x = center('x'), y = center('y'), z = center('z');
+      instNodes.push({
+        id: 'nebproject:' + owner + '/dsh', rawId: 'nebproject:' + owner + '/dsh',
+        instance: owner, lib: 'dsh', project: 'dsh',
+        shortLabel: 'DSH · ' + owner, label: 'DSH · ' + members.length,
+        fullText: 'DeepSeek Harness · ' + owner + ' / dsh · ' + members.length + ' 条记忆',
+        group: 'nebula-inst-core', category: 'project', memType: 'general',
+        __labelLevel: 'region', __labelOnly: true, __galaxyColor: '#56b4ff',
+        x, y, z, fx: x, fy: y, fz: z, size: 4, importance: 1,
+      });
+    }
   }
   /* 分级标签的"看图比例"基准:场景半径 */
   window.__nebulaR = Math.max(1, real.reduce((m, n) => Math.max(m, Math.hypot(n.x || 0, n.y || 0, n.z || 0)), 1));
@@ -579,6 +603,11 @@ function renderNebulaLegend(data, real) {
     m.set(cons, (m.get(cons) || 0) + 1);
   });
   const items = [];
+  const dshMembers = (real || []).filter(n => String(n.project || n.lib || '').toLowerCase() === 'dsh');
+  if (IS_FED && dshMembers.length) {
+    items.push({ color: '#56b4ff', label: 'DSH · DeepSeek Harness（项目）', count: dshMembers.length,
+      cls: 'parent', key: 'project:dsh', parent: '', lvl: 0, filter: { kind: 'project', id: 'dsh' } });
+  }
   const rgs = [...byRegion.keys()].sort((a, b) => {
     const w = (x) => (x === '联邦' ? 1 : 0);
     return w(a) - w(b) || a.localeCompare(b);
@@ -613,7 +642,7 @@ function renderNebulaLegend(data, real) {
   if (linkEl) linkEl.textContent = '点行=展开下一层 · 点圆点=筛选 · 点标题=收起面板';
 }
 function __init() {
-fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE) + '&layout=folder-wedges')
+fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE) + '&project=' + encodeURIComponent(GRAPH_PROJECT) + '&instance=' + encodeURIComponent(new URLSearchParams(location.search).get('instance') || '') + '&layout=folder-wedges')
   .then(r => r.json())
   .then(data => {
       if (data.consKind) window.CONS_KIND = String(data.consKind).toLowerCase();

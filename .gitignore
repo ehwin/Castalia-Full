@@ -13,3 +13,10 @@ keys.key
 memory/receipts/
 _D/
 _refs/
+
+# 本地手工备份/一次性审计产物(2026-10-17)
+*.bak
+*.bak-*
+*.bak2-*
+*.bak3-*
+*.old*

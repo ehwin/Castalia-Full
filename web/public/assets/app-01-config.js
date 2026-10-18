@@ -80,7 +80,6 @@ const MORPH_LABELS = {
 };
 function pickGalaxyMorph(p, count, nTypes, gi) {
   const k = String(p || '').toLowerCase();
-  if (k === 'custom-project') return 'spiral';
   if (k === 'lobehub' || k === 'lobe') return 'barred';
   if (k === 'airi') return 'barred';
   if (k === 'hermes') return 'irregular';
@@ -93,29 +92,34 @@ function pickGalaxyMorph(p, count, nTypes, gi) {
 }
 const GRAPH_SCOPE = (new URLSearchParams(location.search).get('scope') || 'local').toLowerCase();
 const IS_FED = GRAPH_SCOPE === 'federation' || GRAPH_SCOPE === 'all' || GRAPH_SCOPE === 'fed';
+const GRAPH_PROJECT = new URLSearchParams(location.search).get('project') || '';
 const MAP_LINKS = {
-  federation: { href: 'http://127.0.0.1:3345/?scope=federation', label: '联邦' },
+  DSH: { href: 'http://127.0.0.1:3347/?scope=local', label: 'DeepSeek Harness' },
+  federation: { href: 'http://127.0.0.1:3348/?scope=federation', label: '联邦' },
   Hermes: { href: 'http://127.0.0.1:3345/?scope=local', label: 'Hermes' },
   LobeHub: { href: 'http://127.0.0.1:3346/?scope=local', label: 'LobeHub' },
   AIRI: { href: 'http://127.0.0.1:3344/?scope=local', label: 'AIRI' },
-  联邦: { href: 'http://127.0.0.1:3345/?scope=federation', label: '联邦' },
+  联邦: { href: 'http://127.0.0.1:3348/?scope=federation', label: '联邦' },
 };
 function currentMapId() {
+  if (GRAPH_PROJECT === 'dsh') return 'dsh';
   const port = String(location.port || '');
+  if (port === '3347') return 'dsh';
+  if (port === '3348') return 'federation';
   if (port === '3346') return 'lobehub';
   if (port === '3344') return 'airi';
   if (IS_FED) return 'federation';
   return 'hermes';
 }
 const STRUCT_COLORS = {
-  Hermes: '#5FF5D6', LobeHub: '#7EB0FF', AIRI: '#FF8FB8', 联邦: '#FFD056',
+  Hermes: '#5FF5D6', LobeHub: '#7EB0FF', AIRI: '#FF8FB8', 联邦: '#FFD056', DSH: '#56B4FF',
   hermes: '#3EE8C8', lobehub: '#5B8CFF', airi: '#A78BFA',
-  reflect: '#F5B942', default: '#6B7585', shared: '#8A94A3', custom-project: '#E8A54B',
+  reflect: '#F5B942', default: '#6B7585', shared: '#8A94A3',
 };
 const STRUCT_LABELS = {
   Hermes: 'Hermes', LobeHub: 'LobeHub', AIRI: 'AIRI', 联邦: '联邦',
   hermes: 'Hermes', lobehub: '对话', airi: 'AIRI',
-  custom-project: '自定义领域', reflect: '反思产物', shared: '共享', default: '默认',
+  dsh: 'DeepSeek Harness', reflect: '反思产物', shared: '共享', default: '默认',
 };
 function structLabel(k) { return STRUCT_LABELS[k] || k; }
 function structKey(n) {
@@ -130,11 +134,11 @@ function structKey(n) {
 function applyInstanceChrome(s) {
   const sub = document.getElementById('app-sub');
   const id = currentMapId();
-  const names = { federation: '联邦总图', hermes: 'Hermes', lobehub: 'LobeHub', airi: 'AIRI' };
-  const name = names[id] || ((s && s.instance) ? s.instance : '星图');
+  const names = { federation: '联邦总图', dsh: 'DeepSeek Harness', hermes: 'Hermes', lobehub: 'LobeHub', airi: 'AIRI' };
+  const name = new URLSearchParams(location.search).get('instance') || names[id] || ((s && s.instance) ? s.instance : '星图');
   if (sub) sub.textContent = name;
   document.title = 'Castalia · ' + name;
-  ['federation', 'hermes', 'lobehub', 'airi'].forEach(k => {
+  ['federation', 'hermes', 'dsh', 'lobehub', 'airi'].forEach(k => {
     const tab = document.getElementById('tab-' + k);
     const rail = document.getElementById('rail-' + (k === 'federation' ? 'fed' : k));
     if (tab) tab.classList.toggle('active', k === id);

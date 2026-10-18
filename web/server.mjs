@@ -25,6 +25,7 @@ import memoryRouter from './routes/memory.js';
 import configRouter from './routes/config.js';
 import reflectRouter from './routes/reflect.js';
 import aggregateRouter from './routes/aggregate.js';
+import membersRouter from './routes/members.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -32,12 +33,37 @@ const __dirname = dirname(__filename);
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
+// 所有写请求只接受本机同源:挡 DNS rebinding / 跨站 CSRF(2026-10-17)。
+// 星图/管理 API 会软删/迁移记忆、改写 config,不能只靠"绑了 127.0.0.1"。
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+  const host = String(req.headers.host || '').toLowerCase();
+  const hostname = host.startsWith('[') ? host.split(']')[0] + ']' : (host.includes(':') ? host.split(':')[0] : host);
+  if (!['127.0.0.1', 'localhost', '[::1]', '::1'].includes(hostname)) {
+    return res.status(403).json({ ok: false, error: '仅允许本机访问' });
+  }
+  const origin = req.headers.origin;
+  if (origin) {
+    try {
+      const ohost = new URL(origin).hostname;
+      if (!['127.0.0.1', 'localhost', '::1'].includes(ohost)) {
+        return res.status(403).json({ ok: false, error: '拒绝跨站请求' });
+      }
+    } catch { return res.status(403).json({ ok: false, error: '拒绝跨站请求' }); }
+  }
+  if (String(req.headers['sec-fetch-site'] || '').toLowerCase() === 'cross-site') {
+    return res.status(403).json({ ok: false, error: '拒绝跨站请求' });
+  }
+  next();
+});
+
 // API 路由
 app.use('/api', graphRouter);
 app.use('/api', memoryRouter);
 app.use('/api', configRouter);
 app.use('/api', reflectRouter);
 app.use('/api', aggregateRouter);
+app.use('/api', membersRouter);
 
 // ═══ 静态服务 ═══
 // 本地 3D 依赖(three.js / 3d-force-graph)——离线可用;文件名带版本号,升级即换名防缓存

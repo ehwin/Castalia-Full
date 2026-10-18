@@ -9,6 +9,7 @@ import type Database from 'better-sqlite3';
 import { embed, getEmbeddingCached } from './ollama.js';
 import { PROJECT_ID, CHAR_ID, normalizeProject, isEmbedEnabled } from './env.js';
 import { isMemType,  MemType, isClosedMemType, normalizeMarkdown, normalizeMemType } from './memType.js';
+import { reflectionPolicy } from './reflectionFidelity.js';
 
 let saveCount = 0;
 const CONSOLIDATE_INTERVAL = 50;
@@ -76,38 +77,47 @@ export interface MemoryRecord {
 export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
   if (!params.text || !params.text.trim()) throw new Error('memory text must not be empty');
   // memdir 路由:按 memType 落对应分类库(memory/<project>/<memType>/memory.sqlite)
-  const db = DatabaseManager.getInstance(params.project, params.memType);
   const now = new Date().toISOString();
   const skipEmbed = params.skipEmbed === true;
   const project = normalizeProject(params.project);
-  const memType = normalizeMemType(params.memType);
+  const preserve = reflectionPolicy(project) !== 'standard';
+  let memType: MemType;
+  if (params.memType && isMemType(params.memType)) {
+    memType = normalizeMemType(params.memType);
+  } else if ((params as any).autoClassify === true) {
+    try {
+      const { classifyMemTypeLLM } = await import('./triage.js');
+      memType = (await classifyMemTypeLLM(params.text, params.project)).memType;
+    } catch { memType = 'general'; }
+  } else {
+    memType = 'general';
+  }
+  const db = DatabaseManager.getInstance(project, memType);
   // v1.8: 4 种封闭类型(memType≠general)且 text 非 Markdown 时,自动规范化包装(加标题行+转列表)
   const text = normalizeMarkdown(params.text, memType);
 
   // ═══ 精确去重：完全相同的文本不重复存(仅限同项目) ═══
   const exactDup = db.prepare(`
-    SELECT id FROM memory
-    WHERE is_active = 1 AND project = ? AND LOWER(TRIM(text)) = LOWER(TRIM(?))
+    SELECT * FROM memory
+    WHERE is_active = 1 AND project = ? AND ${preserve ? 'TRIM(text) = TRIM(?)' : 'LOWER(TRIM(text)) = LOWER(TRIM(?))'}
     LIMIT 1
   `).get(project, text?.trim() || '') as any;
 
   if (exactDup) {
     db.prepare('UPDATE memory SET reference_count = reference_count + 1 WHERE id = ?').run(exactDup.id);
     return {
-      id: exactDup.id, text, project,
-      sessionId: null,
-      type: params.type ?? 'episodic', memType, category: params.category ?? 'general',
-      subcategory: params.subcategory ?? null, tags: params.tags ?? [],
-      importance: params.importance ?? 0.5,
-      characterId: params.characterId ?? null, source: params.source ?? null,
-      subject: params.subject ?? 'user',
-      tier: params.tier ?? 'standard', expiresAt: null,
-      isActive: true,
-      createdAt: now, updatedAt: now, lastAccessedAt: now, accessedCount: 0,
-      metadata: params.metadata ?? null, title: params.title ?? null, status: params.status ?? null,
-      scoreConfidence: params.scoreConfidence ?? null, scoreImpact: params.scoreImpact ?? null,
-      scorePriority: params.scorePriority ?? null, scoreUrgency: params.scoreUrgency ?? null,
-      identityLocked: params.identityLocked === true,
+      id: exactDup.id, text: exactDup.text, project: exactDup.project,
+      sessionId: exactDup.session_id, type: exactDup.type, memType: exactDup.mem_type,
+      category: exactDup.category, subcategory: exactDup.subcategory,
+      tags: JSON.parse(exactDup.tags || '[]'), importance: exactDup.importance,
+      characterId: exactDup.character_id, source: exactDup.source, subject: exactDup.subject,
+      tier: exactDup.tier, expiresAt: exactDup.expires_at, isActive: !!exactDup.is_active,
+      createdAt: exactDup.created_at, updatedAt: exactDup.updated_at,
+      lastAccessedAt: exactDup.last_accessed_at, accessedCount: exactDup.accessed_count,
+      metadata: exactDup.metadata, title: exactDup.title, status: exactDup.status,
+      scoreConfidence: exactDup.score_confidence, scoreImpact: exactDup.score_impact,
+      scorePriority: exactDup.score_priority, scoreUrgency: exactDup.score_urgency,
+      identityLocked: !!exactDup.identity_locked,
     } as MemoryRecord;
     }
 
@@ -125,7 +135,7 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
         WHERE embedding MATCH ? ORDER BY distance LIMIT 10
       `).all(floatVec) as any[];
 
-      if (knn.length > 0 && knn[0].distance < 0.05) {
+      if (!preserve && knn.length > 0 && knn[0].distance < 0.05) {
         // v1.5: 项目隔离 — 仅当最近邻属于同项目才算重复
         const dupRow = db.prepare('SELECT id FROM memory WHERE rowid = ? AND project = ?').get(Number(knn[0].rowid), project) as any;
         if (dupRow) {
@@ -203,7 +213,7 @@ export async function saveMemory(params: StoreParams): Promise<MemoryRecord> {
     saveCount = 0;
     try {
       const { consolidate } = await import('./consolidate.js');
-      consolidate().catch(() => {});
+      consolidate(project).catch(() => {});
     } catch {}
   }
 
@@ -328,15 +338,6 @@ export async function updateMemory(id: string, updates: Partial<StoreParams>): P
   if (updates.scorePriority !== undefined) { fields.push('score_priority = ?'); values.push(updates.scorePriority); }
   if (updates.scoreUrgency !== undefined) { fields.push('score_urgency = ?'); values.push(updates.scoreUrgency); }
   if (updates.identityLocked !== undefined) { fields.push('identity_locked = ?'); values.push(updates.identityLocked ? 1 : 0); }
-  // v1.15: LobeHub 精细化吸收
-  if (updates.metadata !== undefined) { fields.push('metadata = ?'); values.push(updates.metadata); }
-  if (updates.title !== undefined) { fields.push('title = ?'); values.push(updates.title); }
-  if (updates.status !== undefined) { fields.push('status = ?'); values.push(updates.status); }
-  if (updates.scoreConfidence !== undefined) { fields.push('score_confidence = ?'); values.push(updates.scoreConfidence); }
-  if (updates.scoreImpact !== undefined) { fields.push('score_impact = ?'); values.push(updates.scoreImpact); }
-  if (updates.scorePriority !== undefined) { fields.push('score_priority = ?'); values.push(updates.scorePriority); }
-  if (updates.scoreUrgency !== undefined) { fields.push('score_urgency = ?'); values.push(updates.scoreUrgency); }
-  if (updates.identityLocked !== undefined) { fields.push('identity_locked = ?'); values.push(updates.identityLocked ? 1 : 0); }
 
   if (fields.length === 0) return existing;
 
@@ -377,7 +378,8 @@ export async function saveConversationTurn(
   const proj = normalizeProject(project);
 
 
-  const text = `用户: ${userMsg}\n助手: ${assistantMsg}`;
+  const assistantName = (process.env.CASTALIA_ASSISTANT_NAME || '助手').trim() || '助手';
+  const text = `用户: ${userMsg}\n${assistantName}: ${assistantMsg}`;
   /* v1.19 分隔带:对话原文审计可见(is_active=0)——检索/星图/readDigest 只读 is_active=1,自动不进总图;
      mood 前缀剥离入 metadata,正文纯净 */
   const meta: Record<string, any> = {};
@@ -440,13 +442,16 @@ export function cleanupExpiredMemories(project?: string): number {
  * v5.0: 重新向量化单条记忆 — reflect 后调用
  * 删旧向量 + embed 新文本 + 插入新向量
  */
-export async function reEmbedMemory(id: string): Promise<boolean> {
-  const db = DatabaseManager.getInstance();
+export async function reEmbedMemory(id: string, project?: string): Promise<boolean> {
+  const found = findDbByMemoryId(id, project);
+  if (!found) return false;
+  const db = found.db;
+  const proj = normalizeProject(project);
   const mem = db.prepare('SELECT rowid, text FROM memory WHERE id = ? AND is_active = 1').get(id) as any;
   if (!mem) return false;
 
   try {
-    const vec = new Float32Array(await embed(mem.text));
+    const vec = new Float32Array(await embed(mem.text, proj));
     db.prepare('DELETE FROM vec_memory WHERE rowid = ?').run(BigInt(mem.rowid));
     db.prepare('INSERT INTO vec_memory (rowid, embedding) VALUES (?, ?)').run(BigInt(mem.rowid), vec);
     return true;
@@ -698,6 +703,7 @@ export function promoteToProject(
 ): string[] {
   const cid = characterId || CHAR_ID;
   const proj = normalizeProject(project);
+  const preserve = reflectionPolicy(proj) !== 'standard';
   const now = new Date().toISOString();
   const ids: string[] = [];
   const gateRejected: Record<string, string[]> = { tooloong: [], noInfo: [], foreign: [], delta: [] };
@@ -708,7 +714,7 @@ export function promoteToProject(
     if (!mt || !text) continue;
     /* ── v1.19 promote 三闸(Claude 写前语义回流) ── */
     // 闸1 密度:>240 字或结构词密度过低(信息/字符比)拒
-    if (text.length > 240) { gateRejected.tooloong.push(text.slice(0, 40)); continue; }
+    if (!preserve && text.length > 240) { gateRejected.tooloong.push(text.slice(0, 40)); continue; }
     const infoWords = (text.match(/[\u4e00-\u9fa5A-Za-z0-9]{2,}/g) || []).join('');
     if (infoWords.replace(/[\u4e00-\u9fa5A-Za-z0-9]/g, '').length === text.length) { gateRejected.noInfo.push(text.slice(0, 40)); continue; }
     // 闸2 归属:跨项目专名(本库外的软件名/系统名)拒——防跨盘串库(AIRI 内容经 lobehub 通道入库事件)
@@ -727,7 +733,7 @@ export function promoteToProject(
     const db = DatabaseManager.getInstance(proj, mt);
     const md = normalizeMarkdown(text, mt);
     // 闸3 delta:与库存项目级同 memType 记忆 bigram Jaccard>0.72 视为无增量(旧闻重复入库)
-    {
+    if (!preserve) {
       const existRows = db.prepare(`
         SELECT text FROM memory
         WHERE is_active = 1 AND project = ? AND session_id IS NULL AND mem_type = ?
@@ -751,7 +757,7 @@ export function promoteToProject(
     }
     const dup = db.prepare(`
       SELECT id FROM memory
-      WHERE is_active = 1 AND project = ? AND session_id IS NULL AND LOWER(TRIM(text)) = LOWER(TRIM(?))
+      WHERE is_active = 1 AND project = ? AND session_id IS NULL AND ${preserve ? 'TRIM(text) = TRIM(?)' : 'LOWER(TRIM(text)) = LOWER(TRIM(?))'}
       LIMIT 1
     `).get(proj, md) as any;
     if (dup) { ids.push(dup.id); continue; }

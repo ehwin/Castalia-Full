@@ -6,7 +6,7 @@ import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import {
   openDb, openLibDb, openDbByProject, currentInstanceLibs, findLib, resolveSourceFile,
-  ensureLibSchema, libFilePath,
+  ensureLibSchema, libFilePath, libFiles,
 } from './lib.js';
 
 const router = Router();
@@ -15,9 +15,12 @@ function safeTags(raw) {
   try { const p = JSON.parse(raw || '[]'); return Array.isArray(p) ? p : []; } catch { return []; }
 }
 
-// ═══ GET /api/memory:聚合当前实例全部分类库,按时间倒序 ═══
+// ═══ GET /api/memory:聚合分类库,按时间倒序 ═══
+// 默认只聚合"当前实例"的库;?scope=all 聚合全部联邦成员(外壳控制台是跨实例的,
+// 3348 的本库为空,不带 scope=all 时管理抽屉会显示 0 条 —— 2026-10-17 实测)。
 router.get('/memory', (req, res) => {
-  const libs = currentInstanceLibs();
+  const all = String(req.query.scope || '').toLowerCase() === 'all';
+  const libs = all ? libFiles() : currentInstanceLibs();
   if (!libs.length) return res.json([]);
   try {
     const limit = Math.min(parseInt(req.query.limit || '200', 10), 500);
@@ -31,7 +34,7 @@ router.get('/memory', (req, res) => {
           ? db.prepare(`SELECT * FROM memory WHERE is_active=1 AND text LIKE ? ORDER BY created_at DESC LIMIT ?`).all(q, limit)
           : db.prepare('SELECT * FROM memory WHERE is_active=1 ORDER BY created_at DESC LIMIT ?').all(limit);
         db.close();
-        for (const r of rs) rows.push({ ...r, memType: l.memType || 'general', project: l.project, tags: safeTags(r.tags) });
+        for (const r of rs) rows.push({ ...r, instance: l.instance, memType: l.memType || 'general', project: l.project, tags: safeTags(r.tags) });
       } catch (e) { console.error(`memory lib ${l.file} failed:`, e.message); }
     }
     rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
@@ -41,7 +44,7 @@ router.get('/memory', (req, res) => {
 
 // ═══ POST /api/memory/delete ═══
 router.post('/memory/delete', (req, res) => {
-  const db = openDbByProject(req.body.project, false, req.body.id);
+  const db = openDbByProject(req.body.project, false, req.body.id, req.body.instance, req.body.memType);
   if (!db) return res.json({ deleted: false });
   try {
     const r = db.prepare('UPDATE memory SET is_active = 0 WHERE id = ?').run(req.body.id);
@@ -56,7 +59,7 @@ router.post('/memory/toggle_important', (req, res) => {
   try {
     const id = req.body && req.body.id;
     if (!id) return res.json({ ok: false, error: 'id 必填' });
-    const db = openDbByProject(req.body.project, false, req.body.id);
+    const db = openDbByProject(req.body.project, false, req.body.id, req.body.instance, req.body.memType);
     if (!db) return res.json({ ok: false, error: 'db not found' });
     const row = db.prepare('SELECT importance FROM memory WHERE id = ?').get(id);
     if (!row) { db.close(); return res.json({ ok: false, error: 'memory not found' }); }
@@ -85,7 +88,7 @@ router.post('/memory/update', (req, res) => {
     sets.push('updated_at = ?');
     vals.push(new Date().toISOString());
     vals.push(id);
-    const db = openDbByProject(req.body.project, false, req.body.id);
+    const db = openDbByProject(req.body.project, false, req.body.id, req.body.instance, req.body.memType);
     if (!db) return res.json({ updated: false });
     const r = db.prepare(`UPDATE memory SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
     db.close();

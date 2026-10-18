@@ -12,12 +12,16 @@
  *   GET  /memory/reflect/list    — 获取所有记忆（供大模型分析）
  *   POST /memory/reflect/apply   — 应用大模型的重构指令
  */
-import { DatabaseManager, listMemTypeDirs } from './db.js';
-import { saveFacts, saveMemory, batchEmbedPending, applyIdentityActions, findDbByMemoryId } from './store.js';
+import { loadPromptOverride } from './promptFile.js';
+import { DatabaseManager, listMemTypeDirs, currentMemDir } from './db.js';
+import { saveFacts, saveMemory, batchEmbedPending, updateMemory, applyIdentityActions, findDbByMemoryId } from './store.js';
 import { normalizeProject } from './env.js';
 import { isMemType, MEM_TYPES } from './memType.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import { protectedReflectionProject, reflectionPolicy, wholeRecordBatches, fidelitySystemPrompt } from './reflectionFidelity.js';
+import { getUnanalyzedConversations } from './reflectionSources.js';
+export { getUnanalyzedConversations, markConversationsReflected, deepReflectionCursor } from './reflectionSources.js';
 /**
  * 获取所有记忆（供大模型分析）
  */
@@ -81,6 +85,12 @@ export function listAllMemories(characterId = 'airi', limit = 200, project) {
 const VALID_TYPES = new Set(['episodic', 'semantic', 'entity', 'preference']);
 const VALID_MEM_TYPES = new Set(MEM_TYPES); // v1.8: 4 种封闭类型 + general
 const VALID_CATEGORIES = new Set(['conversation', 'milestone', 'identity', 'relationship', 'knowledge', 'preference', 'general']);
+function safeCategory(raw) {
+    if (typeof raw !== 'string')
+        return null;
+    const value = raw.trim();
+    return /^[\p{L}\p{N}_:-]{1,64}$/u.test(value) ? value : null;
+}
 const VALID_RELATIONS = new Set(['caused_by', 'part_of', 'follows', 'related_to', 'same_subject', 'causes', 'leads_to', 'sequence']);
 function safeTags(raw) {
     if (!raw)
@@ -98,33 +108,29 @@ function safeTags(raw) {
  * 顺序:精确 id(store 的 findDbByMemoryId,内部先扫活跃再兜底墓碑)→ 前缀 LIKE(LLM 会给短 ID),先活跃后兜底;
  * 找不到则回退 fallback(默认 general 库),让调用方原本的 "not found" 判断照常生效。
  */
-function memDbFor(idPrefix, project, fallback) {
-    try {
-        const exact = findDbByMemoryId(idPrefix, project);
-        if (exact)
-            return exact.db;
+function resolveReflectTarget(idPrefix, project, allowInactiveConversation = false) {
+    if (!idPrefix || typeof idPrefix !== 'string')
+        return null;
+    const matches = [];
+    for (const mt of listMemTypeDirs(normalizeProject(project))) {
+        const db = DatabaseManager.getInstance(project, mt);
+        const rows = db.prepare(`SELECT id FROM memory WHERE project = ? AND (is_active = 1${allowInactiveConversation ? " OR (is_active = 0 AND source = 'conversation_log')" : ''}) AND substr(id, 1, length(?)) = ?`)
+            .all(normalizeProject(project), idPrefix, idPrefix);
+        for (const row of rows)
+            matches.push({ db, id: row.id });
     }
-    catch { /* 忽略:走前缀匹配 */ }
-    const proj = normalizeProject(project);
-    for (const activeOnly of [true, false]) {
-        for (const mt of listMemTypeDirs(proj)) {
-            try {
-                const db = DatabaseManager.getInstance(project, mt);
-                const sql = activeOnly
-                    ? 'SELECT id FROM memory WHERE id LIKE ? AND is_active = 1'
-                    : 'SELECT id FROM memory WHERE id LIKE ?';
-                if (db.prepare(sql).get(idPrefix + '%'))
-                    return db;
-            }
-            catch { /* 单库读不到不影响其它库 */ }
-        }
-    }
-    return fallback;
+    const exact = matches.filter(m => m.id === idPrefix);
+    if (exact.length === 1)
+        return exact[0];
+    return matches.length === 1 ? matches[0] : null;
 }
-export async function applyReflectActions(actions, characterId = 'airi', project) {
+function memDbFor(id, project, fallback) {
+    return findDbByMemoryId(id, project)?.db ?? fallback;
+}
+export async function applyReflectActions(actions, characterId = 'airi', project, options = {}) {
     const db = DatabaseManager.getInstance(project);
     const result = { applied: 0, errors: [], details: [], receipts: [] };
-    for (const action of actions) {
+    for (let action of actions) {
         const receipt = {
             action: action.action,
             status: 'applied',
@@ -133,91 +139,133 @@ export async function applyReflectActions(actions, characterId = 'airi', project
             rowsAffected: 0,
         };
         try {
+            action = { ...action };
+            if ((protectedReflectionProject(project) || (options.automatic && reflectionPolicy(project) === 'evidence')) &&
+                (['merge', 'delete', 'split', 'identityUpdate'].includes(action.action) || (action.action === 'reclassify' && action.newText !== undefined))) {
+                throw new Error('preservation policy forbids destructive reflection actions');
+            }
+            if (action.action === 'reclassify') {
+                action.newTypeSingle ??= action.newType;
+                action.newCategorySingle ??= action.newCategory;
+            }
+            const ids = action.action === 'merge' ? action.sourceIds :
+                [action.targetId, action.sourceId, action.targetIdRelate].filter((id) => !!id);
+            if (ids) {
+                if (options.allowedSourceIds && ids.some(id => !options.allowedSourceIds.has(id))) {
+                    throw new Error('target is outside the current reflection input');
+                }
+                const resolved = ids.map(id => resolveReflectTarget(id, project, action.action === 'extract'));
+                if (resolved.some(target => !target))
+                    throw new Error('target missing, inactive or ambiguous');
+                if (action.action === 'merge') {
+                    action.sourceIds = resolved.map(target => target.id);
+                    if (new Set(action.sourceIds).size !== action.sourceIds.length)
+                        throw new Error('duplicate merge sources');
+                }
+                else {
+                    let i = 0;
+                    if (action.targetId)
+                        action.targetId = resolved[i++].id;
+                    if (action.sourceId)
+                        action.sourceId = resolved[i++].id;
+                    if (action.targetIdRelate)
+                        action.targetIdRelate = resolved[i++].id;
+                }
+            }
             switch (action.action) {
                 case 'merge': {
+                    if (protectedReflectionProject(project))
+                        throw new Error(`merge is disabled for ${reflectionPolicy(project)} projects`);
                     // 合并多个记忆为一个
                     if (!action.sourceIds || action.sourceIds.length < 2 || !action.newText) {
                         result.errors.push('merge: need sourceIds and newText');
                         receipt.status = 'failed';
                         receipt.reason = 'need sourceIds and newText';
+                        result.receipts.push(receipt);
                         continue;
                     }
-                    // 旧记忆全部软删除 + 删向量
-                    // v5.1: LLM 可能返回短ID前缀，用 LIKE 匹配
-                    // locked=1 永久锁定记忆绝不软删(护栏在代码层兜底,防止 LLM 幻觉破坏锁定记忆)
+                    // 先完整校验所有源，再执行任何软删除；避免混合合法/非法 ID 造成部分破坏。
+                    const mergeSources = [];
+                    let mergeInvalid = null;
                     for (const id of action.sourceIds) {
-                        const sdb = memDbFor(id, project, db); // v1.11.4 跨库解析(旧实现只打 general)
-                        const src = sdb.prepare('SELECT id FROM memory WHERE id LIKE ? AND (locked IS NULL OR locked = 0)').get(id + '%');
-                        if (src)
-                            receipt.rowsAffected++;
-                        else {
-                            receipt.status = 'failed';
-                            receipt.reason = `source not found or locked: ${id}`;
+                        const sdb = memDbFor(id, project, db);
+                        const src = sdb.prepare('SELECT id FROM memory WHERE id = ? AND is_active = 1 AND (locked IS NULL OR locked = 0) AND COALESCE(identity_locked, 0) = 0').get(id);
+                        if (!src) {
+                            mergeInvalid = `source not found or locked: ${id}`;
+                            break;
                         }
-                        sdb.prepare('UPDATE memory SET is_active = 0 WHERE id LIKE ? AND (locked IS NULL OR locked = 0)').run(id + '%');
-                        try {
-                            sdb.prepare('DELETE FROM vec_memory WHERE rowid = (SELECT rowid FROM memory WHERE id LIKE ? AND (locked IS NULL OR locked = 0))').run(id + '%');
-                        }
-                        catch { }
+                        mergeSources.push({ db: sdb, id: src.id });
                     }
-                    // v1.11.4:源未全部命中就**不许插入**合并结果
-                    if (receipt.status === 'failed') {
-                        result.errors.push(`merge: ${receipt.reason}`);
+                    if (mergeInvalid) {
+                        receipt.status = 'failed';
+                        receipt.reason = mergeInvalid;
+                        result.errors.push(`merge: ${mergeInvalid}`);
+                        result.receipts.push(receipt);
                         continue;
                     }
-                    // saveMemory 是 async，在 transaction 外调
-                    // v5.0: reflect 阶段正常 embed（不 skip）
+                    // 先成功写入合并结果，再删除源；若嵌入/数据库写入失败，源记忆保持完整。
+                    // saveMemory 是 async，跨 memType 删除无法使用单一 SQLite transaction。
                     const { saveMemory } = await import('./store.js');
-                    await saveMemory({
+                    const merged = await saveMemory({
                         text: action.newText,
                         type: (action.newType || 'semantic'),
                         // v1.10: merge 支持 newMemType — 记忆整合输出保持 4 种封闭类型之一
                         memType: isMemType(action.newMemType) ? action.newMemType : undefined,
                         category: action.newCategory || 'general',
                         tags: action.newTags || [],
-                        importance: action.newImportance || 0.7,
+                        importance: action.newImportance ?? 0.7,
                         characterId,
                         project,
                         source: 'reflect_merge',
                     });
+                    receipt.rowsAffected = mergeSources.length;
+                    // 所有源均已确认 active 且合并结果已落库后，才软删除并清理向量。
+                    for (const src of mergeSources) {
+                        if (src.id === merged.id)
+                            continue;
+                        src.db.prepare('UPDATE memory SET is_active = 0 WHERE id = ? AND is_active = 1 AND (locked IS NULL OR locked = 0) AND COALESCE(identity_locked, 0) = 0').run(src.id);
+                        try {
+                            const row = src.db.prepare('SELECT rowid FROM memory WHERE id = ?').get(src.id);
+                            if (row)
+                                src.db.prepare('DELETE FROM vec_memory WHERE rowid = ?').run(row.rowid);
+                        }
+                        catch { /* 无向量时不阻断合并 */ }
+                    }
                     if (receipt.status === 'applied')
                         result.applied++;
                     result.details.push(`merge: ${action.sourceIds.length} → 1`);
                     break;
                 }
                 case 'split': {
-                    // 拆分一个记忆为多个
-                    if (!action.targetId || !action.fragments) {
-                        result.errors.push('split: need targetId and fragments');
-                        receipt.status = 'failed';
-                        receipt.reason = 'need targetId and fragments';
-                        continue;
+                    if (protectedReflectionProject(project))
+                        throw new Error(`split is disabled for ${reflectionPolicy(project)} projects`);
+                    if (!action.targetId || !action.fragments?.length ||
+                        action.fragments.some(f => !f.text?.trim())) {
+                        throw new Error('split: need targetId and non-empty fragments');
                     }
-                    // 软删除旧记忆（v5.1: LIKE 匹配短ID;locked=1 永久锁定不删）
-                    const _sdb = memDbFor(action.targetId, project, db);
-                    const _splitSrc = _sdb.prepare('SELECT id FROM memory WHERE id LIKE ? AND (locked IS NULL OR locked = 0)').get(action.targetId + '%');
-                    if (!_splitSrc) {
-                        receipt.status = 'failed';
-                        receipt.reason = `target not found or locked: ${action.targetId}`;
-                    }
-                    _sdb.prepare('UPDATE memory SET is_active = 0 WHERE id LIKE ? AND (locked IS NULL OR locked = 0)').run(action.targetId + '%');
-                    // 插入碎片
-                    const { saveMemory } = await import('./store.js');
+                    const source = resolveReflectTarget(action.targetId, project);
+                    const row = source.db.prepare('SELECT * FROM memory WHERE id = ? AND is_active = 1').get(source.id);
+                    if (!row || row.locked || row.identity_locked)
+                        throw new Error('split: target locked or inactive');
+                    const children = [];
                     for (const frag of action.fragments) {
-                        await saveMemory({
-                            text: frag.text,
-                            type: frag.type || 'episodic',
-                            category: frag.category || 'conversation',
-                            tags: frag.tags || [],
-                            importance: frag.importance || 0.5,
-                            characterId,
-                            project,
-                            source: 'reflect_split',
-                        });
+                        children.push(await saveMemory({
+                            text: frag.text, type: frag.type || 'episodic',
+                            memType: row.mem_type, category: frag.category || row.category || 'conversation',
+                            tags: frag.tags || [], importance: frag.importance ?? 0.5,
+                            characterId, project, source: 'reflect_split',
+                        }));
                     }
-                    if (receipt.status === 'applied')
-                        result.applied++;
-                    result.details.push(`split: 1 → ${action.fragments.length}`);
+                    if (!children.some(child => child.id === source.id)) {
+                        source.db.prepare('UPDATE memory SET is_active = 0 WHERE id = ?').run(source.id);
+                        try {
+                            source.db.prepare('DELETE FROM vec_memory WHERE rowid = (SELECT rowid FROM memory WHERE id = ?)').run(source.id);
+                        }
+                        catch { /* optional vectors */ }
+                    }
+                    receipt.rowsAffected = children.length;
+                    result.applied++;
+                    result.details.push(`split: 1 → ${children.length}`);
                     break;
                 }
                 case 'relate': {
@@ -225,6 +273,7 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                         result.errors.push('relate: need sourceId, targetIdRelate, relationType');
                         receipt.status = 'failed';
                         receipt.reason = 'need sourceId, targetIdRelate, relationType';
+                        result.receipts.push(receipt);
                         continue;
                     }
                     // 护栏：规范化 relation type
@@ -249,6 +298,7 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                         result.errors.push('reclassify: need targetId or sourceId');
                         receipt.status = 'failed';
                         receipt.reason = 'need targetId or sourceId';
+                        result.receipts.push(receipt);
                         continue;
                     }
                     const updates = [];
@@ -259,16 +309,18 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                             result.errors.push(`reclassify: invalid type "${action.newTypeSingle}", skipped`);
                             receipt.status = 'failed';
                             receipt.reason = `invalid type "${action.newTypeSingle}"`;
+                            result.receipts.push(receipt);
                             continue;
                         }
                         updates.push('type = ?');
                         values.push(action.newTypeSingle);
                     }
                     if (action.newCategorySingle) {
-                        if (!VALID_CATEGORIES.has(action.newCategorySingle)) {
+                        if (!safeCategory(action.newCategorySingle)) {
                             result.errors.push(`reclassify: invalid category "${action.newCategorySingle}", skipped`);
                             receipt.status = 'failed';
                             receipt.reason = `invalid category "${action.newCategorySingle}"`;
+                            result.receipts.push(receipt);
                             continue;
                         }
                         updates.push('category = ?');
@@ -280,6 +332,7 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                             result.errors.push('reclassify: invalid tags (must be string array), skipped');
                             receipt.status = 'failed';
                             receipt.reason = 'invalid tags';
+                            result.receipts.push(receipt);
                             continue;
                         }
                         updates.push('tags = ?');
@@ -290,6 +343,7 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                             result.errors.push(`reclassify: invalid memType "${action.newMemType}", skipped`);
                             receipt.status = 'failed';
                             receipt.reason = `invalid memType "${action.newMemType}"`;
+                            result.receipts.push(receipt);
                             continue;
                         }
                         updates.push('mem_type = ?');
@@ -302,6 +356,7 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                             result.errors.push('reclassify: invalid newText (must be non-empty string), skipped');
                             receipt.status = 'failed';
                             receipt.reason = 'invalid newText';
+                            result.receipts.push(receipt);
                             continue;
                         }
                         updates.push('text = ?');
@@ -311,8 +366,17 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                     if (updates.length > 0) {
                         // 参数顺序:update 字段值 → updated_at → LIKE 前缀(修复历史错位 bug)
                         const _tdb = memDbFor(tid, project, db);
-                        const _recR = _tdb.prepare(`UPDATE memory SET ${updates.join(', ')}, updated_at = ? WHERE id LIKE ? AND (locked IS NULL OR locked = 0)`)
-                            .run(...values, new Date().toISOString(), tid + '%');
+                        const existing = _tdb.prepare('SELECT * FROM memory WHERE id = ? AND is_active = 1').get(tid);
+                        if (!existing || existing.locked || existing.identity_locked)
+                            throw new Error('target locked or inactive');
+                        const patch = { project };
+                        const names = { type: 'type', category: 'category', tags: 'tags', mem_type: 'memType', text: 'text' };
+                        updates.forEach((field, i) => {
+                            const key = field.split(' = ')[0];
+                            patch[names[key]] = key === 'tags' ? JSON.parse(values[i]) : values[i];
+                        });
+                        const updated = await updateMemory(tid, patch);
+                        const _recR = { changes: updated ? 1 : 0 };
                         receipt.rowsAffected = _recR.changes;
                         if (_recR.changes === 0) {
                             receipt.status = 'failed';
@@ -324,9 +388,10 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                         // v5.x: text 变更后删除旧向量,下次 batchEmbedPending 重新 embed
                         if (textChanged && _recR.changes > 0) {
                             try {
-                                const _vecRow = _tdb.prepare('SELECT rowid FROM memory WHERE id LIKE ? LIMIT 1').get(tid + '%');
+                                const currentDb = memDbFor(tid, project, db);
+                                const _vecRow = currentDb.prepare('SELECT rowid FROM memory WHERE id = ? LIMIT 1').get(tid);
                                 if (_vecRow)
-                                    _tdb.prepare('DELETE FROM vec_memory WHERE rowid = ?').run(_vecRow.rowid);
+                                    currentDb.prepare('DELETE FROM vec_memory WHERE rowid = ?').run(_vecRow.rowid);
                             }
                             catch { /* 静默 */ }
                         }
@@ -339,17 +404,18 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                         result.errors.push('extract: need sourceId and newText');
                         receipt.status = 'failed';
                         receipt.reason = 'need sourceId and newText';
+                        result.receipts.push(receipt);
                         continue;
                     }
                     const validType = action.newType && VALID_TYPES.has(action.newType) ? action.newType : 'semantic';
-                    const validCat = action.newCategory && VALID_CATEGORIES.has(action.newCategory) ? action.newCategory : 'general';
+                    const validCat = safeCategory(action.newCategory) || 'general';
                     const validMemType = isMemType(action.newMemType) ? action.newMemType : undefined;
                     const validTags = safeTags(action.newTags) || [];
                     const importance = action.newImportance ?? 0.6;
                     const tier = (action.tier && ['temporary', 'standard', 'critical'].includes(action.tier))
                         ? action.tier : 'standard';
                     const { saveMemory } = await import('./store.js');
-                    await saveMemory({
+                    const extracted = await saveMemory({
                         text: action.newText,
                         type: validType,
                         memType: validMemType,
@@ -360,11 +426,26 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                         characterId,
                         project,
                         source: 'reflect_extract',
+                        metadata: JSON.stringify({ reflection: { sourceIds: [action.sourceId], project: normalizeProject(project) } }),
                     });
+                    // Exact duplicate extraction can point to several source records.
+                    const extractedDb = findDbByMemoryId(extracted.id, project)?.db;
+                    if (extractedDb) {
+                        const row = extractedDb.prepare('SELECT metadata FROM memory WHERE id = ?').get(extracted.id);
+                        let meta = {};
+                        try {
+                            meta = JSON.parse(row?.metadata || '{}');
+                        }
+                        catch { /* older free-form metadata */ }
+                        meta.reflection = { ...meta.reflection, sourceIds: [...new Set([...(Array.isArray(meta.reflection?.sourceIds) ? meta.reflection.sourceIds : []), action.sourceId])], project: normalizeProject(project) };
+                        extractedDb.prepare('UPDATE memory SET metadata = ? WHERE id = ?').run(JSON.stringify(meta), extracted.id);
+                    }
                     // 给源记忆 +reference_count（v5.1: LIKE 匹配短ID）
-                    memDbFor(action.sourceId, project, db).prepare('UPDATE memory SET reference_count = reference_count + 1 WHERE id LIKE ?').run(action.sourceId + '%');
+                    const sourceDb = resolveReflectTarget(action.sourceId, project, true)?.db || memDbFor(action.sourceId, project, db);
+                    sourceDb.prepare('UPDATE memory SET reference_count = reference_count + 1 WHERE id = ?').run(action.sourceId);
                     if (receipt.status === 'applied')
                         result.applied++;
+                    receipt.rowsAffected = 1;
                     result.details.push(`extract: from ${action.sourceId} → ${validType}/${validCat} (${tier})`);
                     break;
                 }
@@ -374,6 +455,7 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                         result.errors.push('identityUpdate: need identityActions');
                         receipt.status = 'failed';
                         receipt.reason = 'need identityActions';
+                        result.receipts.push(receipt);
                         continue;
                     }
                     const r = await applyIdentityActions(action.identityActions, project);
@@ -389,13 +471,16 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                     break;
                 }
                 case 'delete': {
+                    if (protectedReflectionProject(project))
+                        throw new Error(`delete is disabled for ${reflectionPolicy(project)} projects`);
                     if (!action.targetId) {
                         result.errors.push('delete: need targetId');
                         receipt.status = 'failed';
                         receipt.reason = 'need targetId';
+                        result.receipts.push(receipt);
                         continue;
                     }
-                    const _delR = memDbFor(action.targetId, project, db).prepare('UPDATE memory SET is_active = 0 WHERE id LIKE ? AND (locked IS NULL OR locked = 0)').run(action.targetId + '%');
+                    const _delR = memDbFor(action.targetId, project, db).prepare('UPDATE memory SET is_active = 0 WHERE id = ? AND (locked IS NULL OR locked = 0) AND COALESCE(identity_locked, 0) = 0').run(action.targetId);
                     receipt.rowsAffected = _delR.changes;
                     if (_delR.changes === 0) {
                         receipt.status = 'failed';
@@ -411,10 +496,11 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                         result.errors.push('boost: need targetId and delta');
                         receipt.status = 'failed';
                         receipt.reason = 'need targetId and delta';
+                        result.receipts.push(receipt);
                         continue;
                     }
-                    const _boR = memDbFor(action.targetId, project, db).prepare('UPDATE memory SET importance = MIN(0.95, MAX(0.1, importance + ?)) WHERE id LIKE ? AND (locked IS NULL OR locked = 0)')
-                        .run(action.delta, action.targetId + '%');
+                    const _boR = memDbFor(action.targetId, project, db).prepare('UPDATE memory SET importance = MIN(0.95, MAX(0.1, importance + ?)) WHERE id = ? AND (locked IS NULL OR locked = 0) AND COALESCE(identity_locked, 0) = 0')
+                        .run(action.delta, action.targetId);
                     receipt.rowsAffected = _boR.changes;
                     if (_boR.changes === 0) {
                         receipt.status = 'failed';
@@ -430,10 +516,11 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                         result.errors.push('decay: need targetId and delta');
                         receipt.status = 'failed';
                         receipt.reason = 'need targetId and delta';
+                        result.receipts.push(receipt);
                         continue;
                     }
-                    const _deR = memDbFor(action.targetId, project, db).prepare('UPDATE memory SET importance = MIN(0.95, MAX(0.1, importance - ?)) WHERE id LIKE ? AND (locked IS NULL OR locked = 0)')
-                        .run(action.delta, action.targetId + '%');
+                    const _deR = memDbFor(action.targetId, project, db).prepare('UPDATE memory SET importance = MIN(0.95, MAX(0.1, importance - ?)) WHERE id = ? AND (locked IS NULL OR locked = 0) AND COALESCE(identity_locked, 0) = 0')
+                        .run(action.delta, action.targetId);
                     receipt.rowsAffected = _deR.changes;
                     if (_deR.changes === 0) {
                         receipt.status = 'failed';
@@ -466,12 +553,16 @@ export async function applyReflectActions(actions, characterId = 'airi', project
         if (batchResult.embedded > 0) {
             result.details.push(`batch embedded ${batchResult.embedded} pending memories`);
         }
-        if (batchResult.errors.length > 0) {
-            result.errors.push(...batchResult.errors);
+        // Embedding is optional; an unavailable embedder must not turn a successfully
+        // persisted reflection into a failed run (which would block the cursor).
+        if (batchResult.errors.length > 0 && batchResult.errors.some(e => !e.includes('embedding disabled'))) {
+            console.error('[reflect] batch embed (optional):', batchResult.errors.join('; '));
+            result.details.push('batch embed warnings: ' + batchResult.errors.join('; '));
         }
     }
     catch (e) {
-        result.errors.push(`batch embed: ${e.message}`);
+        console.error('[reflect] batch embed (optional):', e.message);
+        result.details.push('batch embed failed: ' + e.message);
     }
     return result;
 }
@@ -513,7 +604,7 @@ export function getMemoryGraph(characterId = 'airi', project) {
 // ═══════════════════════════════════════════════════════════════════
 // 统一反思接口 — 大模型一次性输出 summary + facts + insights + actions
 // ═══════════════════════════════════════════════════════════════════
-export const REFLECT_SYSTEM_PROMPT = `你是记忆反思引擎。你的任务是对 AI 和用户的对话进行深度总结，提取结构化事实，并给出记忆整理建议。
+const BUILTIN_REFLECT_SYSTEM_PROMPT = `你是记忆反思引擎。你的任务是对 AI 和用户的对话进行深度总结，提取结构化事实，并给出记忆整理建议。
 
 输入：最近 N 轮未分析的对话原文
 输出：严格JSON，格式如下：
@@ -547,33 +638,7 @@ export const REFLECT_SYSTEM_PROMPT = `你是记忆反思引擎。你的任务是
 - "boost" 用于升级重要记忆
 - "merge" 用于合并重复记忆
 - 不需要操作时 actions 为空数组 []`;
-/**
- * 获取待反思的未分析对话
- */
-export function getUnanalyzedConversations(characterId = 'airi', since, // ISO datetime，不传则取上次 reflect 之后
-limit = 30, project) {
-    const db = DatabaseManager.getInstance(project);
-    const proj = normalizeProject(project);
-    // 找到上次反思时间（最近一次 source='reflect_summary' 的创建时间）
-    if (!since) {
-        const lastReflect = db.prepare(`
-      SELECT created_at FROM memory
-      WHERE source = 'reflect_summary' AND project = ?
-      ORDER BY created_at DESC LIMIT 1
-    `).get(proj);
-        since = lastReflect?.created_at || new Date(0).toISOString();
-    }
-    return db.prepare(`
-    SELECT id, text, created_at
-    FROM memory
-    WHERE is_active = 0
-      AND source = 'conversation_log'
-      AND project = ?
-      AND created_at > ?
-    ORDER BY created_at ASC
-    LIMIT ?
-  `).all(proj, since, limit);
-}
+export const REFLECT_SYSTEM_PROMPT = loadPromptOverride('REFLECT_PROMPT_FILE', BUILTIN_REFLECT_SYSTEM_PROMPT);
 /**
  * 应用大模型反思结果
  *
@@ -583,7 +648,7 @@ limit = 30, project) {
  *   3. insights → 存入 memory（source='reflect_insight'）
  *   4. actions → 调用 applyReflectActions()
  */
-export async function applyReflectResult(result, characterId = 'airi', project) {
+export async function applyReflectResult(result, characterId = 'airi', project, options = {}) {
     const out = {
         summaryId: null,
         factsInserted: 0,
@@ -594,6 +659,32 @@ export async function applyReflectResult(result, characterId = 'airi', project) 
         errors: [],
         receipts: [],
     };
+    // Apply extraction first. A failed extraction must not produce a misleading
+    // successful summary, and the driver will leave its sources pending for retry.
+    const actions = result.actions || [];
+    if (actions.length) {
+        const ar = await applyReflectActions(actions, characterId, project, options);
+        out.actionsApplied = ar.applied;
+        out.errors.push(...ar.errors);
+        out.receipts = ar.receipts;
+        try {
+            const dir = process.env.REFLECT_RECEIPT_DIR || path.join(currentMemDir(), 'receipts');
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(path.join(dir, `reflect-receipt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`), JSON.stringify({
+                ts: new Date().toISOString(), characterId, project: normalizeProject(project),
+                inputIds: options.allowedSourceIds ? [...options.allowedSourceIds] : undefined,
+                actionCount: actions.length, applied: ar.applied,
+                failed: ar.receipts.filter(r => r.status !== 'applied').length,
+                actions, receipts: ar.receipts, errors: ar.errors,
+            }, null, 2), 'utf8');
+        }
+        catch (e) {
+            // 回执写盘失败只影响审计副本,不能把已成功应用的动作当成整轮失败(否则游标不推进)。
+            console.error('[reflect] receipt write (optional):', e.message);
+        }
+        if (out.errors.length)
+            return out;
+    }
     // 1. 存 summary
     if (result.summary) {
         try {
@@ -607,6 +698,7 @@ export async function applyReflectResult(result, characterId = 'airi', project) 
                 project,
                 source: 'reflect_summary',
                 subject: 'user',
+                metadata: JSON.stringify({ reflection: { sourceIds: [...(options.allowedSourceIds || [])], project: normalizeProject(project), role: 'navigation' } }),
             });
             out.summaryId = mem.id;
         }
@@ -646,37 +738,6 @@ export async function applyReflectResult(result, characterId = 'airi', project) 
             }
         }
     }
-    // 4. 应用记忆整理 actions + 逐动作回执落盘
-    if (result.actions && result.actions.length > 0) {
-        try {
-            const ar = await applyReflectActions(result.actions, characterId, project);
-            out.actionsApplied = ar.applied;
-            out.errors.push(...ar.errors);
-            out.receipts = ar.receipts;
-            // ═══ v1.3: 回执落盘 — 失败动作原文存档,事后可人工修正 ═══
-            try {
-                const dir = process.env.REFLECT_RECEIPT_DIR || path.join(process.cwd(), 'memory', 'receipts');
-                fs.mkdirSync(dir, { recursive: true });
-                const ts = new Date().toISOString().replace(/[:.]/g, '-');
-                fs.writeFileSync(path.join(dir, `reflect-receipt-${ts}.json`), JSON.stringify({
-                    ts: new Date().toISOString(),
-                    characterId,
-                    actionCount: result.actions.length,
-                    applied: ar.applied,
-                    failed: ar.receipts.filter(r => r.status !== 'applied').length,
-                    actions: result.actions,
-                    receipts: ar.receipts,
-                    errors: ar.errors,
-                }, null, 2), 'utf-8');
-            }
-            catch (e) {
-                out.errors.push(`receipt write: ${e.message}`);
-            }
-        }
-        catch (e) {
-            out.errors.push(`actions: ${e.message}`);
-        }
-    }
     return out;
 }
 /** 编排函数 — 供 proxy.py 通过 _memory_engine.mjs 调用 */
@@ -687,11 +748,12 @@ export async function reflect(action, params = {}) {
         case 'unanalyzed': {
             // 获取待反思的未分析对话 + prompt
             const conversations = getUnanalyzedConversations(params.characterId || 'airi', params.since, params.limit || 30, params.project);
-            const prompt = conversations.map(c => c.text).join('\n---\n');
+            const batches = wholeRecordBatches(conversations);
             return {
                 conversationCount: conversations.length,
-                systemPrompt: REFLECT_SYSTEM_PROMPT,
-                userPrompt: `请分析以下对话，输出反思JSON：\n\n${prompt.substring(0, 30000)}`,
+                systemPrompt: reflectionPolicy(params.project) === 'standard' ? REFLECT_SYSTEM_PROMPT : fidelitySystemPrompt(params.project),
+                userPrompt: `请分析以下对话，输出反思JSON：\n\n${JSON.stringify(conversations)}`,
+                batches,
                 conversationIds: conversations.map(c => c.id),
             };
         }
@@ -715,8 +777,8 @@ export async function reflect(action, params = {}) {
             }
             return applyReflectActions(params.actions, params.characterId || 'airi', params.project);
         case 'auto': {
-            const allMemories = listAllMemories(params.characterId || 'airi', params.limit || 200);
-            const graph = getMemoryGraph(params.characterId || 'airi');
+            const allMemories = listAllMemories(params.characterId || 'airi', params.limit || 200, params.project);
+            const graph = getMemoryGraph(params.characterId || 'airi', params.project);
             return {
                 ready: true,
                 memoryCount: allMemories.length,

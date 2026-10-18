@@ -104,6 +104,9 @@ try {
     // v1.9: 启动自动反思阈值(可选,给 admin 界面留路;没有则用 env/默认值)
     if (ref.minGapHours != null) process.env.REFLECT_MIN_GAP_HOURS = String(ref.minGapHours);
     if (ref.minUnanalyzed != null) process.env.REFLECT_MIN_UNANALYZED = String(ref.minUnanalyzed);
+    // v1.12: 提示词文件覆盖(单个实例/项目自己的反思/整合提示词)
+    if (ref.promptFile) process.env.REFLECT_PROMPT_FILE = String(ref.promptFile);
+    if (ref.deepPromptFile) process.env.REFLECT_DEEP_PROMPT_FILE = String(ref.deepPromptFile);
     if (ref.intervalHours != null) process.env.REFLECT_INTERVAL_HOURS = String(ref.intervalHours);
 
     // v1.11: triage(LLM1 入站分拣)配置 — admin 第三个通道
@@ -122,6 +125,7 @@ try {
     if (cons.minMemories != null) process.env.CONSOLIDATE_MIN_MEMORIES = String(cons.minMemories);
     if (cons.similarity != null) process.env.CONSOLIDATE_SIMILARITY = String(cons.similarity);
     if (cons.autoOnStart != null) process.env.CONSOLIDATE_AUTO_ON_START = (cons.autoOnStart === false || cons.autoOnStart === 0 || cons.autoOnStart === '0') ? '0' : '1';
+    if (cons.promptFile) process.env.CONSOLIDATE_PROMPT_FILE = String(cons.promptFile);
   // 衰减范围(哪些分类库参与衰减/升华):默认只 general,四个语义分类库永不衰减
   if ((cons as any).decayMemTypes != null) {
     const dm = (cons as any).decayMemTypes;

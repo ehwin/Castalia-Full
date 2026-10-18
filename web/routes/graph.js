@@ -1,8 +1,10 @@
 /* routes/graph.js — /api/graph /api/stats /api/status */
 import { Router } from 'express';
 import { existsSync } from 'fs';
+import { join } from 'node:path';
 import { createRequire } from 'module';
-import { DB_DIR, DB_PATH, LEGACY_DB_PATH, CONFIG_PATH, loadConfig, openLibDb, libFiles, currentInstanceLibs, dbDirHasData, AGGREGATE_DIRS } from './lib.js';
+import { createHash } from 'node:crypto';
+import { DB_DIR, DB_PATH, LEGACY_DB_PATH, CONFIG_PATH, loadConfig, openLibDb, libFiles, currentInstanceLibs, dbDirHasData, AGGREGATE_DIRS, sameDbDir } from './lib.js';
 
 /* 星座键:默认=文件夹(memType,通用版口径);实例设 GRAPH_CONSTELLATION=category 时按 category 分
  * (anima 不用四个 memType 文件夹,它的分类轴是 category → AIRI 星域才不会只剩一个「通用」星座) */
@@ -18,7 +20,57 @@ const consKeyOf = (n) => {
 };
 
 const router = Router();
-const NEBULA_CACHE = new Map();   /* P0:星云布局缓存(键=scope|节点数|最新时间戳;存坐标+边标记,命中时重放) */
+const NEBULA_CACHE = new Map();
+const NEBULA_CACHE_MAX = 8;
+
+// IDs describe storage ownership, not mutable memory metadata. JSON tuples avoid separator collisions.
+function graphNodeId(lib, rawId) {
+  return JSON.stringify([lib.instance || '', lib.project, lib.memType || 'general', rawId]);
+}
+function relationLookupKey(instance, project, rawId) {
+  return JSON.stringify([instance || '', project, rawId]);
+}
+function resolveGraphRelations(nodes, pendingEdges) {
+  const byStorage = new Map(), byProject = new Map();
+  const add = (map, key, id) => {
+    if (!map.has(key)) map.set(key, new Set());
+    map.get(key).add(id);
+  };
+  for (const n of nodes) {
+    add(byStorage, n.id, n.id);
+    add(byProject, relationLookupKey(n.instance, n.lib, n.rawId), n.id);
+  }
+  const endpoint = (lib, rawId) => {
+    // Prefer the edge's own SQLite file; otherwise resolve only a unique active cross-memType endpoint.
+    const own = byStorage.get(graphNodeId(lib, rawId));
+    if (own?.size === 1) return [...own][0];
+    const matches = byProject.get(relationLookupKey(lib.instance, lib.project, rawId));
+    return matches?.size === 1 ? [...matches][0] : null;
+  };
+  const out = [], seen = new Set();
+  for (const { lib, edge } of pendingEdges) {
+    const source = endpoint(lib, edge.source_id), target = endpoint(lib, edge.target_id);
+    if (!source || !target || source === target) continue;
+    const key = JSON.stringify([source, target, edge.relation_type]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ source, target, type: edge.relation_type, strength: edgeStrength(edge.relation_type) });
+  }
+  return out;
+}
+function graphLayoutSignature(scope, nodes, links, vecById) {
+  // Hash the actual snapshot, including vectors and edges: catches updates with unchanged counts/timestamps,
+  // WAL writes, and membership/filter changes without depending on filesystem timestamp resolution.
+  const hash = createHash('sha256');
+  hash.update(JSON.stringify([scope, CONS_KIND, CATEGORY_INSTANCES]));
+  for (const n of [...nodes].sort((a, b) => a.id.localeCompare(b.id))) {
+    hash.update(JSON.stringify(n));
+    const v = vecById.get(n.id);
+    if (v) hash.update(Buffer.from(new Float32Array(v).buffer));
+  }
+  for (const l of links.map(l => JSON.stringify(l)).sort()) hash.update(l);
+  return hash.digest('hex');
+}
 
 /* D1:边强度(server 侧计算,不改引擎 schema)
  *  - similarity 直接用向量余弦相似度
@@ -42,7 +94,7 @@ function libsForScope(scope) {
   return currentInstanceLibs();
 }
 function instanceName() {
-  const self = AGGREGATE_DIRS.find(c => c.dir === DB_DIR);
+  const self = AGGREGATE_DIRS.find(c => sameDbDir(c.dir, DB_DIR));
   return self ? self.name : 'local';
 }
 
@@ -651,10 +703,13 @@ function hash01Lib(id) {
 router.get('/graph', (req, res) => {
   const scope = graphScope(req);
   const fed = isFedScope(scope);
-  const libs = libsForScope(scope);
+  const project = String(req.query.project || '');
+  const instance = String(req.query.instance || '');
+  const libs = libsForScope(scope).filter(lib => (!project || lib.project === project) && (!instance || lib.instance === instance));
   const nodes = [];
   const links = [];
   const vecById = new Map();
+  const pendingEdges = [];
   let totalMemories = 0;
   const categoryColors = {
     emotional: '#FF6B6B', milestone: '#FFA726', identity: '#66BB6A',
@@ -684,7 +739,7 @@ router.get('/graph', (req, res) => {
         const isTemporary = m.tier === 'temporary';
         const isCritical = m.tier === 'critical';
         return {
-          id: `${lib.project}:${m.id}`,
+          id: graphNodeId(lib, m.id),
           rawId: m.id,
           instance: lib.instance || '',
           lib: lib.project,
@@ -702,13 +757,8 @@ router.get('/graph', (req, res) => {
         };
       });
 
-      const idSet = new Set(libNodes.map(n => n.id));
-      for (const e of edges) {
-        const s = `${lib.project}:${e.source_id}`, t = `${lib.project}:${e.target_id}`;
-        if (idSet.has(s) && idSet.has(t)) {
-          links.push({ source: s, target: t, type: e.relation_type, strength: edgeStrength(e.relation_type) });
-        }
-      }
+       // Resolve after all files are read, so relations can span memType databases.
+       pendingEdges.push(...edges.map(edge => ({ lib, edge })));
 
       try {
         const vecRows = db.prepare(`
@@ -717,7 +767,7 @@ router.get('/graph', (req, res) => {
         `).all();
         for (const r of vecRows) {
           const vec = parseVec(r.embedding);
-          if (vec) vecById.set(`${lib.project}:${r.id}`, vec);
+          if (vec) vecById.set(graphNodeId(lib, r.id), vec);
         }
       } catch (e) { console.error('vec load failed:', e.message); }
 
@@ -757,6 +807,10 @@ router.get('/graph', (req, res) => {
     } catch (e) { console.error(`graph lib ${lib.file} failed:`, e.message); }
     finally { if (db) db.close(); }
   }
+
+  links.push(...resolveGraphRelations(nodes, pendingEdges));
+  // Cross-library links must see the final region before grouping (previously all used "default").
+  for (const n of nodes) n.layoutGroup = layoutGroupOf(n, fed);
 
   /* v1.18.11 跨库相似边:同星域内、不同主文件夹(星座)之间 top-2——库间干线原料。
    * 星座=库之后,库内边全是同星座(淡线),星门干线必须靠跨库边。单库星域(AIRI)自动跳过。 */
@@ -1102,13 +1156,18 @@ const gNames = [...byGroup.keys()];
    * 只回缓存元数据会让坐标退回旧布局 —— 这是"刷新一次新、再刷又变旧"的根因。 */
   let nebula = null;
   try {
-    const newest = nodes.reduce((m, n) => (n.createdAt > m ? n.createdAt : m), '');
-    const ck = `${graphScope(req)}|${nodes.length}|${newest}`;
+    const ck = graphLayoutSignature(JSON.stringify([scope, project]), nodes, links, vecById);
     let L = NEBULA_CACHE.get(ck) || null;
     if (!L) {
       L = applyNebulaLayout(nodes, links, vecById);
-      if (L) NEBULA_CACHE.set(ck, L);
+      if (L) {
+        NEBULA_CACHE.set(ck, L);
+        while (NEBULA_CACHE.size > NEBULA_CACHE_MAX) NEBULA_CACHE.delete(NEBULA_CACHE.keys().next().value);
+      }
     } else {
+      // Bounded LRU: promote the reused entry; never keep every historical database snapshot.
+      NEBULA_CACHE.delete(ck);
+      NEBULA_CACHE.set(ck, L);
       L.cached = true;
     }
     nebula = L ? paintNebula(nodes, links, L) : { ok: false, error: 'layout unavailable' };
@@ -1138,6 +1197,15 @@ router.get('/stats', (req, res) => {
   res.json({ total, edges });
 });
 
+// api_key 通常为空,真实密钥在 keys.enc(AES-GCM);只看 config.api_key 会永远显示“未配置”。
+function keysEncConfigured() {
+  try {
+    const enc = process.env.CASTALIA_KEYS_FILE || join(DB_DIR, 'keys.enc');
+    const key = process.env.CASTALIA_KEY_FILE || join(DB_DIR, 'keys.key');
+    return existsSync(enc) && existsSync(key);
+  } catch { return false; }
+}
+
 // ═══ API: GET /api/status ═══
 router.get('/status', (req, res) => {
   const cfg = loadConfig();
@@ -1148,7 +1216,7 @@ router.get('/status', (req, res) => {
     config: CONFIG_PATH,
     dbExists: existsSync(dbPath) || dbDirHasData(DB_DIR),
     embedMode: cfg.embedding?.mode || 'ollama',
-    reflectConfigured: !!(cfg.reflect?.api_key),
+    reflectConfigured: !!(cfg.reflect?.api_key) || keysEncConfigured(),
     instance: instanceName(),
   consKind: CONS_KIND,
   });

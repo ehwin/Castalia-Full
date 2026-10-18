@@ -13,12 +13,16 @@
  *   REFLECT_MAX_FACTS     每轮最多提取 facts 条数 (default 15)
  *   REFLECT_INTERVAL_HOURS auto-reflect interval (hours), 0 = off, default 0
  */
-import { getUnanalyzedConversations, listAllMemories, applyReflectResult, applyReflectActions } from './reflect.js';
+import { getUnanalyzedConversations, listAllMemories, applyReflectResult, applyReflectActions, markConversationsReflected, deepReflectionCursor } from './reflect.js';
 import { DatabaseManager, listMemTypeDirs } from './db.js';
 import { normalizeProject, isEmbedEnabled } from './env.js';
 import { isMemType } from './memType.js';
 import { findSimilarCandidates, CONSOLIDATE_SIMILARITY, CONSOLIDATE_MAX_PAIRS } from './consolidate.js';
 import { getRecentConversations } from './digest.js';
+import { loadPromptOverride } from './promptFile.js';
+import { makeLlmChannel, callLlm, parseJsonRobust, REFLECT_DEEP_MAX_TOKENS } from './reflectionLlm.js';
+export { makeLlmChannel, callLlm, parseJsonRobust, REFLECT_DEEP_MAX_TOKENS } from './reflectionLlm.js';
+import { fidelitySystemPrompt, reflectionPolicy, reflectionFidelityPrompt, wholeRecordBatches } from './reflectionFidelity.js';
 const FACT_EXTRACTION = (process.env.REFLECT_FACT_EXTRACTION || 'auto').trim().toLowerCase();
 const MAX_FACTS = parseInt(process.env.REFLECT_MAX_FACTS || '15', 10) || 15;
 // 启动自动反思触发阈值(条件达成后,下次启动 server 时自动执行一次)
@@ -26,17 +30,22 @@ const MIN_GAP_HOURS = (() => { const v = parseFloat(process.env.REFLECT_MIN_GAP_
 const MIN_UNANALYZED = (() => { const v = parseInt(process.env.REFLECT_MIN_UNANALYZED || '5', 10); return Number.isFinite(v) && v >= 0 ? v : 5; })();
 // v1.10: 启动自动整合触发阈值(active 记忆条数 > 该值 → 下次启动自动整合一次)
 const CONSOLIDATE_MIN_MEMORIES = (() => { const v = parseInt(process.env.CONSOLIDATE_MIN_MEMORIES || '15', 10); return Number.isFinite(v) && v >= 0 ? v : 15; })();
-export function makeLlmChannel(prefix) {
-    const get = (suffix, fallback) => {
-        const v = process.env[`${prefix}_${suffix}`];
-        return v && v.trim().length > 0 ? v.trim() : fallback;
-    };
-    return {
-        url: get('LLM_URL', process.env.REFLECT_LLM_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, ''),
-        apiKey: get('LLM_API_KEY', process.env.REFLECT_LLM_API_KEY || ''),
-        model: get('LLM_MODEL', process.env.REFLECT_LLM_MODEL || 'deepseek-chat'),
-    };
-}
+/**
+ * 进度游标契约:所有反思提示词(内置 / 自定义 / 证据 / 逐字)都必须要求模型返回
+ * processedSourceIds。缺了它,驱动无法区分“整批处理完”和“只处理了一部分”,
+ * 旧逻辑会整批标记 → 未处理内容被永久跳过(2026-10-17 修)。
+ */
+const SOURCE_CURSOR_SPEC = `
+
+【进度游标(必须)】输出 JSON 必须包含 "processedSourceIds": ["本轮已完整审阅且其有价值信息均已提取的来源 ID"]。
+- 只列真正处理完的来源;没处理完/没来得及看的来源不要列,留待下一轮。
+- 不能只写 summary 就确认来源;没有长效信息的来源,完整读过后也可以列入。`;
+/**
+ * v1.11: LLM 通道 — 三通道架构(LLM1 triage / 向量模型 / LLM2 reflect)。
+ * 构造 `${PREFIX}_LLM_URL / ${PREFIX}_LLM_API_KEY / ${PREFIX}_LLM_MODEL` 配置:
+ *   优先取前缀通道自身值;缺省回退 REFLECT_*(旧单通道);再回退内置默认。
+ *   供 triage(LLM1) 与 reflect(LLM2) 复用。
+ */
 export function isReflectConfigured() {
     return !!makeLlmChannel('reflect').apiKey;
 }
@@ -54,31 +63,31 @@ export function shouldAutoReflect(charId = 'airi', project) {
     if (!isReflectConfigured()) {
         return { should: false, reason: 'REFLECT_LLM_API_KEY 未配置' };
     }
-    const db = DatabaseManager.getInstance(project);
     const proj = normalizeProject(project);
-    // 最近一次反思时间(source='reflect_summary',按 project 过滤)
-    const last = db.prepare(`
-    SELECT created_at FROM memory
-    WHERE source = 'reflect_summary' AND project = ?
-    ORDER BY created_at DESC LIMIT 1
-  `).get(proj);
-    const lastTime = last?.created_at ? new Date(last.created_at).getTime() : null;
-    const hoursSince = lastTime === null
-        ? Number.POSITIVE_INFINITY // 从未反思 → 视为超时,满足时间条件
-        : (Date.now() - lastTime) / 3600000;
+    const dbs = listMemTypeDirs(proj).map(mt => DatabaseManager.getInstance(proj, mt));
+    // 最近一次反思时间：跨所有 memType 取最新摘要
+    const lastTimes = dbs.flatMap(db => {
+        try {
+            return db.prepare(`
+        SELECT created_at FROM memory
+        WHERE source = 'reflect_summary' AND project = ?
+        ORDER BY created_at DESC LIMIT 1
+      `).all(proj).map(r => r.created_at);
+        }
+        catch {
+            return [];
+        }
+    });
+    const lastTime = lastTimes.length ? Math.max(...lastTimes.map(t => new Date(t).getTime()).filter(Number.isFinite)) : NaN;
+    const hoursSince = Number.isFinite(lastTime)
+        ? (Date.now() - lastTime) / 3600000
+        : Number.POSITIVE_INFINITY;
     const timeOk = hoursSince >= MIN_GAP_HOURS;
-    const gapLabel = lastTime === null ? '∞' : `${Math.floor(hoursSince * 10) / 10}`;
+    const gapLabel = Number.isFinite(lastTime) ? `${Math.floor(hoursSince * 10) / 10}` : '∞';
     if (!timeOk) {
         return { should: false, reason: `距上次反思 ${gapLabel} 小时,未到 ${MIN_GAP_HOURS}h` };
     }
-    // 未分析对话数(与 getUnanalyzedConversations 同口径:conversation_log、created_at > 上次反思)
-    const since = last?.created_at || new Date(0).toISOString();
-    const cnt = db.prepare(`
-    SELECT COUNT(*) as c FROM memory
-    WHERE is_active = 1 AND source = 'conversation_log'
-      AND project = ? AND created_at > ?
-  `).get(proj, since);
-    const count = cnt?.c ?? 0;
+    const count = getUnanalyzedConversations(charId, undefined, MIN_UNANALYZED + 1, proj).length;
     if (count <= MIN_UNANALYZED) {
         return { should: false, reason: `未分析对话 ${count} 条,未超 ${MIN_UNANALYZED}` };
     }
@@ -89,9 +98,15 @@ export function shouldAutoReflect(charId = 'airi', project) {
  * 注意:整合只需记忆足够多,不依赖 REFLECT_LLM_API_KEY(无 key 时 runConsolidate 会报错跳过)。
  */
 export function shouldAutoConsolidate(project) {
-    const db = DatabaseManager.getInstance(project);
     const proj = normalizeProject(project);
-    const count = db.prepare('SELECT COUNT(*) as c FROM memory WHERE is_active = 1 AND project = ?').get(proj)?.c ?? 0;
+    let count = 0;
+    for (const mt of listMemTypeDirs(proj)) {
+        try {
+            count += DatabaseManager.getInstance(proj, mt)
+                .prepare('SELECT COUNT(*) as c FROM memory WHERE is_active = 1 AND project = ?').get(proj)?.c ?? 0;
+        }
+        catch { /* 单分类库失败不阻断其他库 */ }
+    }
     const min = CONSOLIDATE_MIN_MEMORIES;
     if (count > min)
         return { should: true, count, min, reason: `${count} > ${min}` };
@@ -134,6 +149,7 @@ function outputFormatSpec(factExtraction, maxFacts) {
 【输出格式】只返回严格 JSON 对象，不要任何其他文字（代码围栏也不要有）：
 
 {
+  "processedSourceIds": ["本轮已完整审阅并处理的来源ID；未处理完的来源不要列"],
   "summary": "自然语言总结（2-4句话）：概括这段时间用户做了什么、聊了什么、情绪状态如何",
   "highlights": ["关键事件1", "关键事件2"]${facts},
   "insights": ["关于用户性格/沟通风格/潜在需求的深层观察"],
@@ -164,6 +180,9 @@ ${factExtraction === 'off'
 }
 /** Daily-reflection prompt builder (digest + extraction, model-neutral) */
 export function buildReflectSystemPrompt(factExtraction = FACT_EXTRACTION, maxFacts = MAX_FACTS) {
+    return loadPromptOverride('REFLECT_PROMPT_FILE', builtinReflectSystemPrompt(factExtraction, maxFacts)) + SOURCE_CURSOR_SPEC;
+}
+function builtinReflectSystemPrompt(factExtraction, maxFacts) {
     return `You are a memory organization engine. Each entry has a "date" field (YYYY-MM-DD).
 
 ══════════════════════
@@ -221,6 +240,9 @@ ${outputFormatSpec(factExtraction, maxFacts)}
 }
 /** Deep-calibration prompt builder (full-memory analysis) */
 export function buildDeepReflectPrompt(factExtraction = FACT_EXTRACTION, maxFacts = MAX_FACTS) {
+    return loadPromptOverride('REFLECT_DEEP_PROMPT_FILE', builtinDeepReflectPrompt(factExtraction, maxFacts));
+}
+function builtinDeepReflectPrompt(factExtraction, maxFacts) {
     return `你是记忆深度校准引擎。对全部记忆执行长时分析。
 
 ══════════════════════
@@ -262,146 +284,6 @@ ${outputFormatSpec(factExtraction, maxFacts)}
 /** 向后兼容：默认配置下的 prompt（外部可能仍引用这两个常量） */
 export const REFLECT_SYSTEM_PROMPT = buildReflectSystemPrompt();
 export const DEEP_REFLECT_PROMPT = buildDeepReflectPrompt();
-/**
- * 按当前解析状态补全未闭合的括号与字符串(用于截断救济)
- * 只做词法扫描,不解析语义:字符串内的括号不计数,被截断的字符串补引号,左括号逐个补右括号。
- */
-function closeBrackets(x) {
-    let inStr = false, esc = false;
-    const stack = [];
-    for (const ch of x) {
-        if (esc) {
-            esc = false;
-            continue;
-        }
-        if (ch === '\\') {
-            esc = true;
-            continue;
-        }
-        if (ch === '"') {
-            inStr = !inStr;
-            continue;
-        }
-        if (inStr)
-            continue;
-        if (ch === '{' || ch === '[')
-            stack.push(ch);
-        else if (ch === '}' || ch === ']')
-            stack.pop();
-    }
-    let out = x;
-    if (inStr)
-        out += '"';
-    while (stack.length)
-        out += (stack.pop() === '[' ? ']' : '}');
-    return out;
-}
-/** 常见坏 JSON 修补:尾随逗号 / 裸控制字符 / 非法反斜杠转义(LLM 写 Windows 路径 `/path\x` 时必犯) */
-function repairJson(x) {
-    return x
-        .replace(/,\s*([}\]])/g, '$1')
-        .replace(/[\x00-\x1f]+/g, ' ')
-        .replace(/\\(?!["\\/bfnrtu])/g, '\\\\');
-}
-/** 判断末尾是否停在未闭合的字符串字面量里(截断的典型特征) */
-function endsInsideString(x) {
-    let inStr = false, esc = false;
-    for (const ch of x) {
-        if (esc) {
-            esc = false;
-            continue;
-        }
-        if (ch === '\\') {
-            esc = true;
-            continue;
-        }
-        if (ch === '"') {
-            inStr = !inStr;
-        }
-    }
-    return inStr;
-}
-/**
- * 截断救济:LLM 输出被 max_tokens 截断时(常见:action 条数多),
- * 从尾部逐级回退到最后一个完整元素的收尾符,丢弃残缺元素后补全括号再解析。
- * 宁可少应用几条 action,也不要整轮丢弃。
- */
-function salvageTruncatedJson(body) {
-    const accept = (x) => {
-        try {
-            const r = JSON.parse(repairJson(x));
-            if (Array.isArray(r))
-                return { actions: r };
-            if (r && typeof r === 'object')
-                return r;
-        }
-        catch { /* keep trimming */ }
-        return null;
-    };
-    let cut = body.length;
-    // 末尾停在未闭合字符串 → 最后一条元素残缺:回退到"上一个完整元素的收尾符"再补括号,
-    // 不能退到元素内部的逗号(那会把残缺元素补成半个对象,如 {action:"merge"})
-    if (endsInsideString(body)) {
-        const next = Math.max(body.lastIndexOf('}', cut - 1), body.lastIndexOf(']', cut - 1));
-        if (next > 1)
-            cut = next;
-    }
-    for (let i = 0; i < 80 && cut > 1; i++) {
-        const cand = body.slice(0, cut).replace(/[,\s]+$/, '');
-        const r = accept(closeBrackets(cand));
-        if (r)
-            return r;
-        const next = Math.max(body.lastIndexOf(',', cut - 1), body.lastIndexOf('}', cut - 1), body.lastIndexOf(']', cut - 1));
-        if (next <= 1)
-            break;
-        cut = next;
-    }
-    return null;
-}
-/**
- * 多策略解析 LLM 返回的 JSON(容忍常见错误)
- * 支持 [...] 数组和 {...} 对象,以及 markdown 代码围栏包裹:
- *   - 数组 → 包成 { actions: [...] }(老 prompt 的只返回数组格式)
- *   - 对象 → 原样返回
- *   - 被 max_tokens 截断 → 回退到最后一个完整元素并补全括号(salvageTruncatedJson)
- */
-export function parseJsonRobust(raw) {
-    let s = (raw || '').trim();
-    // 剥离 markdown 代码围栏
-    const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (fence)
-        s = fence[1].trim();
-    // 提取最外层 {...} 或 [...] 块;有前导文字时从首个括号取到结尾(不要贪心到最后一个 '}',
-    // 否则截断输出的尾部会被切掉,救济就无从下手)
-    const body = (() => {
-        if (s.startsWith('{') || s.startsWith('['))
-            return s;
-        const i = Math.min(...[{ '{': s.indexOf('{') }, { '[': s.indexOf('[') }]
-            .map(o => Object.values(o)[0]).filter(v => v >= 0).concat([Number.MAX_SAFE_INTEGER]));
-        return Number.isFinite(i) && i < Number.MAX_SAFE_INTEGER ? s.slice(i) : null;
-    })();
-    if (!body)
-        return null;
-    const strategies = [
-        (x) => JSON.parse(x),
-        (x) => JSON.parse(x.replace(/,\s*([}\]])/g, '$1')),
-        (x) => JSON.parse(x.replace(/"\s*\n\s*"/g, '",\n"')),
-        (x) => JSON.parse(x.replace(/,\s*([}\]])/g, '$1').replace(/"\s*\n\s*"/g, '",\n"')),
-        (x) => JSON.parse(x.replace(/,\s*([}\]])/g, '$1').replace(/"\s*\n\s*"/g, '",\n"').replace(/[\x00-\x1f]+/g, ' ')),
-    ];
-    for (const fn of strategies) {
-        try {
-            const r = fn(body);
-            if (Array.isArray(r))
-                return { actions: r };
-            if (r && typeof r === 'object')
-                return r;
-        }
-        catch { /* try next */ }
-    }
-    // 收尾:截断救济(内部第一步即"补全原 body",失败再逐级回退元素边界)
-    return salvageTruncatedJson(body);
-}
 /** 把 parseJsonRobust 结果规范化为 applyReflectResult 期望的 ReflectResult */
 function normalizeReflectResult(parsed) {
     const out = { ...parsed };
@@ -417,59 +299,6 @@ function normalizeReflectResult(parsed) {
     }
     return out;
 }
-/**
- * v1.11.3 重路径(总反思/深度反思/整合)的输出预算 —— 与浅层(triage 临时反思 / reflect_auto)分开。
- * 为什么需要:推理模型(如 deepseek-v4-pro)的**思考 token 也计入 max_tokens**,8192 会被"想"吃光,
- * 返回 finish_reason=length 且 content 为空 → 整合报 `未找到有效 JSON 结果`(实测 reasoning 18600 字符)。
- * 浅层仍走 callLlm 的 8192 默认值,不受此影响。config.json 的 `reflect.maxTokens` 可覆盖。
- */
-export const REFLECT_DEEP_MAX_TOKENS = (() => {
-    const v = parseInt(process.env.REFLECT_DEEP_MAX_TOKENS || '32768', 10);
-    return Number.isFinite(v) && v >= 1024 ? v : 32768;
-})();
-/**
- * 调用 LLM(OpenAI 兼容,非流式)。
- * 通道:缺省用 reflect(REFLECT_*);传 channel 则用指定通道(triage/reflect)。
- */
-export async function callLlm(systemPrompt, userPrompt, channel, maxTokens = 8192) {
-    const ch = channel ?? makeLlmChannel('reflect');
-    if (!ch.apiKey)
-        return null;
-    // 到 API 的连接偶发被断(大 prompt/限流),单次失败就放弃会让整轮反思白跑 → 退避重试
-    const attempts = Math.max(1, Number(process.env.REFLECT_LLM_RETRIES || 3));
-    for (let i = 1; i <= attempts; i++) {
-        try {
-            const resp = await fetch(`${ch.url}/chat/completions`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.apiKey}` },
-                body: JSON.stringify({
-                    model: ch.model,
-                    messages: [
-                        { role: 'system', content: systemPrompt },
-                        { role: 'user', content: userPrompt },
-                    ],
-                    max_tokens: maxTokens,
-                    stream: false,
-                }),
-            });
-            if (!resp.ok)
-                throw new Error(`LLM ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
-            const data = await resp.json();
-            const msg = data?.choices?.[0]?.message || {};
-            return { content: msg.content || '', reasoning: msg.reasoning_content || '' };
-        }
-        catch (e) {
-            const cause = e?.cause ? ` (cause: ${e.cause.code || e.cause.message || String(e.cause)})` : '';
-            if (i >= attempts) {
-                console.error(`[reflect-driver] LLM call failed after ${attempts} tries:`, e.message + cause);
-                return null;
-            }
-            console.error(`[reflect-driver] LLM call failed (try ${i}/${attempts}):`, e.message + cause);
-            await new Promise(r => setTimeout(r, 1500 * i));
-        }
-    }
-    return null;
-}
 /** 日常反思:未分析对话 → 日记浓缩/提取 */
 export async function runAutoReflect(charId, limit = 30, project) {
     const base = { ok: false, mode: 'auto', actions: 0, applied: 0, errors: [] };
@@ -481,20 +310,58 @@ export async function runAutoReflect(charId, limit = 30, project) {
         if (conversations.length === 0) {
             return { ...base, ok: true, conversationCount: 0, skipped: true, errors: ['无未分析对话'] };
         }
-        const userPrompt = `请分析以下对话，输出反思JSON：\n\n${conversations.map(c => c.text).join('\n---\n').substring(0, 30000)}`;
-        const llm = await callLlm(buildReflectSystemPrompt(), userPrompt);
-        if (!llm)
-            return { ...base, errors: ['LLM 调用失败'] };
-        const parsed = parseJsonRobust(llm.content || llm.reasoning);
-        if (!parsed)
-            return { ...base, errors: ['未找到有效 JSON 结果'] };
-        const result = normalizeReflectResult(parsed);
-        const r = await applyReflectResult(result, charId, project);
-        return {
-            ok: true, mode: 'auto', conversationCount: conversations.length,
-            actions: (result.actions || []).length, applied: r.actionsApplied, errors: r.errors,
-            receipts: r.receipts, factsInserted: r.factsInserted, factsUpdated: r.factsUpdated,
-        };
+        const records = conversations.map(c => ({ id: c.id, createdAt: c.createdAt, date: c.createdAt?.slice(0, 10), text: c.text }));
+        const batches = wholeRecordBatches(records);
+        const out = { ...base, conversationCount: records.length, processedCount: 0, deferredCount: records.length, receipts: [] };
+        const policy = reflectionPolicy(project);
+        const fidelity = fidelitySystemPrompt(project);
+        const customPrompt = loadPromptOverride('REFLECT_PROMPT_FILE', '');
+        const systemPrompt = policy === 'standard'
+            ? buildReflectSystemPrompt() + '\n' + reflectionFidelityPrompt(project)
+            : ((customPrompt ? customPrompt + '\n' : '') + fidelity) + SOURCE_CURSOR_SPEC;
+        for (const batch of batches) {
+            const llm = await callLlm(systemPrompt, `请逐条分析以下完整记录，输出反思JSON：\n${JSON.stringify(batch)}`, undefined, REFLECT_DEEP_MAX_TOKENS);
+            if (!llm || llm.finishReason === 'length') {
+                out.errors.push(!llm ? 'LLM 调用失败；本批保留待重试' : 'LLM 输出被截断；本批未应用，保留待重试');
+                break;
+            }
+            const parsed = parseJsonRobust(llm.content, false);
+            if (!parsed || !Array.isArray(parsed.actions)) {
+                out.errors.push('未返回完整反思 JSON 和 actions；本批保留待重试');
+                break;
+            }
+            const result = normalizeReflectResult(parsed);
+            const allowed = new Set(batch.map(x => x.id));
+            // 模型没给游标时,只认 actions 实际引用过的来源;绝不再整批标记(旧逻辑会丢内容)。
+            const fromActions = (Array.isArray(result.actions) ? result.actions : [])
+                .flatMap((a) => [a.sourceId, a.targetId])
+                .filter((id) => typeof id === 'string' && allowed.has(id));
+            const processedIds = Array.isArray(result.processedSourceIds) && result.processedSourceIds.length
+                ? result.processedSourceIds
+                : [...new Set(fromActions)];
+            if (!processedIds.length || new Set(processedIds).size !== processedIds.length || processedIds.some(id => typeof id !== 'string' || !allowed.has(id))) {
+                out.errors.push('未明确确认已完整处理的来源 ID；本批未应用，保留待重试');
+                break;
+            }
+            const r = await applyReflectResult(result, charId, project, { allowedSourceIds: new Set(batch.map(x => x.id)), automatic: true });
+            out.actions += (result.actions || []).length;
+            out.applied += r.actionsApplied;
+            out.receipts.push(...r.receipts);
+            out.factsInserted = (out.factsInserted || 0) + r.factsInserted;
+            out.factsUpdated = (out.factsUpdated || 0) + r.factsUpdated;
+            out.errors.push(...r.errors);
+            if (r.errors.length)
+                break;
+            markConversationsReflected(processedIds, project);
+            out.processedCount += processedIds.length;
+            out.deferredCount -= processedIds.length;
+            if (processedIds.length < batch.length) {
+                out.errors.push('本批仅部分来源完成；未完成来源保留待重试');
+                break;
+            }
+        }
+        out.ok = out.errors.length === 0;
+        return out;
     }
     catch (e) {
         return { ...base, errors: [e.message] };
@@ -513,12 +380,17 @@ export async function runDeepReflect(charId, limit = 500, project) {
     }
     try {
         const memories = listAllMemories(charId, limit, project);
+        memories.sort((a, b) => a.id.localeCompare(b.id));
+        const cursor = deepReflectionCursor(project);
+        const nextIndex = memories.findIndex(m => m.id > cursor);
+        if (nextIndex > 0)
+            memories.push(...memories.splice(0, nextIndex));
         if (memories.length === 0) {
             return { ...base, ok: true, memoryCount: 0, skipped: true, errors: ['库为空'] };
         }
         const slim = memories.map(m => ({
             id: m.id,
-            text: (m.text || '').slice(0, 300),
+            text: m.text || '',
             type: m.type, memType: m.memType || 'general', category: m.category,
             tags: m.tags || [], importance: m.importance ?? 0.5,
             emotionalImpact: m.emotionalImpact ?? 0, tier: m.tier || 'standard',
@@ -527,41 +399,51 @@ export async function runDeepReflect(charId, limit = 500, project) {
         }));
         const chunk = Math.max(4, Number(process.env.REFLECT_DEEP_CHUNK || 12));
         const maxCalls = Math.max(1, Number(process.env.REFLECT_DEEP_MAXCALLS || 4));
-        const batches = [];
-        for (let i = 0; i < slim.length; i += chunk)
-            batches.push(slim.slice(i, i + chunk));
+        const batches = wholeRecordBatches(slim, 30000, chunk);
         const out = {
             ok: true, mode: 'deep', memoryCount: memories.length,
             actions: 0, applied: 0, factsInserted: 0, factsUpdated: 0, errors: [], receipts: [],
         };
         let okBatches = 0;
         for (const batch of batches.slice(0, maxCalls)) {
-            const userPrompt = `记忆列表(${batch.length} 条)：\n\n${JSON.stringify(batch, null, 1)}\n\n请深度分析本批记忆,返回 JSON 操作对象。`;
-            const llm = await callLlm(buildDeepReflectPrompt(), userPrompt, undefined, REFLECT_DEEP_MAX_TOKENS);
+            const userPrompt = `记忆列表(${batch.length} 条)：\n\n${JSON.stringify(batch, null, 1)}\n\n请深度分析本批记忆，返回 JSON 操作对象。`;
+            const systemPrompt = reflectionPolicy(project) === 'standard' ? buildDeepReflectPrompt() + '\n' + reflectionFidelityPrompt(project) : fidelitySystemPrompt(project);
+            const llm = await callLlm(systemPrompt, userPrompt, undefined, REFLECT_DEEP_MAX_TOKENS);
             if (!llm) {
                 out.errors.push('LLM 调用失败');
-                continue;
+                break;
             }
-            const parsed = parseJsonRobust(llm.content || llm.reasoning);
-            if (!parsed) {
-                out.errors.push('未找到有效 JSON 结果');
-                continue;
+            if (llm.finishReason === 'length') {
+                out.errors.push('本批输出被截断，已保留未处理；下次重试');
+                break;
+            }
+            const parsed = parseJsonRobust(llm.content, false);
+            if (!parsed || !Array.isArray(parsed.actions)) {
+                out.errors.push('未找到有效 JSON actions 结果');
+                break;
             }
             const result = normalizeReflectResult(parsed);
-            const r = await applyReflectResult(result, charId, project);
-            okBatches++;
+            const r = await applyReflectResult(result, charId, project, { allowedSourceIds: new Set(batch.map(x => x.id)), automatic: true });
+            if (r.errors.length === 0) {
+                okBatches++;
+                deepReflectionCursor(project, batch[batch.length - 1].id);
+                out.processedCount = (out.processedCount || 0) + batch.length;
+            }
             out.actions += (result.actions || []).length;
             out.applied += r.actionsApplied;
             out.factsInserted = (out.factsInserted || 0) + (r.factsInserted || 0);
             out.factsUpdated = (out.factsUpdated || 0) + (r.factsUpdated || 0);
             out.receipts = [...(out.receipts || []), ...(r.receipts || [])];
             out.errors.push(...(r.errors || []));
+            if (r.errors.length)
+                break;
         }
-        if (okBatches === 0)
+        if (okBatches === 0 || out.errors.length)
             out.ok = false;
         if (batches.length > maxCalls) {
             out.errors.push(`本轮只处理 ${maxCalls}/${batches.length} 批(其余留待下轮)`);
         }
+        out.deferredCount = memories.length - (out.processedCount || 0);
         return out;
     }
     catch (e) {
@@ -578,6 +460,9 @@ export async function runDeepReflect(charId, limit = 500, project) {
 // 执行:先读后写,原子完成。
 // ═══════════════════════════════════════════════════════════════════
 export function buildConsolidationPrompt() {
+    return loadPromptOverride('CONSOLIDATE_PROMPT_FILE', builtinConsolidationPrompt());
+}
+function builtinConsolidationPrompt() {
     return `你是记忆整合引擎(Memory Consolidator)。输入:
 1. 候选记忆(带 id/memType/text/createdAt)
 2. 候选相似对(向量预筛结果,可能为空)
@@ -643,6 +528,9 @@ function normalizeConsolidationActions(raw) {
             else
                 errors.push('keep: need id, skipped');
         }
+        else if (action === 'extract' && typeof a.sourceId === 'string' && typeof a.newText === 'string' && a.newText.trim()) {
+            actions.push({ ...a });
+        }
         else {
             errors.push(`unknown consolidation action: ${action || '(missing)'}, skipped`);
         }
@@ -701,7 +589,7 @@ export async function runConsolidate(charId = 'default', project, threshold, lim
     const itemsJson = JSON.stringify(inputMems.map(m => ({
         id: m.id,
         memType: m.mem_type || 'general',
-        text: (m.text || '').slice(0, 600),
+        text: m.text || '',
         createdAt: (m.created_at || '').slice(0, 10),
     })), null, 1);
     const pairsJson = JSON.stringify(candidates, null, 1);
@@ -709,7 +597,7 @@ export async function runConsolidate(charId = 'default', project, threshold, lim
     let transcript = '';
     try {
         const convs = getRecentConversations(charId, 24 * 7, 20, proj);
-        transcript = convs.map(c => c.text).join('\n---\n').substring(0, 8000);
+        transcript = JSON.stringify(convs.map(c => ({ id: c.id, text: c.text, createdAt: c.created_at })), null, 2);
     }
     catch {
         transcript = '';
@@ -725,10 +613,13 @@ ${pairsJson}
 
 【近期对话转录】
 ${transcript || '无近期对话转录'}`;
-    const llm = await callLlm(buildConsolidationPrompt(), userPrompt, undefined, REFLECT_DEEP_MAX_TOKENS);
+    const systemPrompt = reflectionPolicy(proj) === 'standard' ? buildConsolidationPrompt() + '\n' + reflectionFidelityPrompt(proj) : fidelitySystemPrompt(proj, true);
+    const llm = await callLlm(systemPrompt, userPrompt, undefined, REFLECT_DEEP_MAX_TOKENS);
     if (!llm)
         return { ...base, scanned, candidates: candidates.length, errors: ['LLM 调用失败'] };
-    const parsed = parseJsonRobust(llm.content || llm.reasoning);
+    if (llm.finishReason === 'length')
+        return { ...base, scanned, candidates: candidates.length, errors: ['LLM 输出被截断，未应用整合'] };
+    const parsed = parseJsonRobust(llm.content, false);
     if (!parsed)
         return { ...base, scanned, candidates: candidates.length, errors: ['未找到有效 JSON 结果'] };
     // 4. 规范化 + 原子执行(keep 不落地;merge/delete 复用 applyReflectActions)
@@ -736,7 +627,8 @@ ${transcript || '无近期对话转录'}`;
     let r = { applied: 0, errors: [], receipts: [] };
     if (norm.actions.length > 0) {
         try {
-            r = await applyReflectActions(norm.actions, charId, proj);
+            const inputIds = new Set(inputMems.map(m => m.id));
+            r = await applyReflectActions(norm.actions, charId, proj, { allowedSourceIds: inputIds, automatic: true });
         }
         catch (e) {
             norm.errors.push(e.message);
@@ -745,7 +637,7 @@ ${transcript || '无近期对话转录'}`;
     const merged = r.receipts.filter(x => x.action === 'merge' && x.status === 'applied').length;
     const deleted = r.receipts.filter(x => x.action === 'delete' && x.status === 'applied').length;
     return {
-        ok: true,
+        ok: norm.errors.length === 0 && r.errors.length === 0,
         scanned,
         candidates: candidates.length,
         merged,
