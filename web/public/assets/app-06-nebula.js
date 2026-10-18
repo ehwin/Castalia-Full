@@ -659,15 +659,26 @@ fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE) + '&project=' + enco
   })
   .then(s => {
     applyInstanceChrome(s);
-    if (s && s.dbExists === false) {
+    /* 空库提示只属于“真的没有节点”的场景:
+     * 汇总星图(3348)的本库为空,但 federation 视图有上千节点;旧逻辑只看 dbExists,
+     * 会把红字盖在正常星图上(2026-10-18 实测 1503 节点仍出现)。 */
+    const hasGraph = !!(allData && Array.isArray(allData.nodes) && allData.nodes.length > 0);
+    if (s && s.dbExists === false && !hasGraph) {
       loading.innerHTML = '📭 记忆库为空或未创建——启动 MCP server 或写入第一条记忆后,图谱会自动出现';
       loading.classList.add('error');
       loading.style.display = '';
     } else {
+      loading.classList.remove('error');
       loading.style.display = 'none';
     }
   })
   .catch(err => {
+    /* 图已经画出来了说明数据没问题;此时 /api/status 抖动不能把红字盖回星图上。 */
+    if (allData && Array.isArray(allData.nodes) && allData.nodes.length > 0) {
+      loading.style.display = 'none';
+      console.error('status check failed after graph render:', err && err.message);
+      return;
+    }
     fetch('/api/status').then(r => r.json()).then(s => {
       if (s && s.dbExists === false) {
         loading.innerHTML = '📭 记忆库为空或未创建——启动 MCP server 或写入第一条记忆后,图谱会自动出现';
