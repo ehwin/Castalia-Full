@@ -6,6 +6,5 @@
     "rootDir": "./src",
     "sourceMap": false
   },
-  "include": ["src/**/*"],
-  "exclude": ["src/index.lite.ts"]
+  "include": ["src/**/*"]
 }

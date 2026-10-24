@@ -73,17 +73,17 @@ def check_versions():
     return version
 
 
-def check_public():
-    """公开仓是 Full 的生成产物：先比对，漂移即失败。"""
-    proc = subprocess.run([PY, "Castalia-Full/scripts/export_public.py"], cwd=str(ROOT),
+def check_core():
+    """Lite 是引擎核心源；Full 的核心必须与之一致（Full 只多 bus 模块）。"""
+    proc = subprocess.run([PY, "Castalia-Full/scripts/sync_core.py"], cwd=str(ROOT),
                           capture_output=True, text=True, encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         print(proc.stdout or "")
-        fail("公开仓 Castalia 与 Full 源码漂移（跑 export_public.py --apply）")
+        fail("Full 核心与 Lite 漂移（跑 sync_core.py --apply）")
     pkg = json.loads((ROOT / "Castalia" / "package.json").read_text(encoding="utf-8"))
     if pkg.get("version") != (FULL / "VERSION").read_text(encoding="utf-8").strip():
-        fail("公开仓 package.json 版本不一致")
-    print("[release] public export OK")
+        fail("Lite package.json 版本不一致")
+    print("[release] core sync OK (Lite -> Full)")
 
 
 def build():
@@ -117,15 +117,15 @@ def deploy():
     after = last_json(run([PY, "Castalia-Full/scripts/deploy_runtime.py"], ROOT))
     if not before or not after:
         fail("部署输出无法解析")
-    if after.get("changedModules") != 0:
-        fail(f"部署后仍有漂移: {after}")
+    if after.get("changedModules") != 0 or after.get("staleModules", 0) != 0:
+        fail(f"部署后仍有漂移/残留: {after}")
     return before, after
 
 
 def main():
     check_only = "--check" in sys.argv
     version = check_versions()
-    check_public()
+    check_core()
     build()
     results = tests()
     summary = {"version": version, "checks": {k: v.get("checks") for k, v in results.items()},
