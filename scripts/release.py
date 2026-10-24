@@ -73,8 +73,23 @@ def check_versions():
     return version
 
 
+def check_public():
+    """公开仓是 Full 的生成产物：先比对，漂移即失败。"""
+    proc = subprocess.run([PY, "Castalia-Full/scripts/export_public.py"], cwd=str(ROOT),
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if proc.returncode != 0:
+        print(proc.stdout or "")
+        fail("公开仓 Castalia 与 Full 源码漂移（跑 export_public.py --apply）")
+    pkg = json.loads((ROOT / "Castalia" / "package.json").read_text(encoding="utf-8"))
+    if pkg.get("version") != (FULL / "VERSION").read_text(encoding="utf-8").strip():
+        fail("公开仓 package.json 版本不一致")
+    print("[release] public export OK")
+
+
 def build():
-    for repo in (FULL, ANIMA):
+    for repo in (FULL, ANIMA, ROOT / "Castalia"):
+        if not (repo / "src").is_dir():
+            fail(f"{repo} 缺少 src")
         run([NODE, "scripts/gen_version.mjs"], repo)
         run([NODE, "node_modules/typescript/bin/tsc", "-p", "tsconfig.build.json"], repo)
 
@@ -110,6 +125,7 @@ def deploy():
 def main():
     check_only = "--check" in sys.argv
     version = check_versions()
+    check_public()
     build()
     results = tests()
     summary = {"version": version, "checks": {k: v.get("checks") for k, v in results.items()},
