@@ -100,7 +100,7 @@ def tests():
     if not full or not full.get("ok"):
         fail(f"Full 回归失败: {full}")
     results["full"] = full
-    for script in ("regression_facts.mjs", "regression_v123_anima.mjs"):
+    for script in ("regression_facts.mjs", "regression_v123_anima.mjs", "regression_anima_audit.mjs"):
         r = last_json(run([NODE, f"scripts/{script}", "."], ANIMA))
         if not r or not r.get("ok"):
             fail(f"Anima {script} 失败: {r}")
