@@ -32,6 +32,8 @@ const PROBES = {
   'facts 时间有效性': [
     { file: 'db.ts', needles: ['valid_from', 'valid_to', 'evidence'] },
     { file: 'store.ts', needles: ['valid_from', 'valid_to', "FUNCTIONAL_PREDICATES"] },
+    { file: 'index.ts', needles: ["valid_to IS NULL"] },
+    { file: 'search.ts', needles: ["valid_to IS NULL"] },
   ],
   '冷存分层': [
     { file: 'store.ts', needles: ['markColdMemories', 'COLD_AFTER_DAYS'] },
@@ -48,7 +50,7 @@ const PROBES = {
     { file: 'reflectDriver.ts', needles: ['consolidation: true'], absent: ['fidelitySystemPrompt(proj, true)'] },
   ],
   'critical 保护': [
-    { file: 'reflect.ts', needles: ["<> 'critical'"] },
+    { file: 'reflect.ts', needles: ["<> 'critical'", 'identity_locked'] },
     { file: 'reflectDriver.ts', needles: ["<> 'critical'"] },
   ],
   'superseded 全路径过滤': [
