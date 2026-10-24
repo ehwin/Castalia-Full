@@ -398,5 +398,12 @@ try {
   check(cmRes.errors.length === 0 && cmRes.applied === 1, 'merge on inactive conversation sources succeeds: ' + JSON.stringify(cmRes.errors));
   check(!!cmDb.prepare("SELECT id FROM memory WHERE project=? AND is_active=1 AND text LIKE '%合并后的对话摘要%'").get(cmProj), 'merged conversation memory is written');
 
+  // v1.23.2：reflect_extract 只差空白/大小写/目标 memType 时不再新建点
+  const dq1 = await saveMemory({ project: 'dedupe-norm', text: 'Alpha   Beta 3318', source: 'reflect_extract' });
+  const dq2 = await saveMemory({ project: 'dedupe-norm', text: 'alpha beta 3318', source: 'reflect_extract' });
+  const dq3 = await saveMemory({ project: 'dedupe-norm', text: 'ALPHA BETA 3318', source: 'reflect_extract', memType: 'project' });
+  check(dq1.id === dq2.id, 'normalized reflection extracts dedupe (case/whitespace)');
+  check(dq3.id !== dq1.id, 'markdown-wrapped cross-memType text stays a distinct memType row');
+
   console.log(JSON.stringify({ checks, ok: true, liveLlmCalls: 0, productionWrites: 0 }));
 } finally { DatabaseManager.close(); fs.rmSync(temp, { recursive: true, force: true }); }
