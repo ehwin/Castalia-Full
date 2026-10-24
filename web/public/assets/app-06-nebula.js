@@ -201,7 +201,10 @@ function renderNebula(data) {
   }
   // DSH is a project inside Hermes, not another storage instance. Give it a
   // persistent locator in the federation view without changing node ownership.
-  if (IS_FED) {
+  // v1.23.2: 当 DSH 已经是独立星域时，星域标签已经覆盖它，不要再挂第二枚
+  // "DSH · <owner>" 标签（用户看到两枚同名标签 = “DSH 重复了”）。
+  const dshIsRegion = [...byRegion.keys()].some(rg => String(rg).toLowerCase() === 'dsh');
+  if (IS_FED && !dshIsRegion) {
     const dshByInstance = new Map();
     for (const n of real) {
       if (String(n.project || n.lib || '').toLowerCase() !== 'dsh') continue;
@@ -353,7 +356,7 @@ function addNebulaClouds(real) {
     const sceneR = Math.max(1, real.reduce((m, n) => Math.max(m, Math.hypot(n.x || 0, n.y || 0, n.z || 0)), 1));
     /* v1.23.2: 点的视觉尺寸随总数收缩——2000+ 点时仍用 4.0，直径大于点间距，
      * 叠加混合后整片糊成"团"；按 N^(1/3) 收缩，并保留 0.34 下限避免看不见。 */
-    const sizeScale = Math.max(0.4, Math.min(1, Math.cbrt(700 / Math.max(40, N))));
+    const sizeScale = Math.max(0.42, Math.min(1, Math.cbrt(1100 / Math.max(40, N))));
     window.__nebulaSizeScale = sizeScale;
     const baseDot = 4.0 * sizeScale;
     const positions = new Float32Array(N*3);
@@ -390,8 +393,8 @@ function addNebulaClouds(real) {
         void main(){
           float d = length(gl_PointCoord - vec2(0.5));
           if (d > 0.5) discard;
-          float core = smoothstep(0.5, 0.44, d);
-          float halo = 0.22 * pow(smoothstep(0.5, 0.06, d), 2.0);
+          float core = smoothstep(0.5, 0.47, d);
+          float halo = 0.08 * pow(smoothstep(0.5, 0.18, d), 3.0);
           float a = clamp(core + halo, 0.0, 1.0);
           gl_FragColor = vec4(vColor * (0.74 + 0.26 * core), a * vAlpha * ${alphaScale});
         }`,
@@ -618,7 +621,9 @@ function renderNebulaLegend(data, real) {
   });
   const items = [];
   const dshMembers = (real || []).filter(n => String(n.project || n.lib || '').toLowerCase() === 'dsh');
-  if (IS_FED && dshMembers.length) {
+  // v1.23.2: DSH 已是独立星域时，图例只保留“DSH 星域”，不再重复一条“项目”行
+  const dshIsRegion = (real || []).some(n => String(n.__region || '').toLowerCase() === 'dsh');
+  if (IS_FED && dshMembers.length && !dshIsRegion) {
     items.push({ color: '#56b4ff', label: 'DSH · DeepSeek Harness（项目）', count: dshMembers.length,
       cls: 'parent', key: 'project:dsh', parent: '', lvl: 0, filter: { kind: 'project', id: 'dsh' } });
   }
