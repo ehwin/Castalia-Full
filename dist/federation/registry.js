@@ -16,9 +16,13 @@ function parseJsonArray(raw) {
         return null;
     try {
         const v = JSON.parse(raw);
-        return Array.isArray(v) ? v : null;
+        if (Array.isArray(v))
+            return v;
+        console.error('[federation] 配置不是数组，忽略');
+        return null;
     }
-    catch {
+    catch (e) {
+        console.error(`[federation] 成员配置 JSON 解析失败（已忽略）: ${e.message}`);
         return null; // 配置非法 → 当作没有成员(绝不因此让引擎起不来)
     }
 }
@@ -30,8 +34,23 @@ export function normalizeMember(m) {
     if (!target)
         return null;
     const isHttp = /^https?:\/\//i.test(target);
-    const transport = String(m.transport ?? (isHttp ? 'mcp-http' : 'local-dir'));
-    const id = String(m.id ?? m.name ?? path.basename(target.replace(/[/\\]+$/, '')) ?? 'member');
+    const requested = m.transport ? String(m.transport) : '';
+    let transport = requested || (isHttp ? 'mcp-http' : 'local-dir');
+    const id = String(m.id ?? m.name ?? (path.basename(target.replace(/[/\\]+$/, '')) || 'member'));
+    if (!['mcp-http', 'local-dir'].includes(transport)) {
+        const inferred = isHttp ? 'mcp-http' : 'local-dir';
+        console.error(`[federation] 成员 ${id} 的 transport=${requested} 未知，按 target 推断为 ${inferred}`);
+        transport = inferred;
+    }
+    // transport 与 target 形态矛盾时以 target 为准（否则会在错误类型上反复失败且无提示）
+    if (transport === 'local-dir' && isHttp) {
+        console.error(`[federation] 成员 ${id} transport=local-dir 但 target 是 URL，改用 mcp-http`);
+        transport = 'mcp-http';
+    }
+    else if (transport === 'mcp-http' && !isHttp) {
+        console.error(`[federation] 成员 ${id} transport=mcp-http 但 target 不是 URL，改用 local-dir`);
+        transport = 'local-dir';
+    }
     return {
         id,
         label: m.label ? String(m.label) : undefined,
@@ -46,6 +65,9 @@ export function normalizeMember(m) {
 /** 解析配置里的成员(不含本实例) */
 export function parseMemberConfigs(env = process.env) {
     const modern = parseJsonArray(env.FEDERATION_MEMBERS);
+    if (modern && modern.length === 0 && parseJsonArray(env.FEDERATION_DIRS)?.length) {
+        console.error('[federation] FEDERATION_MEMBERS=[] 会遮蔽 FEDERATION_DIRS；如要使用旧配置请删除 FEDERATION_MEMBERS');
+    }
     const raw = modern ?? parseJsonArray(env.FEDERATION_DIRS) ?? [];
     const out = [];
     const seen = new Set();

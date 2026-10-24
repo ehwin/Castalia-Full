@@ -59,7 +59,7 @@ server.tool(
   },
   async (args: any) => {
     try {
-      const topK = args.topK ?? 5;
+      const topK = Math.min(50, Math.max(1, Math.floor(Number(args.topK ?? 5)) || 5));
       const { hits, members, errors } = await fedSearchAll(OWN_DIR, args.query, topK, process.env, args.members);
       return ok({
         op: 'memory_search_all',

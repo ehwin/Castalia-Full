@@ -1,27 +1,71 @@
+import { SERVER_VERSION } from '../env.js';
 const PROTOCOL_VERSION = '2024-11-05';
 /** endpoint → session id(进程内共享,进程退出即失效) */
 const sessions = new Map();
-function parseBody(text) {
+function parseBody(text, expectId) {
     const t = (text || '').trim();
     if (!t)
         return null;
     if (t.startsWith('{') || t.startsWith('[')) {
         try {
-            return JSON.parse(t);
+            const v = JSON.parse(t);
+            if (expectId === undefined || Array.isArray(v) || v?.id === expectId)
+                return v;
+            return v;
         }
         catch { /* 落空到 SSE 分支 */ }
     }
-    // Streamable HTTP 的 SSE 帧:data: {...}
+    // Streamable HTTP 的 SSE 帧:data: {...}；多帧时优先匹配 JSON-RPC id
+    let first = null;
     for (const line of t.split(/\r?\n/)) {
         const m = line.match(/^data:\s*(.+)$/);
-        if (m) {
-            try {
-                return JSON.parse(m[1]);
-            }
-            catch { /* next */ }
+        if (!m)
+            continue;
+        try {
+            const v = JSON.parse(m[1]);
+            if (expectId !== undefined && v?.id === expectId)
+                return v;
+            if (first === null)
+                first = v;
         }
+        catch { /* next */ }
     }
-    return null;
+    return first;
+}
+/** 按 JSON-RPC id 读 SSE 流；读到匹配帧立即取消读取，避免长连接把请求拖到超时。 */
+async function readSseForId(stream, expectId, timeoutMs) {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; reader.cancel().catch(() => { }); }, timeoutMs);
+    try {
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done)
+                break;
+            buffer += decoder.decode(value, { stream: true });
+            // 一帧以空行结束（\n\n 或 \r\n\r\n）
+            let idx;
+            while ((idx = buffer.search(/\r?\n\r?\n/)) >= 0) {
+                const block = buffer.slice(0, idx);
+                buffer = buffer.slice(idx).replace(/^\r?\n\r?\n/, '');
+                const payload = parseBody(block, expectId);
+                if (payload && (payload.id === expectId || payload.result || payload.error))
+                    return payload;
+            }
+            if (timedOut)
+                break;
+        }
+        return parseBody(buffer, expectId);
+    }
+    finally {
+        clearTimeout(timer);
+        try {
+            await reader.cancel();
+        }
+        catch { /* already closed */ }
+    }
 }
 export class McpHttpProvider {
     transport = 'mcp-http';
@@ -56,9 +100,15 @@ export class McpHttpProvider {
             body: JSON.stringify(body),
             signal: AbortSignal.timeout(timeoutMs ?? this.timeoutMs),
         });
-        const text = await res.text();
         const sid = res.headers.get('mcp-session-id') ?? res.headers.get('MCP-Session-Id');
-        return { ok: res.ok, status: res.status, sid, json: parseBody(text) };
+        const ctype = res.headers.get('content-type') || '';
+        // SSE 长连接：增量读、按 id 匹配、命中即取消；不能整包 await text()
+        if (res.body && ctype.includes('text/event-stream') && typeof body?.id === 'number') {
+            const json = await readSseForId(res.body, body.id, timeoutMs ?? this.timeoutMs);
+            return { ok: res.ok, status: res.status, sid, json };
+        }
+        const text = await res.text();
+        return { ok: res.ok, status: res.status, sid, json: parseBody(text, typeof body?.id === 'number' ? body.id : undefined) };
     }
     /** 握手:拿 mcp-session-id(失败返回 null,调用方视为成员不可达) */
     async handshake() {
@@ -69,7 +119,7 @@ export class McpHttpProvider {
             jsonrpc: '2.0', id: 1, method: 'initialize',
             params: {
                 protocolVersion: PROTOCOL_VERSION, capabilities: {},
-                clientInfo: { name: 'castalia-federation', version: '1.14' },
+                clientInfo: { name: 'castalia-federation', version: SERVER_VERSION },
             },
         }, null);
         const sid = r.sid ?? r.json?.result?.sessionId ?? null;

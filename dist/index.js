@@ -1053,7 +1053,7 @@ register('memory_search_all', 'admin', 'Federation search interface (read-only):
     mode: z.enum(['text', 'vector']).optional().describe('text = LIKE substring search (default); vector = reserved for sqlite-vec KNN (falls back to text in this build)'),
 }, async (args) => {
     try {
-        const topK = args.topK ?? 5;
+        const topK = Math.min(50, Math.max(1, Math.floor(Number(args.topK ?? 5)) || 5));
         // 接口化(v1.14):并发检索所有成员(本实例 + 配置的成员),
         // 成员可以是同机目录(local-dir)或 MCP 端点(mcp-http),单成员失败不影响整体。
         const { hits, members, errors } = await fedSearchAll(currentMemDir(), args.query, topK);

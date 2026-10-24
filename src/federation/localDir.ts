@@ -48,7 +48,8 @@ export function scanLibraries(dir: string, instance: string): FedLibrary[] {
       } catch { /* skip */ }
     }
   } catch {
-    /* 目录不可读则返回空 */
+    /* 目录不可读：让调用方（describe 的 unreadable / search 的全失败）看到，而不是静默空 */
+    console.error(`[federation] 目录不可读: ${dir} (member ${instance})`);
   }
   return libs;
 }
@@ -59,41 +60,52 @@ export function scanLibraries(dir: string, instance: string): FedLibrary[] {
  * 只读打开库文件,逐库独立 try/catch,单库损坏不影响整体。
  */
 export function fedTextSearch(libs: FedLibrary[], query: string, topK: number): FedHit[] {
-  const terms = query.split(/[\s,，。！？、；：]+/).filter((t: string) => t.trim().length >= 2);
+  const limit = Math.min(50, Math.max(1, Math.floor(Number(topK) || 5)));
+  const trimmed = String(query || '').trim();
+  const terms = trimmed.split(/[\s,，。！？、；：]+/).filter((t: string) => t.trim().length >= 2);
+  // 单字/纯标点：整串当子串查，而不是退化成"各库最新 N 条"
+  const effectiveTerms = terms.length ? terms : (trimmed ? [trimmed] : []);
+  const escapeLike = (t: string) => t.replace(/[\\%_]/g, m => '\\' + m);
   const hits: FedHit[] = [];
+  let failures = 0;
   for (const lib of libs) {
     let db: Database.Database | null = null;
     try {
       db = new Database(lib.file, { readonly: true, fileMustExist: true });
       let rows: any[] = [];
-      if (terms.length === 0) {
-        rows = db.prepare("SELECT id, text, created_at FROM memory WHERE is_active = 1 AND COALESCE(status, '') <> 'superseded' ORDER BY created_at DESC LIMIT ?").all(topK);
+      if (effectiveTerms.length === 0) {
+        rows = db.prepare("SELECT id, text, created_at FROM memory WHERE is_active = 1 AND COALESCE(status, '') <> 'superseded' ORDER BY created_at DESC LIMIT ?").all(limit);
       } else {
-        const conds = terms.map(() => 'm.text LIKE ?').join(' OR ');
+        const conds = effectiveTerms.map(() => "m.text LIKE ? ESCAPE '\\'").join(' OR ');
         rows = db.prepare(
           `SELECT m.id, m.text, m.created_at FROM memory m WHERE m.is_active = 1 AND COALESCE(m.status, '') <> 'superseded' AND (${conds}) ORDER BY m.created_at DESC LIMIT ?`
-        ).all(...terms.map(t => `%${t}%`), topK);
+        ).all(...effectiveTerms.map(t => `%${escapeLike(t)}%`), limit);
       }
       for (const r of rows) {
-        const hitCount = terms.filter(t => String(r.text).includes(t)).length;
+        const hitCount = effectiveTerms.filter(t => String(r.text).includes(t)).length;
         hits.push({
           instance: lib.instance,
           project: lib.project,
           memType: lib.memType,
           id: r.id,
           text: String(r.text).length > 200 ? String(r.text).slice(0, 200) + '…' : String(r.text),
-          score: terms.length > 0 ? Math.round((hitCount / terms.length) * 1000) / 1000 : 0.1,
+          score: effectiveTerms.length > 0 ? Math.round((hitCount / effectiveTerms.length) * 1000) / 1000 : 0.1,
           createdAt: r.created_at ?? null,
         });
       }
-    } catch {
-      /* 打不开的库跳过 */
+    } catch (e: any) {
+      failures++;
+      console.error(`[federation] 读取失败 ${lib.instance}/${lib.project}${lib.memType ? '/' + lib.memType : ''}: ${e.message}`);
     } finally {
       if (db) db.close();
     }
   }
+  // 全部库都打不开 = 成员掉线，明确报错而不是返回“没有命中”
+  if (libs.length > 0 && failures === libs.length) {
+    throw new Error(`member ${libs[0]?.instance || '?'}: 所有库均不可读（${failures}/${libs.length}）`);
+  }
   hits.sort((a, b) => (b.score - a.score) || String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')));
-  return hits.slice(0, Math.max(10, topK * Math.max(1, libs.length)));
+  return hits.slice(0, Math.max(10, limit * Math.max(1, libs.length)));
 }
 
 /** 统计一个库里的活跃记忆数(用于 describe;失败返回 null) */

@@ -23,16 +23,17 @@ import { reflectionFidelityPrompt, wholeRecordBatches } from './reflectionFideli
 const DEFAULT_MAX_TOTAL = Number.MAX_SAFE_INTEGER;
 const DEFAULT_MAX_PER_LIB = Number.MAX_SAFE_INTEGER;
 /** 逐库只读取活跃记忆(参照 federation.ts 的只读模式);单库失败不影响整体 */
-function scanLibrary(lib, limit) {
+function scanLibrary(lib, limit, oldestFirst = false) {
     let db = null;
     try {
         db = new Database(lib.file, { readonly: true, fileMustExist: true });
+        const order = oldestFirst ? 'ASC' : 'DESC';
         const rows = db.prepare(`
       SELECT *
       FROM memory
       WHERE is_active = 1
         AND COALESCE(status, '') NOT IN ('cold', 'superseded')
-      ORDER BY created_at DESC
+      ORDER BY created_at ${order}
       LIMIT ?
     `).all(Math.floor(limit));
         const count = Number(db.prepare(`SELECT COUNT(*) AS n FROM memory
@@ -190,6 +191,15 @@ export async function runReflectAll(opts) {
     if (libs.length === 0) {
         return { ...base, ok: true, errors: ['未发现可扫描的记忆库(跳过 project=reflect 后为空)'] };
     }
+    // v1.23.2-fix: 轮转。maxTotal 小于库数时固定顺序会让前几个库永远占满预算；
+    // 按小时轮换库顺序，并按小时奇偶切换 newest/oldest，保证长期覆盖率。
+    const hourSlot = Math.floor(Date.now() / 3600000);
+    if (libs.length > 1) {
+        const rot = hourSlot % libs.length;
+        if (rot)
+            libs = [...libs.slice(rot), ...libs.slice(0, rot)];
+    }
+    const oldestFirst = hourSlot % 2 === 1;
     // 2. 逐库只读取活跃记忆(受 maxTotal / maxPerLib 预算约束)
     const records = [];
     let scannedLibs = 0;
@@ -198,7 +208,7 @@ export async function runReflectAll(opts) {
     for (const lib of libs) {
         // Inspect every library, then allocate the total budget round-robin.
         // Otherwise early engineering libraries can starve DSH and Anima entirely.
-        const { rows, count, error } = scanLibrary(lib, maxPerLib);
+        const { rows, count, error } = scanLibrary(lib, maxPerLib, oldestFirst);
         if (error) {
             base.errors.push(error);
             continue;

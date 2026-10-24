@@ -19,7 +19,7 @@ const load = name => import(pathToFileURL(path.join(root, 'dist', name + '.js'))
 const { DatabaseManager, safeFilePart } = await load('db');
 const { consolidate } = await load('consolidate');
 const { saveMemory, findDbByMemoryId, getSessionMemory, promoteToProject, saveFacts, markColdMemories, getFactsBySubject } = await load('store');
-const { searchMemory } = await load('search');
+const { searchMemory, getRecentMemories } = await load('search');
 const { applyReflectActions, applyReflectResult, getUnanalyzedConversations, markConversationsReflected } = await load('reflect');
 const { runAutoReflect, runDeepReflect, runConsolidate, shouldAutoReflect, REFLECT_SYSTEM_PROMPT } = await load('reflectDriver');
 const { runReflectAll } = await load('reflectAll');
@@ -369,6 +369,15 @@ try {
   await saveFacts([{ subject: 'user', predicate: '昵称', object: '索引测试', confidence: 0.95 }], null, 'fixture', 'facts-noidx');
   const noIdx = DatabaseManager.getInstance('facts-noidx').prepare("SELECT COUNT(*) n, MAX(confidence) c FROM facts WHERE predicate='昵称'").get();
   check(noIdx.n === 1 && noIdx.c === 0.95, 'saveFacts works even when the unique index is missing');
+
+  // v1.23.2 审查修复：读路径不建库 / 联邦成员配置校验
+  const ghost = 'ghost-project-' + Date.now();
+  check(getRecentMemories('nobody', 5, 48, ghost).length === 0, 'recent read on unknown project returns empty');
+  check((await searchMemory({ query: 'x', topK: 3, project: ghost })).length === 0, 'search on unknown project returns empty');
+  check(!fs.existsSync(path.join(temp, ghost)), 'read paths do not create project directories');
+  const { normalizeMember } = await load('federation/registry');
+  check(normalizeMember({ id: 'web', target: 'http://127.0.0.1:3318/mcp' }).transport === 'mcp-http', 'http target infers mcp-http');
+  check(normalizeMember({ id: 'typo', target: 'D:/banks/x', transport: 'nonsense' }).transport === 'local-dir', 'unknown transport falls back to target shape');
 
   console.log(JSON.stringify({ checks, ok: true, liveLlmCalls: 0, productionWrites: 0 }));
 } finally { DatabaseManager.close(); fs.rmSync(temp, { recursive: true, force: true }); }

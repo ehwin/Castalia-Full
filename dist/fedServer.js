@@ -50,7 +50,7 @@ server.tool('memory_search_all', 'Federation search (read-only): search across e
     members: z.array(z.string()).optional().describe('Restrict to these member ids (default: all)'),
 }, async (args) => {
     try {
-        const topK = args.topK ?? 5;
+        const topK = Math.min(50, Math.max(1, Math.floor(Number(args.topK ?? 5)) || 5));
         const { hits, members, errors } = await fedSearchAll(OWN_DIR, args.query, topK, process.env, args.members);
         return ok({
             op: 'memory_search_all',
