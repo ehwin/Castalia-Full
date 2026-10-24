@@ -3,6 +3,28 @@
 > 本文件记录每次功能/架构变更,供 AIRI 主系统(`主系统`)吸收改进时快速对账。
 > 格式:Keep a Changelog 简化版(Added / Changed / Fixed / Removed)。
 
+## [v1.23.1] — 2026-10-24 统一版：整合修复 / 全库升级 / 版本单一来源
+
+> 版本号从仓库根 `VERSION` 生成（`scripts/gen_version.mjs` → `src/version.ts`），
+> package.json / config app.version / MCP serverInfo / fedServer 全部读同一值。
+
+### Added
+- 提醒中心：控制台「提醒」页 + rail 红点（反思失败/退避、整合异常、桥日志异常；30s 刷新）
+- `scripts/upgrade_banks.mjs`：扫描全部记忆库（含未运行实例）幂等补齐 v1.23 列与索引
+- `scripts/release.py`：版本一致性 → 构建两套引擎 → 全部回归 + 引擎对账 → 部署 → 漂移校验
+- `scripts/check_parity.mjs` / `diag_v123.mjs` / `verify_consolidate_live.mjs`
+
+### Changed
+- 整合不再被保真提示词整体替换：任务恒为整合，`consolidation` 模式放行 merge；extract 不再算整合动作
+- 整合窗口 rotation 两片各自保底；结构候选预留名额；预筛排除 critical/cold/superseded
+- facts 读侧只看当前有效值；同批互斥不互相失效；复写清空 valid_to
+- superseded 全检索路径排除；cold 命中回温；Parent-Child 回捞按锚点定位
+- 变体统一为 `full` / `anima` 两种（lite/max 名称退役），实例标签与联邦成员同步
+
+### Fixed
+- 反思失败退避（≥1h）与 `EMBED_MODE=none` 被误判为失败
+- 全库 schema 漂移（airi 缺列、full 空库）
+
 ## [v1.16.0] — 2026-09-11 cosmograph-org 宇宙图
 
 > 吸收 https://github.com/cosmograph-org/ 的宇宙图(embedding scatter + 细丝网),**不是** Obsidian 球面大陆。方案:`docs/吸收方案-Cosmograph.md`。
