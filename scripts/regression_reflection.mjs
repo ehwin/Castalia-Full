@@ -18,7 +18,7 @@ delete process.env.REFLECT_DIR;
 const load = name => import(pathToFileURL(path.join(root, 'dist', name + '.js')).href);
 const { DatabaseManager, safeFilePart } = await load('db');
 const { consolidate } = await load('consolidate');
-const { saveMemory, findDbByMemoryId, getSessionMemory, promoteToProject, saveFacts, markColdMemories, getFactsBySubject } = await load('store');
+const { saveMemory, findDbByMemoryId, getSessionMemory, promoteToProject, saveFacts, markColdMemories, getFactsBySubject, saveConversationTurn } = await load('store');
 const { searchMemory, getRecentMemories } = await load('search');
 const { applyReflectActions, applyReflectResult, getUnanalyzedConversations, markConversationsReflected } = await load('reflect');
 const { runAutoReflect, runDeepReflect, runConsolidate, shouldAutoReflect, REFLECT_SYSTEM_PROMPT } = await load('reflectDriver');
@@ -378,6 +378,25 @@ try {
   const { normalizeMember } = await load('federation/registry');
   check(normalizeMember({ id: 'web', target: 'http://127.0.0.1:3318/mcp' }).transport === 'mcp-http', 'http target infers mcp-http');
   check(normalizeMember({ id: 'typo', target: 'D:/banks/x', transport: 'nonsense' }).transport === 'local-dir', 'unknown transport falls back to target shape');
+
+  // v1.23.2：模型输出不支持的动作（reclassify/relate）只跳过，不让整批 ok=false 触发重试风暴
+  respond = () => json([{ action: 'reclassify', id: dupIds[0], newCategory: 'x' }]);
+  r = await runConsolidate('fixture', 'lifecycle', undefined, undefined, { force: true });
+  check(r.ok && r.applied === 0, 'unknown consolidation actions are skipped without failing the batch: ' + JSON.stringify(r));
+
+  // v1.23.2 blocker：反思输入是 is_active=0 的 conversation_log，merge 必须能合并它们
+  const cmProj = 'conv-merge';
+  await saveConversationTurn('对话合并测试 A 3318', '回复 A', 'airi', undefined, undefined, cmProj);
+  await saveConversationTurn('对话合并测试 B 3319', '回复 B', 'airi', undefined, undefined, cmProj);
+  const cmDb = DatabaseManager.getInstance(cmProj);
+  const cmIds = cmDb.prepare("SELECT id FROM memory WHERE project=? AND source='conversation_log' AND is_active=0 ORDER BY created_at").all(cmProj).map(x => x.id);
+  check(cmIds.length >= 2, 'conversation logs are stored inactive');
+  const cmRes = await applyReflectActions(
+    [{ action: 'merge', sourceIds: [cmIds[0], cmIds[1]], newText: '合并后的对话摘要 3318' }],
+    'airi', cmProj, { allowedSourceIds: new Set(cmIds) },
+  );
+  check(cmRes.errors.length === 0 && cmRes.applied === 1, 'merge on inactive conversation sources succeeds: ' + JSON.stringify(cmRes.errors));
+  check(!!cmDb.prepare("SELECT id FROM memory WHERE project=? AND is_active=1 AND text LIKE '%合并后的对话摘要%'").get(cmProj), 'merged conversation memory is written');
 
   console.log(JSON.stringify({ checks, ok: true, liveLlmCalls: 0, productionWrites: 0 }));
 } finally { DatabaseManager.close(); fs.rmSync(temp, { recursive: true, force: true }); }

@@ -18,7 +18,8 @@ const APPLY = process.argv.includes('--apply');
 const MEM_TYPES = ['general', 'user', 'feedback', 'project', 'reference'];
 
 const WANT = {
-  memory: [['parent_id', 'TEXT'], ['status', 'TEXT'], ['identity_locked', 'INTEGER DEFAULT 0']],
+  memory: [['parent_id', 'TEXT'], ['status', 'TEXT'], ['identity_locked', 'INTEGER DEFAULT 0'],
+           ['base_importance', 'REAL'], ['embed_fail_count', 'INTEGER DEFAULT 0']],
   facts: [['valid_from', 'DATETIME'], ['valid_to', 'DATETIME'], ['evidence', 'TEXT']],
 };
 
@@ -58,6 +59,20 @@ function upgradeDb(dbPath, bank, project, memType) {
       if (!hasIdx) {
         if (APPLY) db.exec('CREATE INDEX IF NOT EXISTS idx_memory_parent ON memory(parent_id)');
         entry.added.push('idx_memory_parent');
+      }
+    }
+    // 衰减基线：补 NULL + 触发器（v1.23.2）
+    if (tables.has('memory') && columnNames(db, 'memory').has('base_importance')) {
+      const nulls = (db.prepare('SELECT COUNT(*) c FROM memory WHERE base_importance IS NULL').get()?.c) || 0;
+      const trg = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='trg_memory_base_importance'").get();
+      if (nulls > 0 || !trg) {
+        if (APPLY) {
+          db.exec('UPDATE memory SET base_importance = importance WHERE base_importance IS NULL');
+          db.exec(`CREATE TRIGGER IF NOT EXISTS trg_memory_base_importance AFTER INSERT ON memory
+                   WHEN NEW.base_importance IS NULL
+                   BEGIN UPDATE memory SET base_importance = NEW.importance WHERE id = NEW.id; END`);
+        }
+        entry.added.push(`base_importance${nulls ? `(${nulls})` : ''}${trg ? '' : '+trigger'}`);
       }
     }
     if (!entry.added.length) entry.added = [];
@@ -122,3 +137,5 @@ report.summary = {
   errors: pending.filter(c => c.error).length,
 };
 console.log(JSON.stringify(report, null, 1));
+// v1.23.2-fix: 单库失败不再“报告里有、退出码 0”；release/CI 能据此中断
+if (report.summary.errors > 0) process.exitCode = 2;
