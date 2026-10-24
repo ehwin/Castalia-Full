@@ -83,10 +83,12 @@ function scanLibrary(lib: FedLibrary, limit: number): { rows: any[]; count: numb
       SELECT *
       FROM memory
       WHERE is_active = 1
+        AND COALESCE(status, '') NOT IN ('cold', 'superseded')
       ORDER BY created_at DESC
       LIMIT ?
     `).all(Math.floor(limit)) as any[];
-    const count = Number((db.prepare('SELECT COUNT(*) AS n FROM memory WHERE is_active = 1').get() as any)?.n || 0);
+    const count = Number((db.prepare(`SELECT COUNT(*) AS n FROM memory
+      WHERE is_active = 1 AND COALESCE(status, '') NOT IN ('cold','superseded')`).get() as any)?.n || 0);
     return { rows, count };
   } catch (e: any) {
     return { rows: [], count: 0, error: `[${lib.instance}/${lib.project}] 读取失败: ${e.message}` };
@@ -280,6 +282,7 @@ export async function runReflectAll(opts?: ReflectAllOptions): Promise<ReflectAl
   // Batch entire records. Never truncate an individual record or the prompt tail.
   const batches = wholeRecordBatches(records, 30000, 12);
   const insightList: ReflectAllInsight[] = [];
+  let rejected = 0;   // v1.23.1-fix: 逐条校验失败只丢该条，不再整轮作废
   for (const batch of batches) {
     const policies = [...new Set(batch.map(r => r.project))].map(project => reflectionFidelityPrompt(project)).join('\n');
     const llm = await callLlm(buildReflectAllSystemPrompt() + '\n' + policies, `请逐条分析以下完整来源记录，输出严格 JSON：\n${JSON.stringify(batch)}`, channel, REFLECT_DEEP_MAX_TOKENS);
@@ -289,7 +292,7 @@ export async function runReflectAll(opts?: ReflectAllOptions): Promise<ReflectAl
     for (const raw of parsed.insights) {
       const insight = normalizeInsight(raw);
       if (!insight || !insight.sources.length || insight.sources.some(source => batch.filter(record => record.instance === source.instance && record.project === source.project && record.id === source.id && (!source.memType || record.memType === source.memType)).length !== 1)) {
-        base.errors.push('洞察来源不在本批输入中，拒绝写入');
+        rejected++;
         continue;
       }
       insight.sources = insight.sources.map(source => ({ ...source, memType: batch.find(record => record.instance === source.instance && record.project === source.project && record.id === source.id && (!source.memType || record.memType === source.memType))!.memType }));
@@ -298,7 +301,7 @@ export async function runReflectAll(opts?: ReflectAllOptions): Promise<ReflectAl
         const subject = [...sourceSubjects][0];
         insight.subject = subject === 'self' || subject === 'environment' ? subject : 'user';
       } else if (!['user', 'self', 'environment'].includes(raw.subject) || (sourceSubjects.size === 1 && !sourceSubjects.has(raw.subject))) {
-        base.errors.push('洞察主体与来源不符或未明确，拒绝写入');
+        rejected++;
         continue;
       }
       insightList.push(insight);
@@ -306,7 +309,9 @@ export async function runReflectAll(opts?: ReflectAllOptions): Promise<ReflectAl
   }
   base.llm.insights = insightList.length;
   base.insightList = insightList;
-  if (base.errors.length) return base;
+  if (rejected > 0) base.errors.push(`${rejected} 条洞察来源/主体校验失败，已跳过（其余照常写入）`);
+  // 只有“一条有效洞察都没有”时才放弃本轮；扫描类错误不再让已付费的结果全部作废
+  if (!insightList.length && base.errors.length) return base;
 
   // 5. dryRun:返回分析结果不写入
   if (dryRun) {

@@ -16,7 +16,8 @@ delete process.env.MEMORY_DB_PATH;
 delete process.env.FEDERATION_DIRS;
 delete process.env.REFLECT_DIR;
 const load = name => import(pathToFileURL(path.join(root, 'dist', name + '.js')).href);
-const { DatabaseManager } = await load('db');
+const { DatabaseManager, safeFilePart } = await load('db');
+const { consolidate } = await load('consolidate');
 const { saveMemory, findDbByMemoryId, getSessionMemory, promoteToProject, saveFacts, markColdMemories, getFactsBySubject } = await load('store');
 const { searchMemory } = await load('search');
 const { applyReflectActions, applyReflectResult, getUnanalyzedConversations, markConversationsReflected } = await load('reflect');
@@ -342,5 +343,32 @@ try {
   assert.throws(() => getUnanalyzedConversations('fixture', undefined, 30, 'collision'), /Ambiguous conversation ID/); checks++;
   const receipts = fs.readdirSync(path.join(temp, 'receipts')).map(f => JSON.parse(fs.readFileSync(path.join(temp, 'receipts', f))));
   check(receipts.every(r => r.project && r.inputIds), 'automatic receipts are bank-local and scoped');
+
+  // v1.23.1 审查修复回归：路径穿越 / 衰减幂等 / identity_locked / facts 无唯一索引
+  check(safeFilePart('..') === 'default' && safeFilePart('.') === 'default', 'dot project names cannot escape the memory directory');
+  const oldTs = new Date(Date.now() - 61 * 86400000).toISOString();
+  const decMem = await saveMemory({ project: 'decay-idem', text: '衰减幂等测试 3318', importance: 0.9 });
+  const decDb = findDbByMemoryId(decMem.id, 'decay-idem').db;
+  decDb.prepare('UPDATE memory SET last_accessed_at=?, created_at=?, base_importance=0.9, importance=0.9 WHERE id=?').run(oldTs, oldTs, decMem.id);
+  await consolidate('decay-idem');
+  const imp1 = decDb.prepare('SELECT importance FROM memory WHERE id=?').get(decMem.id).importance;
+  await consolidate('decay-idem');
+  const imp2 = decDb.prepare('SELECT importance FROM memory WHERE id=?').get(decMem.id).importance;
+  check(Math.abs(imp1 - imp2) < 1e-9, `repeated consolidation does not compound decay (${imp1} vs ${imp2})`);
+
+  const lockMem = await saveMemory({ project: 'decay-idem', text: '身份锁不参与衰减 3319', importance: 0.9 });
+  findDbByMemoryId(lockMem.id, 'decay-idem').db
+    .prepare('UPDATE memory SET identity_locked=1, last_accessed_at=?, created_at=?, base_importance=0.9, importance=0.9 WHERE id=?')
+    .run(oldTs, oldTs, lockMem.id);
+  await consolidate('decay-idem');
+  const lockRow = findDbByMemoryId(lockMem.id, 'decay-idem').db.prepare('SELECT is_active, importance FROM memory WHERE id=?').get(lockMem.id);
+  check(lockRow.is_active === 1 && Math.abs(lockRow.importance - 0.9) < 1e-9, 'identity-locked memories survive consolidation untouched');
+
+  await saveFacts([{ subject: 'user', predicate: '昵称', object: '索引测试', confidence: 0.8 }], null, 'fixture', 'facts-noidx');
+  DatabaseManager.getInstance('facts-noidx').exec('DROP INDEX IF EXISTS idx_facts_spo');
+  await saveFacts([{ subject: 'user', predicate: '昵称', object: '索引测试', confidence: 0.95 }], null, 'fixture', 'facts-noidx');
+  const noIdx = DatabaseManager.getInstance('facts-noidx').prepare("SELECT COUNT(*) n, MAX(confidence) c FROM facts WHERE predicate='昵称'").get();
+  check(noIdx.n === 1 && noIdx.c === 0.95, 'saveFacts works even when the unique index is missing');
+
   console.log(JSON.stringify({ checks, ok: true, liveLlmCalls: 0, productionWrites: 0 }));
 } finally { DatabaseManager.close(); fs.rmSync(temp, { recursive: true, force: true }); }

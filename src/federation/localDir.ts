@@ -67,11 +67,11 @@ export function fedTextSearch(libs: FedLibrary[], query: string, topK: number): 
       db = new Database(lib.file, { readonly: true, fileMustExist: true });
       let rows: any[] = [];
       if (terms.length === 0) {
-        rows = db.prepare('SELECT id, text, created_at FROM memory WHERE is_active = 1 ORDER BY created_at DESC LIMIT ?').all(topK);
+        rows = db.prepare("SELECT id, text, created_at FROM memory WHERE is_active = 1 AND COALESCE(status, '') <> 'superseded' ORDER BY created_at DESC LIMIT ?").all(topK);
       } else {
         const conds = terms.map(() => 'm.text LIKE ?').join(' OR ');
         rows = db.prepare(
-          `SELECT m.id, m.text, m.created_at FROM memory m WHERE m.is_active = 1 AND (${conds}) ORDER BY m.created_at DESC LIMIT ?`
+          `SELECT m.id, m.text, m.created_at FROM memory m WHERE m.is_active = 1 AND COALESCE(m.status, '') <> 'superseded' AND (${conds}) ORDER BY m.created_at DESC LIMIT ?`
         ).all(...terms.map(t => `%${t}%`), topK);
       }
       for (const r of rows) {
