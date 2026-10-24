@@ -202,6 +202,7 @@ for (const [mt, db] of Object.entries(dbs)) {
     } catch {
       pending = total; // 没有 reflection_progress 表 = 全部未处理
     }
+    if (pending === null) pending = total; // count() 内部吞掉 SQL 错误时按"全部未处理"报
     if (total) backlog[mt] = { total, pending };
   } catch { /* ignore */ }
 }
