@@ -71,8 +71,19 @@ export function fidelitySystemPrompt(project?: string, consolidation = false): s
 逐字策略适用于需要精确复述的记录；保留原始术语、日期、推理过程、结果、纠正和适用范围。
 工程保留触发步骤、根因、验证方法、失败方案、配置约束、路径和端口。不要仅记录情绪和沟通风格。
 newMemType 可选 general/user/feedback/project/reference，newCategory 可使用 decision、mistake、context、custom 等具体分类。
+facts 字段是结构化三元组，不是句子：每条必须是 {"subject":"user|agent|environment","predicate":"短关系名(如 姓名/职业/端口/项目)","object":"事实值","confidence":0.0~1.0}。不要写字符串，不要写 {"sourceId","text"}；没有可结构化的事实就留空数组 []。叙事证据写进 actions 的 extract。
+
+【提取硬规则（逐条可校验）】
+1. 一条来源有多个主题时，拆成多条 extract；禁止只抓主话题、把次要信息压掉。宁可多条短记录，不要一条大杂烩。
+2. 归属必须准确：用户说的写成用户事实；助手给的建议写成"用户被告知/建议 X"，不得写成"用户是/用户做了"。
+3. 不抽寒暄、空泛评价（"你似乎很热情""这听起来有压力"）、助手自我吹嘘。
+4. 禁止泛化：原文的专有名词、品牌、型号、数量、颜色、路径、端口、版本号必须原样保留。不许把 "Gamecube" 写成 "游戏机"、把 "3 个文件" 写成 "几个文件"、把 "3318" 写成 "某个端口"。
+5. 相对日期必须按该来源的 createdAt 换算成绝对日期（"昨天"→具体日期）；无法确定就保留原话，不要猜。
+6. quotes 至少 2 段、合计不少于原文 40%，必须是**原文逐字**（会被程序做子串校验，编造的直接丢弃）。
+7. hardFacts 覆盖原文里所有路径/端口/版本/日期/数字/错误码，每条带 evidence（原文片段）；与旧记忆同主题时用 linkedMemoryIds 挂旧 ID，不要改写旧记忆。
+
 只返回完整严格 JSON，不用代码围栏。不要为了输出预算删掉原文证据；超出输出预算时少提取，但不能写残缺 JSON。
 processedSourceIds 只能列出已完整审阅且其有价值信息均已提取的输入 ID。遗漏的来源不要列入，留待下次；没有长效信息的来源完整读过后可列入。不得仅用摘要替代提取。输出预算不足时保留未完成来源。
-${consolidation ? '输出格式：{"actions":[{"action":"extract","sourceId":"输入ID","newText":"完整证据","newMemType":"project","newCategory":"context"}]}' : '输出格式：{"processedSourceIds":["已完整处理的输入ID"],"summary":"本批主题与问题的导航","highlights":[],"facts":[],"insights":[],"actions":[{"action":"extract","sourceId":"输入ID","newText":"保留原话和条件的详细记录","newMemType":"project","newCategory":"context","newImportance":0.7}]}'}
+${consolidation ? '输出格式：{"actions":[{"action":"extract","sourceId":"输入ID","newText":"完整证据","newMemType":"project","newCategory":"context"}]}' : '输出格式：{"processedSourceIds":["已完整处理的输入ID"],"summary":"本批主题与问题的导航","highlights":[],"facts":[{"subject":"user","predicate":"项目","object":"Castalia","confidence":0.9}],"insights":[],"actions":[{"action":"extract","sourceId":"输入ID","newText":"该主题的结构化记录","newMemType":"project","newCategory":"context","newImportance":0.7,"quotes":["原文逐字片段1","原文逐字片段2"],"hardFacts":[{"subject":"environment","predicate":"端口","object":"3318","evidence":"原文里出现 3318 的那句","confidence":0.9,"validFrom":"2026-10-23"}],"linkedMemoryIds":["同主题旧记忆ID"]},{"action":"extract","sourceId":"同一来源的第二个主题","newText":"…"}]}'}
 `;
 }

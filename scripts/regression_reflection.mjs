@@ -17,7 +17,8 @@ delete process.env.FEDERATION_DIRS;
 delete process.env.REFLECT_DIR;
 const load = name => import(pathToFileURL(path.join(root, 'dist', name + '.js')).href);
 const { DatabaseManager } = await load('db');
-const { saveMemory, findDbByMemoryId, getSessionMemory, promoteToProject } = await load('store');
+const { saveMemory, findDbByMemoryId, getSessionMemory, promoteToProject, saveFacts, markColdMemories, getFactsBySubject } = await load('store');
+const { searchMemory } = await load('search');
 const { applyReflectActions, applyReflectResult, getUnanalyzedConversations, markConversationsReflected } = await load('reflect');
 const { runAutoReflect, runDeepReflect, runConsolidate, shouldAutoReflect, REFLECT_SYSTEM_PROMPT } = await load('reflectDriver');
 const { runReflectAll } = await load('reflectAll');
@@ -96,6 +97,140 @@ try {
   check(calls.at(-1).messages[1].content.includes('关键修正') && calls.at(-1).messages[1].content.includes('auto-source'), 'model receives full text and real IDs');
   check(!calls.at(-1).messages[0].content.includes('约 50 字'), 'evidence prompt has no diary compression requirement');
   check(getUnanalyzedConversations('fixture', undefined, 30, 'auto-evidence').length === 0, 'only successful sources advance progress');
+  check(/facts 字段是结构化三元组/.test(calls.at(-1).messages[0].content), 'evidence prompt states the facts field contract');
+  // 2026-10-23 事故回归：提示词只给 `facts: []` 时模型会写成字符串 / {sourceId,text}，
+  // saveFacts 抛 NOT NULL → 驱动在 markConversationsReflected 之前 break → 同批无限重跑。
+  await source('facts-shape', 'fact evidence 3318', 'fs-a');
+  calls = [];
+  respond = body => json(extraction(records(body), { facts: ['2026-01-01 用户提到端口 3318', { sourceId: 'fs-a', text: '非三元组事实' }, { subject: 'user', predicate: '端口', object: '3318', confidence: 0.9 }] }));
+  r = await runAutoReflect('fixture', 30, 'facts-shape');
+  check(r.ok && r.processedCount === 1 && r.factsInserted === 1, 'malformed facts are dropped, valid one is stored, batch still advances: ' + JSON.stringify(r));
+  check((r.warnings || []).some(w => w.includes('facts')), 'dropped facts leave an audit warning');
+  check(getUnanalyzedConversations('fixture', undefined, 30, 'facts-shape').length === 0, 'facts shape never blocks the cursor');
+  await source('facts-none', 'no fact evidence', 'fn-a');
+  respond = body => json(extraction(records(body), { facts: ['纯字符串事实', 'another string'] }));
+  r = await runAutoReflect('fixture', 30, 'facts-none');
+  check(r.ok && r.processedCount === 1 && r.factsInserted === 0, 'string-only facts neither crash nor block progress: ' + JSON.stringify(r));
+
+  // ── v1.23 保真链路：多主题拆条 / 引用校验 / hard_facts 证据 / parent_id / 证据附录 / critical 保护 ──
+  await source('v2', '端口 3318，版本 1.2.3，路径 D:\\AI\\x。先做 A。再做 B。', 'v2-src');
+  respond = body => json({
+    processedSourceIds: ['v2-src'],
+    summary: '导航',
+    facts: [],
+    insights: [],
+    actions: [
+      {
+        action: 'extract', sourceId: 'v2-src', newText: '先做 A', newMemType: 'project', newCategory: 'context',
+        quotes: ['先做 A。', '这句原文里根本没有'],
+        hardFacts: [{ subject: 'environment', predicate: '端口', object: '3318', evidence: '端口 3318', confidence: 0.9 }],
+      },
+      { action: 'extract', sourceId: 'v2-src', newText: '再做 B', newMemType: 'project', newCategory: 'context' },
+    ],
+  });
+  r = await runAutoReflect('fixture', 30, 'v2');
+  check(r.ok && r.applied === 2 && r.processedCount === 1, 'multi-topic: one source produces several leaves: ' + JSON.stringify(r));
+  const leaves = DatabaseManager.getInstance('v2', 'project').prepare("SELECT * FROM memory WHERE source='reflect_extract'").all();
+  check(leaves.length === 2, 'two leaves stored for one source');
+  check(leaves.every(l => l.parent_id === 'v2-src'), 'leaves keep parent_id (parent-child link)');
+  const quoted = leaves.filter(l => String(l.text).includes('【原文引用】'));
+  check(quoted.length === 1 && !String(quoted[0].text).includes('这句原文里根本没有'), 'fabricated quote dropped, real quote kept');
+  const factRow = DatabaseManager.getInstance('v2').prepare("SELECT * FROM facts WHERE object='3318'").get();
+  check(!!factRow && !!factRow.evidence, 'hard fact stored with evidence');
+  await source('v2b', '端口 3318，版本 9.9.9，其它都正常。', 'v2b-src');
+  respond = body => json({
+    processedSourceIds: ['v2b-src'], summary: '导航', facts: [], insights: [],
+    actions: [{ action: 'extract', sourceId: 'v2b-src', newText: '没有任何数字的记录', newMemType: 'project', newCategory: 'context' }],
+  });
+  r = await runAutoReflect('fixture', 30, 'v2b');
+  const appendixLeaf = DatabaseManager.getInstance('v2b', 'project').prepare("SELECT * FROM memory WHERE source='reflect_extract'").get();
+  check(!!appendixLeaf && String(appendixLeaf.text).includes('【证据附录·原文】') && String(appendixLeaf.text).includes('3318'), 'low hard-fact coverage appends verbatim evidence appendix');
+  const crit = await saveMemory({ project: 'v2', text: '核心记忆不可动', tier: 'critical' });
+  const normal = await saveMemory({ project: 'v2', text: '普通记忆可动' });
+  r = await applyReflectActions([{ action: 'delete', targetId: crit.id }], 'fixture', 'v2', { automatic: true });
+  check(r.applied === 0 && sourceRow('v2', crit.id).is_active === 1, 'critical memory cannot be deleted by reflection');
+  r = await applyReflectActions([{ action: 'merge', sourceIds: [crit.id, normal.id], newText: '合并' }], 'fixture', 'v2', { automatic: true });
+  check(r.applied === 0 && sourceRow('v2', crit.id).is_active === 1, 'critical memory cannot be merged');
+  await saveMemory({ project: 'cons-window', text: 'CRITICAL-MARKER 核心记忆', tier: 'critical' });
+  await saveMemory({ project: 'cons-window', text: '普通记忆 A' });
+  await saveMemory({ project: 'cons-window', text: '普通记忆 B' });
+  calls = [];
+  respond = () => json({ actions: [] });
+  await runConsolidate('fixture', 'cons-window', undefined, undefined, { force: true });
+  check(calls.length === 0 || !calls[0].messages[1].content.includes('CRITICAL-MARKER'), 'critical memory is excluded from the consolidation window');
+
+  // v1.23 冷存打标 + 事实冲突失效
+  const cold = await saveMemory({ project: 'lifecycle', text: '很久以前的小事', importance: 0.3 });
+  findDbByMemoryId(cold.id, 'lifecycle').db
+    .prepare("UPDATE memory SET created_at='2026-01-01T00:00:00.000Z', last_accessed_at='2026-01-01T00:00:00.000Z', importance=0.3, reference_count=0 WHERE id=?")
+    .run(cold.id);
+  const coldMarked = markColdMemories('lifecycle');
+  check(coldMarked >= 1 && String(sourceRow('lifecycle', cold.id).status) === 'cold', 'stale low-importance memory is marked cold');
+  await saveFacts([{ subject: 'user', predicate: '姓名', object: '张三', confidence: 0.9 }], null, 'fixture', 'lifecycle');
+  await saveFacts([{ subject: 'user', predicate: '姓名', object: '李四', confidence: 0.9 }], null, 'fixture', 'lifecycle');
+  const nameFacts = DatabaseManager.getInstance('lifecycle').prepare("SELECT object, valid_to FROM facts WHERE predicate='姓名'").all();
+  check(nameFacts.length >= 2 && nameFacts.some(f => f.object === '张三' && f.valid_to), 'functional fact conflict sets valid_to on the old value');
+
+  // v1.23 冷存回温：被检索命中即回工作集
+  await saveMemory({ project: 'warm', text: '冷存回温测试 3318 端口' });
+  const warmDb = DatabaseManager.getInstance('warm');
+  const warmId = warmDb.prepare("SELECT id FROM memory WHERE project='warm' LIMIT 1").get().id;
+  warmDb.prepare("UPDATE memory SET status='cold' WHERE id=?").run(warmId);
+  const warmHits = await searchMemory({ query: '冷存回温测试 3318', topK: 5, project: 'warm' });
+  check(warmHits.some(h => h.id === warmId), 'cold memory is still searchable');
+  check(String(warmDb.prepare('SELECT status FROM memory WHERE id=?').get(warmId).status || '') !== 'cold', 'cold memory warms up after being retrieved');
+
+  // v1.23 非功能性冲突：整合阶段输出 invalidate → 旧事实打 valid_to
+  await saveMemory({ project: 'lifecycle', text: '普通记忆，用于让整合窗口有两条以上' });
+  await saveMemory({ project: 'lifecycle', text: '第二条普通记忆，凑够整合窗口' });
+  const beforeFact = DatabaseManager.getInstance('lifecycle').prepare("SELECT id FROM facts WHERE predicate='姓名' AND object='李四'").get();
+  calls = [];
+  respond = () => json({ actions: [{ action: 'invalidate', factId: beforeFact.id, reason: '用户改名为王五' }] });
+  r = await runConsolidate('fixture', 'lifecycle', undefined, undefined, { force: true });
+  check(r.invalidated === 1, 'consolidation invalidates the contradicted fact: ' + JSON.stringify(r));
+  const afterFact = DatabaseManager.getInstance('lifecycle').prepare('SELECT valid_to FROM facts WHERE id=?').get(beforeFact.id);
+  check(!!afterFact && !!afterFact.valid_to, 'invalidated fact is kept with valid_to (not deleted)');
+
+  // v1.23-fix：evidence 策略下整合必须能 merge（旧实现用保真提取提示词替换整合提示词 + 拒绝 merge，
+  // 导致每次整合都变成"逐条重摘要"：净增记忆、merged 恒 0、token 照烧）
+  await saveMemory({ project: 'lifecycle', text: '整合样本 X 版本一 3318' });
+  await saveMemory({ project: 'lifecycle', text: '整合样本 X 版本二 3319' });
+  const dupIds = DatabaseManager.getInstance('lifecycle').prepare("SELECT id FROM memory WHERE project='lifecycle' AND text LIKE '整合样本 X 版本%'").all().map(r => r.id);
+  check(dupIds.length === 2, 'two merge sources created');
+  calls = [];
+  respond = () => json([{ action: 'merge', sourceIds: dupIds, newText: '整合样本 X（合并后）', newMemType: 'general' }]);
+  r = await runConsolidate('fixture', 'lifecycle', undefined, undefined, { force: true });
+  check(r.merged === 1, 'consolidation can merge duplicates under evidence policy: ' + JSON.stringify(r));
+  check(calls.at(-1)?.messages[0].content.includes('CONFLICT RESOLUTION') && !calls.at(-1)?.messages[0].content.includes('禁止 merge'), 'consolidation keeps the consolidation task prompt under evidence policy');
+  respond = () => json([{ action: 'extract', sourceId: dupIds[0], newText: '重新摘要' }]);
+  r = await runConsolidate('fixture', 'lifecycle', undefined, undefined, { force: true });
+  check(r.applied === 0 && r.errors.some(e => e.includes('extract')), 'extract is rejected in consolidation (no silent re-summarization)');
+
+  // v1.23-fix：同批互斥值不得互相失效；旧值被重新断言时必须清掉 valid_to
+  await saveFacts([
+    { subject: 'user', predicate: '居住地', object: '北京', confidence: 0.9 },
+    { subject: 'user', predicate: '居住地', object: '上海', confidence: 0.9 },
+  ], null, 'fixture', 'lifecycle');
+  const residence = DatabaseManager.getInstance('lifecycle').prepare("SELECT object, valid_to FROM facts WHERE predicate='居住地'").all();
+  check(residence.length === 2 && residence.every(f => !f.valid_to), 'same-batch conflicting facts are not mutually invalidated');
+  await saveFacts([{ subject: 'user', predicate: '昵称', object: '阿明', confidence: 0.9 }], null, 'fixture', 'lifecycle');
+  await saveFacts([{ subject: 'user', predicate: '昵称', object: '小明', confidence: 0.9 }], null, 'fixture', 'lifecycle');
+  const nickOld = () => DatabaseManager.getInstance('lifecycle').prepare("SELECT valid_to FROM facts WHERE predicate='昵称' AND object='阿明'").get();
+  check(!!nickOld()?.valid_to, 'new functional value invalidates the previous one');
+  await saveFacts([{ subject: 'user', predicate: '昵称', object: '阿明', confidence: 0.9 }], null, 'fixture', 'lifecycle');
+  check(!nickOld()?.valid_to, 're-asserting an older value clears its valid_to');
+
+  // v1.23-fix：读侧只返回当前有效事实（旧值保留在库里，但不能和当前值一起注入）
+  await saveFacts([{ subject: 'user', predicate: '居住地', object: '广州', confidence: 0.9 }], null, 'fixture', 'lifecycle');
+  const currentResidence = getFactsBySubject('user', undefined, 'lifecycle').filter(f => f.predicate === '居住地');
+  check(currentResidence.length === 1 && currentResidence[0].object === '广州', 'fact read paths hide invalidated values: ' + JSON.stringify(currentResidence.map(f => f.object)));
+
+  // v1.23-fix：superseded 必须在标签/文本路径也被排除（此前只有向量路径过滤）
+  const sup = await saveMemory({ project: 'superseded-q', text: '检索过滤专用词 量子猫 3318', tags: ['量子猫'] });
+  findDbByMemoryId(sup.id, 'superseded-q').db.prepare("UPDATE memory SET status='superseded' WHERE id=?").run(sup.id);
+  const supHits = await searchMemory({ query: '量子猫', topK: 10, project: 'superseded-q' });
+  check(!supHits.some(h => h.id === sup.id), 'superseded memory is excluded from every search path');
+
   await source('retry', 'retry original', 'retry-source');
   respond = body => ({ ...json(extraction(records(body))), finish_reason: 'length' });
   r = await runAutoReflect('fixture', 30, 'retry');
@@ -109,6 +244,19 @@ try {
   respond = body => json(extraction(records(body)));
   r = await runAutoReflect('fixture', 30, 'retry');
   check(r.ok && r.processedCount === 1, 'retry succeeds using the original source');
+
+  // v1.23.1 失败退避：失败后 1h 内自动反思不再重试（显式工具调用仍可直接跑）
+  await source('backoff', 'backoff evidence 3318', 'bk-a');
+  respond = () => ({ content: '{"summary":"x","actions":[', finish_reason: 'stop' });
+  r = await runAutoReflect('fixture', 30, 'backoff');
+  check(!r.ok, 'failed reflection is recorded as a failure');
+  let bkCond = shouldAutoReflect('fixture', 'backoff');
+  check(bkCond.should === false && /退避/.test(bkCond.reason), 'auto reflection backs off after a failure: ' + JSON.stringify(bkCond));
+  respond = body => json(extraction(records(body)));
+  r = await runAutoReflect('fixture', 30, 'backoff');
+  check(r.ok, 'an explicit retry still runs (tool call bypasses backoff)');
+  bkCond = shouldAutoReflect('fixture', 'backoff');
+  check(!/退避/.test(bkCond.reason), 'a successful run clears the backoff: ' + JSON.stringify(bkCond));
   await source('partial', 'first evidence', 'partial-a');
   await source('partial', 'second evidence', 'partial-b');
   respond = body => json(extraction(records(body).slice(0, 1)));
@@ -147,6 +295,20 @@ try {
   respond = () => json({ actions: [] });
   r = await runConsolidate('fixture', 'consolidate');
   check(r.ok && calls[0].messages[1].content.includes('关键修正'), 'consolidation includes beyond 600 chars');
+  // 同一输入再跑一次：不许再调 LLM（重启风暴里每次启动都重烧一遍就是 token 流失）。
+  calls = [];
+  respond = () => json({ actions: [] });
+  r = await runConsolidate('fixture', 'consolidate');
+  check(r.skipped === true && calls.length === 0, 'unchanged consolidation input makes no second LLM call: ' + JSON.stringify(r));
+  // 输入变了也还有最小间隔闸门：重启风暴里每次启动都重算 = 把 token 当水放。
+  await saveMemory({ project: 'consolidate', text: 'third changed evidence 3318' });
+  calls = [];
+  respond = () => json({ actions: [] });
+  r = await runConsolidate('fixture', 'consolidate');
+  check(r.skipped === true && calls.length === 0, 'changed input still respects the minimum interval: ' + JSON.stringify(r));
+  calls = [];
+  r = await runConsolidate('fixture', 'consolidate', undefined, undefined, { force: true });
+  check(calls.length === 1, 'explicit force bypasses the interval gate');
   calls = [];
   respond = () => json({ sessionMemory: 'navigation only', promoted: [{ memType: 'project', text: long, category: 'decision' }] });
   r = await runIncrementalReflection('incremental', 'session-fixture', [{ role: 'user', content: long }], 'fixture');

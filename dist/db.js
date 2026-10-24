@@ -377,6 +377,28 @@ export function initProjectSchema(db) {
         db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_type ON memory(type, is_active)`);
     }
     catch (_e) { }
+    // v1.23 Parent-Child 检索：leaf 记忆指回父对话（llama_index ParentDocumentRetriever 思路）
+    try {
+        db.exec(`ALTER TABLE memory ADD COLUMN parent_id TEXT`);
+    }
+    catch (_e) { /* already exists */ }
+    try {
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_parent ON memory(parent_id)`);
+    }
+    catch (_e) { }
+    // v1.23 事实边：Graphiti 式时间有效性 + 证据引用（不删除，只失效）
+    try {
+        db.exec(`ALTER TABLE facts ADD COLUMN valid_from DATETIME`);
+    }
+    catch (_e) { /* already exists */ }
+    try {
+        db.exec(`ALTER TABLE facts ADD COLUMN valid_to DATETIME`);
+    }
+    catch (_e) { /* already exists */ }
+    try {
+        db.exec(`ALTER TABLE facts ADD COLUMN evidence TEXT`);
+    }
+    catch (_e) { /* already exists */ }
     // Unique index for fact dedup (per-project: same SPO allowed across projects)
     try {
         db.exec(`DROP INDEX IF EXISTS idx_facts_spo`);

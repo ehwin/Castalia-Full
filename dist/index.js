@@ -12,14 +12,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { searchMemory, searchFacts, getRecentMemories, searchMemoryAcross } from './search.js';
-import { saveMemory, forgetMemory, updateMemory, saveConversationTurn, cleanupExpiredMemories, batchEmbedPending } from './store.js';
+import { saveMemory, forgetMemory, updateMemory, saveConversationTurn, cleanupExpiredMemories, batchEmbedPending, markColdMemories } from './store.js';
 import { consolidate } from './consolidate.js';
 import { DatabaseManager, listProjectNames, listMemTypeDirs, safeFilePart, currentMemDir, sweepExpiredSessionMemories } from './db.js';
 import { runDigest, getRecentConversations, maybeDigest } from './digest.js';
 import { flushAllBuffers } from './buffer.js';
 import { reflect, getAllMemories, getMemoryGraph, REFLECT_SYSTEM_PROMPT, getUnanalyzedConversations } from './reflect.js';
 import { autoProcess } from './autoProcessor.js';
-import { runAutoReflect, runDeepReflect, shouldAutoReflect, runConsolidate, shouldAutoConsolidate } from './reflectDriver.js';
+import { runAutoReflect, runDeepReflect, shouldAutoReflect, runConsolidate, shouldAutoConsolidate, AUTO_REFLECT_LIMIT } from './reflectDriver.js';
 import { ensureSeedInstructions, saveInstruction, getInstruction, listInstructions, deleteInstruction } from './instructions.js';
 import { CHAR_ID, PROJECT_ID, SERVER_NAME, SERVER_VERSION, normalizeProject } from './env.js';
 import { MEM_TYPES, summarizeForIndex } from './memType.js';
@@ -351,7 +351,76 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
         let related = [];
         if (args.query) {
             const r = await searchMemory({ query: args.query, topK: relatedLimit, profile: 'balanced', characterId: CHAR_ID, project: proj });
-            related = r.map(m => ({ text: m.text, category: m.category, importance: m.importance, score: m.score, createdAt: m.createdAt }));
+            related = r.map(m => ({ id: m.id, text: m.text, category: m.category, importance: m.importance, score: m.score, createdAt: m.createdAt, parentId: m.parentId || null }));
+        }
+        // 2.5 v1.23 Parent-Child 回捞：命中的是提炼记忆(leaf)，按 parent_id 取对话原文。
+        //     合并策略照 llama_index AutoMergingRetriever：同父命中比例 > 50% 直接给整段 parent，
+        //     否则只给命中片段。总预算 3k 字符，避免把上下文吃满。
+        let hydrated = [];
+        if (related.length > 0) {
+            try {
+                // 每个 parent 收集命中次数 + 可用于定位的样本（leaf 正文 + leaf 里带的原文引用）
+                const hitsByParent = new Map();
+                for (const m of related) {
+                    if (!m.parentId)
+                        continue;
+                    const entry = hitsByParent.get(m.parentId) || { hits: 0, samples: [] };
+                    entry.hits++;
+                    if (entry.samples.length < 3 && m.text)
+                        entry.samples.push(String(m.text));
+                    hitsByParent.set(m.parentId, entry);
+                }
+                let budget = 3000;
+                for (const [pid, hit] of [...hitsByParent.entries()].slice(0, 3)) {
+                    if (budget <= 0)
+                        break;
+                    const row = DatabaseManager.queryAll(proj, 'SELECT id, text FROM memory WHERE id = ? AND project = ?', [pid, proj])[0];
+                    if (!row || !row.text)
+                        continue;
+                    const parentText = String(row.text);
+                    // 分母只算活跃 leaf：已停用/被接管的 leaf 不该把"同父命中比"拉低
+                    const totalLeaves = DatabaseManager.queryAll(proj, 'SELECT COUNT(*) AS c FROM memory WHERE parent_id = ? AND project = ? AND is_active = 1', [pid, proj])
+                        .reduce((n, r) => n + (Number(r.c) || 0), 0) || 1;
+                    const ratio = hit.hits / totalLeaves;
+                    // AutoMerging：同父命中一半以上，或 parent 本来就短（≤1800 字）→ 直接给整段
+                    const full = ratio > 0.5 || parentText.length <= 1800;
+                    let excerpt;
+                    let mode;
+                    if (full) {
+                        excerpt = parentText.slice(0, Math.min(2500, budget));
+                        mode = 'full';
+                    }
+                    else {
+                        // v1.23-fix：从 0 截断会让长对话里的命中段落丢失。优先用 leaf 里的原文引用做锚点，
+                        // 退而用 leaf 正文前缀；定位失败才退回开头，并标 head 便于观察失败率。
+                        let anchor = -1;
+                        for (const sample of hit.samples) {
+                            const quotes = [...sample.matchAll(/^>\s*(.+)$/gm)].map(q => q[1].trim()).filter(q => q.length >= 8);
+                            const probes = [...quotes, sample.replace(/\s+/g, ' ').slice(0, 60)].filter(p => p.length >= 8);
+                            for (const probe of probes) {
+                                anchor = parentText.indexOf(probe);
+                                if (anchor >= 0)
+                                    break;
+                            }
+                            if (anchor >= 0)
+                                break;
+                        }
+                        if (anchor < 0) {
+                            excerpt = parentText.slice(0, Math.min(1600, budget));
+                            mode = 'head';
+                        }
+                        else {
+                            const start = Math.max(0, anchor - 400);
+                            const end = Math.min(parentText.length, anchor + 800, start + Math.max(0, budget));
+                            excerpt = parentText.slice(start, Math.max(start, end));
+                            mode = 'excerpt';
+                        }
+                    }
+                    hydrated.push({ parentId: pid, excerpt, mode, ratio: Math.round(ratio * 100) / 100 });
+                    budget -= excerpt.length;
+                }
+            }
+            catch { /* 回捞失败不影响主流程 */ }
         }
         // 3. 认知记录(决策/错误/模式)—— 跨分类库聚合(decision/mistake 可能落在 project 库)
         const cognitives = DatabaseManager.queryAll(proj, `
@@ -361,9 +430,12 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
         ORDER BY created_at DESC LIMIT 9
       `, [proj]).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))).slice(0, 9);
         // 4. 关键事实(高置信度)
+        // v1.23-fix: 只注入"当前有效"的事实。被新值推翻的旧事实保留在库里（valid_to 有值），
+        // 但绝不能和当前值一起塞进 prompt —— 否则模型会同时看到 姓名=张三/李四 且无从判断。
         const facts = db.prepare(`
         SELECT subject, predicate, object, confidence FROM facts
         WHERE is_active = 1 AND project = ? AND confidence >= 0.7
+          AND (valid_to IS NULL OR valid_to = '')
         ORDER BY confidence DESC, created_at DESC LIMIT 5
       `).all(proj);
         // 4.5 记忆索引层(4 种封闭类型,轻量摘要 — 对应 Claude Code MEMORY.md,先索引后详情)
@@ -463,6 +535,10 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
                     sections.push(`  ${warn}`);
             });
         }
+        if (hydrated.length > 0) {
+            sections.push(`\n■ 原文回捞（上面命中的是提炼记忆，以下是它对应的对话原文，用于核对细节）:`);
+            hydrated.forEach((h, i) => sections.push(`${i + 1}. (来源 ${h.parentId.slice(0, 8)}，命中比 ${h.ratio}${h.mode === 'full' ? '，整段' : h.mode === 'head' ? '，锚点未命中取开头' : '，命中片段'}) ${h.excerpt}`));
+        }
         if (cognitives.length > 0) {
             sections.push(`\n■ 经验沉淀(决策/错误/模式):`);
             cognitives.forEach((m, i) => {
@@ -488,6 +564,7 @@ register('memory_context', 'admin', 'Assemble an injection-ready context bundle:
             instructions,
             recent: recent.map(m => ({ text: m.text, category: m.category, importance: m.importance, createdAt: m.createdAt })),
             related,
+            hydrated,
             cognitives: cognitives.map(m => ({ text: m.text, category: m.category })),
             facts,
             index: indexLayer,
@@ -811,7 +888,8 @@ register('consolidate_deep', 'admin', 'Run memory consolidation: vector pre-scre
     limit: z.number().optional().describe('Max candidate pairs (default 50)'),
 }, async (args) => {
     try {
-        const r = await runConsolidate(CHAR_ID, args.project, args.threshold, args.limit);
+        // 手动/工具调用 = 显式意图,绕过"最小间隔"闸门(启动自动整合才受限)
+        const r = await runConsolidate(CHAR_ID, args.project, args.threshold, args.limit, { force: true });
         return ok({ op: 'consolidate_deep', ...r });
     }
     catch (e) {
@@ -1087,7 +1165,7 @@ async function main() {
     const reflectIntervalHours = parseFloat(process.env.REFLECT_INTERVAL_HOURS || '0');
     if (reflectIntervalHours > 0 && process.env.CASTALIA_BACKGROUND_TASKS !== '0') {
         const runOnce = () => {
-            runAutoReflect(CHAR_ID, 30, PROJECT_ID).then(r => {
+            runAutoReflect(CHAR_ID, AUTO_REFLECT_LIMIT, PROJECT_ID).then(r => {
                 if (r.skipped)
                     return;
                 console.error(`[reflect-auto] applied ${r.applied}/${r.actions} actions, errors: ${r.errors.length}`);
@@ -1114,7 +1192,7 @@ async function main() {
                     return;
                 }
                 console.error(`[reflect-startup] 条件达成(${cond.reason}),启动自动反思...`);
-                const r = await runAutoReflect(CHAR_ID, 30, PROJECT_ID);
+                const r = await runAutoReflect(CHAR_ID, AUTO_REFLECT_LIMIT, PROJECT_ID);
                 console.error(`[reflect-startup] 完成: ok=${r.ok}, actions=${r.actions}, applied=${r.applied}, factsInserted=${r.factsInserted ?? 0}, factsUpdated=${r.factsUpdated ?? 0}, errors=${r.errors.length}${r.skipped ? ', skipped' : ''}`);
                 if (r.errors.length > 0)
                     console.error(`[reflect-startup] errors: ${r.errors.join('; ')}`);
@@ -1141,9 +1219,16 @@ async function main() {
                     console.error(`[consolidate-startup] 跳过: 记忆 ${cond.count} 条未超阈值 ${cond.min}`);
                     return;
                 }
+                // v1.23: 先把长期不用的低价值记忆转冷存（退出新沉淀，但保留可检索）
+                try {
+                    markColdMemories(PROJECT_ID);
+                }
+                catch (e) {
+                    console.error('[cold] error:', e.message);
+                }
                 console.error(`[consolidate-startup] 记忆 ${cond.count} 条超阈值 ${cond.min},自动整合...`);
                 const r = await runConsolidate(CHAR_ID, PROJECT_ID);
-                console.error(`[consolidate-startup] 完成: ok=${r.ok}, scanned=${r.scanned}, candidates=${r.candidates}, merged=${r.merged}, deleted=${r.deleted}, kept=${r.kept}, errors=${r.errors.length}${r.skipped ? ', skipped' : ''}`);
+                console.error(`[consolidate-startup] 完成: ok=${r.ok}, scanned=${r.scanned}, candidates=${r.candidates}, actions=${r.actions}, applied=${r.applied}, merged=${r.merged}, deleted=${r.deleted}, kept=${r.kept}, invalidated=${r.invalidated ?? 0}, errors=${r.errors.length}${r.skipped ? ', skipped' : ''}`);
                 if (r.errors.length > 0)
                     console.error(`[consolidate-startup] errors: ${r.errors.join('; ')}`);
             }

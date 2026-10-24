@@ -1,17 +1,21 @@
 /** Model transport and parsing; no memory database mutations. */
 export interface LlmChannel {
+  /** 通道名(reflect / triage),只用于日志归属。 */
+  name?: string;
   url: string;
   apiKey: string;
   model: string;
 }
 
 export function makeLlmChannel(prefix: string): LlmChannel {
+  const name = prefix.toLowerCase();
   prefix = prefix.toUpperCase();
   const get = (suffix: string, fallback: string): string => {
     const v = process.env[`${prefix}_${suffix}`];
     return v && v.trim().length > 0 ? v.trim() : fallback;
   };
   return {
+    name,
     url: get('LLM_URL', process.env.REFLECT_LLM_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, ''),
     apiKey: get('LLM_API_KEY', process.env.REFLECT_LLM_API_KEY || ''),
     model: get('LLM_MODEL', process.env.REFLECT_LLM_MODEL || 'deepseek-chat'),
@@ -162,6 +166,7 @@ export async function callLlm(systemPrompt: string, userPrompt: string, channel?
   // 到 API 的连接偶发被断(大 prompt/限流),单次失败就放弃会让整轮反思白跑 → 退避重试
   const attempts = Math.max(1, Number(process.env.REFLECT_LLM_RETRIES || 3));
   for (let i = 1; i <= attempts; i++) {
+    const startedAt = Date.now();
     try {
       const resp = await fetch(`${ch.url}/chat/completions`, {
         method: 'POST',
@@ -179,7 +184,21 @@ export async function callLlm(systemPrompt: string, userPrompt: string, channel?
       if (!resp.ok) throw new Error(`LLM ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
       const data = await resp.json() as any;
       const msg = data?.choices?.[0]?.message || {};
-      return { content: msg.content || '', reasoning: msg.reasoning_content || '', finishReason: data?.choices?.[0]?.finish_reason };
+      const finishReason = data?.choices?.[0]?.finish_reason;
+      // 每一次调用都必须能看到账：此前 usage 被直接丢弃，导致"pro 开销大"无从归因。
+      const usage = data?.usage || {};
+      const reasoning = usage?.completion_tokens_details?.reasoning_tokens ?? 0;
+      const cached = usage?.prompt_tokens_details?.cached_tokens ?? usage?.prompt_cache_hit_tokens ?? 0;
+      console.error(
+        `[llm] ts=${new Date().toISOString()} channel=${ch.name || 'reflect'} model=${ch.model}` +
+        ` prompt=${usage.prompt_tokens ?? '?'} completion=${usage.completion_tokens ?? '?'}` +
+        ` reasoning=${reasoning} cached=${cached}` +
+        ` finish=${finishReason || 'n/a'} ms=${Date.now() - startedAt}`,
+      );
+      if (finishReason === 'length') {
+        console.error(`[llm] 警告：输出撞到 max_tokens=${maxTokens} 被截断，prompt+completion 仍全额计费`);
+      }
+      return { content: msg.content || '', reasoning: msg.reasoning_content || '', finishReason };
     } catch (e: any) {
       const cause = e?.cause ? ` (cause: ${e.cause.code || e.cause.message || String(e.cause)})` : '';
       if (i >= attempts) {
