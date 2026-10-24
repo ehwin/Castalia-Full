@@ -331,7 +331,7 @@ function densityZ2D(pts, amp) {
 }
 /* 块分离:每个块整体刚性平移(块内形状原样保留),直到块间留出 gap 真空。
  * 支持 N 维 —— 三维时三个方向都留真空,星云才有体积感而不是平盘。 */
-function sepBlobsND(groups, gap, dim) {
+function sepBlobsND(groups, gap, dim, factor = 1) {
   const D = dim || 3;
   const meta = groups.map(g => {
     const c = new Array(D).fill(0);
@@ -355,7 +355,7 @@ function sepBlobsND(groups, gap, dim) {
         let dist2 = 0;
         for (let a = 0; a < D; a++) { d[a] = (B.c[a] + ob[a]) - (A.c[a] + oa[a]); dist2 += d[a] * d[a]; }
         const dist = Math.sqrt(dist2) || 1e-6;
-        const need = A.r + B.r + gap;
+        const need = (A.r + B.r) * factor + gap;
         if (dist < need) {
           const k = (need - dist) / 2 / dist;
           for (let a = 0; a < D; a++) { oa[a] -= d[a] * k; ob[a] += d[a] * k; }
@@ -530,7 +530,9 @@ function applyNebulaLayout(nodes, links, vecById) {
     return r;
   }).sort((a, b) => a - b);
   const medR = radii[Math.floor(radii.length / 2)] || 25;
-  const off = sepBlobsND(gs, medR * 1.15, 3);   /* 三维刚性分离 → 三个方向都留真空 */
+  /* 团间真空按半径比例给（v1.23.2）：factor 1.32 = 两团半径和之外再留 32%，
+   * 小团不会被固定 gap 推到很远变成孤岛；大团之间仍有明显空隙。 */
+  const off = sepBlobsND(gs, 0, 3, 1.32);
   for (const g of gs) {
     const o = off.get(g.key) || [0, 0, 0];
     for (const i of g.idx) { P[i][0] += o[0]; P[i][1] += o[1]; P[i][2] += o[2]; }
