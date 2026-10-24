@@ -382,7 +382,11 @@ function applyNebulaLayout(nodes, links, vecById) {
     return { mid: (lo + hi) / 2, span: Math.max(hi - lo, 1e-6) };
   });
   const maxSpan = Math.max(ext[0].span, ext[1].span, ext[2].span);
-  const S = 190 / maxSpan;
+  /* v1.23.2: 全局尺度随点数自适应扩散。
+   * 固定 190 时，点越多同一体积里越挤（联邦 2000+ 点直接糊成团）。
+   * 以 120 点为基准，半径按 √(N/120) 增长（投影是扁盘，按面积），上限 3 倍防止宇宙过大。 */
+  const countScale = Math.min(3.0, Math.sqrt(Math.max(1, pairs.length) / 120));
+  const S = (190 * countScale) / maxSpan;
   const stretch = ext.map(e => Math.min(Math.max((0.6 * maxSpan) / e.span, 1), 3));
   const P = xyz.map(p => [0, 1, 2].map(a => (p[a] - ext[a].mid) * S * stretch[a]));
   /* 块 = 主文件夹/分文件夹 两层 */
@@ -421,10 +425,10 @@ function applyNebulaLayout(nodes, links, vecById) {
   }
   for (const g of gs) {
     const c0 = blobCen(g), R0 = blobRad(g, c0);
-    const minSep = Math.max(0.6, 0.85 * R0 / Math.sqrt(Math.max(1, g.idx.length)));   /* 按个数定间距 */
+    const minSep = Math.max(0.8, 1.15 * R0 / Math.sqrt(Math.max(1, g.idx.length)));   /* 按个数定间距（v1.23.2: 0.85→1.15，密团更疏） */
     /* 完全重合的点对没有方向可用 → 用索引哈希给一个确定性微推(不用随机数,保证可复现) */
     const nudge = (a, b) => ((a * 7919 + b * 104729) % 1000) / 1000 - 0.5;
-    for (let it = 0; it < 24; it++) {
+    for (let it = 0; it < 32; it++) {
       let moved = 0;
       for (let a = 0; a < g.idx.length; a++) {
         for (let b = a + 1; b < g.idx.length; b++) {

@@ -47,7 +47,8 @@ function updateNebulaState(points) {
     const want = vis ? (emph ? 1.0 : 0.85) : 0.05;
     if (alpha !== want) aAlpha.array[i] = want;
     if (aSize) {
-      const sizeWant = vis ? (emph ? 6.0 : 4.0) : 1.3;
+      const ss = window.__nebulaSizeScale || 1;
+      const sizeWant = (vis ? (emph ? 6.0 : 4.0) : 1.3) * ss;
       if (aSize.array[i] !== sizeWant) aSize.array[i] = sizeWant;
     }
   }
@@ -350,6 +351,11 @@ function addNebulaClouds(real) {
      * mult 写死 52 时,场景半径 ~430 + 相机距离 ~700 → 屏幕只有 ~0.2px(等于隐形),
      * 这是"记忆点不出现"的第二层原因。mult 按实测半径推,视觉尺寸 ≈ aSize*mult/dist。 */
     const sceneR = Math.max(1, real.reduce((m, n) => Math.max(m, Math.hypot(n.x || 0, n.y || 0, n.z || 0)), 1));
+    /* v1.23.2: 点的视觉尺寸随总数收缩——2000+ 点时仍用 4.0，直径大于点间距，
+     * 叠加混合后整片糊成"团"；按 N^(1/3) 收缩，并保留 0.34 下限避免看不见。 */
+    const sizeScale = Math.max(0.4, Math.min(1, Math.cbrt(700 / Math.max(40, N))));
+    window.__nebulaSizeScale = sizeScale;
+    const baseDot = 4.0 * sizeScale;
     const positions = new Float32Array(N*3);
     const colors = new Float32Array(N*3);
     const sizes = new Float32Array(N);
@@ -362,7 +368,7 @@ function addNebulaClouds(real) {
        * 同名星座撞成一模一样的颜色 —— 用户实测反馈"Hermes 的颜色怎么和 LobeHub 一样了"。 */
       const c = new THREE.Color(brightenTintHex(n.__nebulaTint) || liftColor(memColor(n), 0.42));   /* v1.40 与点色同步提亮 */
       colors[i*3]=c.r; colors[i*3+1]=c.g; colors[i*3+2]=c.b;
-      sizes[i]=4.0; alphas[i]=1.0;
+      sizes[i]=baseDot; alphas[i]=1.0;
     }
     window.__nebulaReal = real; window.__nebulaColBuf = colors;   /* 自检用 */
     const geo = new THREE.BufferGeometry();
@@ -377,13 +383,21 @@ function addNebulaClouds(real) {
       vertexShader: `attribute float aSize; attribute float aAlpha; uniform float uScale; varying vec3 vColor; varying float vAlpha;
         void main(){ vColor=color; vAlpha=aAlpha; vec4 mv=modelViewMatrix*vec4(position,1.0);
         gl_PointSize=aSize*uScale/max(1.0,-mv.z); gl_Position=projectionMatrix*mv; }`,
-      /* 程序化径向衰减:不再依赖 sprite 贴图(sprite 一旦是空贴图,tex.a<0.01 会把整层 discard 掉,
-       * 症状就是"记忆点一个都不出现"且无任何报错)。 */
-      /* v1.41 撤回 v1.40 的"实心盘+描边"(用户:观感太差)→ 回到柔光圆点 */
+      /* v1.23.2: 边界清晰的实心光点 + 很薄的外晕（原实现 0.04~0.5 全段渐变，
+       * 点一大就糊成光团，边界看不见）。
+       * core 在 d=0.44~0.5 之间快速收边 → 明确的圆边；halo 只保留 0.22 的柔光。 */
       fragmentShader: `varying vec3 vColor; varying float vAlpha;
-        void main(){ float d=length(gl_PointCoord-vec2(0.5)); float a=smoothstep(0.5,0.04,d);
-        if(a<0.02) discard; gl_FragColor=vec4(vColor*(0.55+0.45*a), a*vAlpha*${alphaScale}); }`,
-      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, vertexColors: true,
+        void main(){
+          float d = length(gl_PointCoord - vec2(0.5));
+          if (d > 0.5) discard;
+          float core = smoothstep(0.5, 0.44, d);
+          float halo = 0.22 * pow(smoothstep(0.5, 0.06, d), 2.0);
+          float a = clamp(core + halo, 0.0, 1.0);
+          gl_FragColor = vec4(vColor * (0.74 + 0.26 * core), a * vAlpha * ${alphaScale});
+        }`,
+      /* v1.23.2: 点层改用普通混合。叠加混合下几百个点重叠会把中心推到纯白，
+       * 整团糊成一块；普通混合保留每个点的清晰边界（重叠处只是后画的点覆盖前一个）。 */
+      transparent: true, depthWrite: false, blending: THREE.NormalBlending, vertexColors: true,
     });
     nebulaPoints = new THREE.Points(geo, mkMat(String(sceneR * 4.0), '0.95'));
     scene.add(nebulaPoints);
