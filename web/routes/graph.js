@@ -251,9 +251,10 @@ function umapNd(vectors, dim = 3) {
   const n = vectors.length;
   const u = new UMAP({
     nComponents: dim,
-    nNeighbors: Math.max(2, Math.min(15, Math.round(Math.sqrt(n)))),
-    minDist: 0.45,
-    spread: 1.0,
+    nNeighbors: Math.max(2, Math.min(32, Math.round(Math.sqrt(n) * 1.7))),
+    /* Retain dense knots and sparse chains in the semantic manifold. */
+    minDist: 0.30,
+    spread: 1.25,
     nEpochs: n < 40 ? 200 : 350,
     random: mulberry32(42),
   });
@@ -398,146 +399,50 @@ function applyNebulaLayout(nodes, links, vecById) {
     groups.get(k).push(i);
   });
   const gs = [...groups.entries()].map(([key, idx]) => ({ key, idx, pts: idx.map(i => P[i]) }));
-  /* ── v1.20 按个数排布(用户口径:按个数排布,不然肯定挤)───────────────────
-   * ①块半径随点数增长:自锚定 R = R_med × (n/n_med)^0.45 —— 中位块保持原尺寸,
-   *   98 点的块会比 3 点的块大好几倍(修前只大 1.6 倍,点的密度差 20 倍 = "挤")。
-   * ②点间距由个数反推:minSep = 0.85 × R/√n,于是"每个点占的视觉空间"与点数无关。
-   * ③仍然只推"近到糊住"的点对,不改整体形状。 */
-  const blobCen = (g) => {
-    const c = [0, 0, 0];
-    for (const p of g.pts) for (let a = 0; a < 3; a++) c[a] += p[a] / g.pts.length;
-    return c;
-  };
-  const blobRad = (g, c) => {
-    let r = 0;
-    for (const p of g.pts) r = Math.max(r, Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2]));
-    return r;
-  };
-  const nMed = gs.map(g => g.idx.length).sort((a, b) => a - b)[Math.floor(gs.length / 2)] || 1;
-  const rSort = gs.map(g => blobRad(g, blobCen(g))).sort((a, b) => a - b);
-  const rMed = rSort[Math.floor(rSort.length / 2)] || 1;
+  /* Separate constellations while retaining their internal density gradients. */
+  const blobCenter = (g) => [0, 1, 2].map(a =>
+    g.pts.reduce((sum, p) => sum + p[a], 0) / g.pts.length);
   for (const g of gs) {
-    const c = blobCen(g), R = blobRad(g, c);
-    if (R < 1e-6) continue;
-    const Rt = rMed * Math.pow(Math.max(1, g.idx.length) / nMed, 0.45);
-    const k = Math.min(6, Math.max(0.35, Rt / R));
-    for (const p of g.pts) for (let a = 0; a < 3; a++) p[a] = c[a] + (p[a] - c[a]) * k;
-  }
-  for (const g of gs) {
-    const c0 = blobCen(g), R0 = blobRad(g, c0);
-    const minSep = Math.max(0.8, 1.15 * R0 / Math.sqrt(Math.max(1, g.idx.length)));   /* 按个数定间距（v1.23.2: 0.85→1.15，密团更疏） */
-    /* 完全重合的点对没有方向可用 → 用索引哈希给一个确定性微推(不用随机数,保证可复现) */
-    const nudge = (a, b) => ((a * 7919 + b * 104729) % 1000) / 1000 - 0.5;
-    for (let it = 0; it < 32; it++) {
-      let moved = 0;
-      for (let a = 0; a < g.idx.length; a++) {
-        for (let b = a + 1; b < g.idx.length; b++) {
-          const p = P[g.idx[a]], q = P[g.idx[b]];
-          const d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
-          let L = Math.hypot(d[0], d[1], d[2]);
-          if (L >= minSep) continue;
-          if (L < 1e-6) { d[0] = nudge(a, b); d[1] = nudge(b, a); d[2] = nudge(a + 1, b + 2); L = Math.hypot(d[0], d[1], d[2]) || 1; }
-          const push = (minSep - L) / 2 / L;
-          for (let c = 0; c < 3; c++) { p[c] -= d[c] * push; q[c] += d[c] * push; }
-          moved++;
-        }
-      }
-      if (!moved) break;
-    }
-  }
-  /* ── v1.21 跨系节点上外缘(用户口径:"按连线位置排布,需要跨系的放在外面")──────────
-   * 有跨块连线的节点,被拉到所在块"朝向对端块"那一侧的外缘。
-   * 目的:干道/细丝从**外缘**出发,不再从腹地拉一条线穿过本团主节点(用户:直突突穿过主节点,极其奇怪)。 */
-  const nodeById = new Map(nodes.map(n => [n.id, n]));
-  const cenOf = new Map(gs.map(g => [g.key, blobCen(g)]));
-  const crossDir = new Map(), crossN = new Map(), degAll = new Map();
-  for (const l of links) {
-    const a = nodeById.get(typeof l.source === 'object' ? l.source.id : l.source);
-    const b = nodeById.get(typeof l.target === 'object' ? l.target.id : l.target);
-    if (!a || !b) continue;
-    degAll.set(a.id, (degAll.get(a.id) || 0) + 1);
-    degAll.set(b.id, (degAll.get(b.id) || 0) + 1);
-    const ka = blobKey(a), kb = blobKey(b);
-    if (ka === kb) continue;
-    const w = (l.strength != null ? l.strength : 0.5) + 0.001;
-    for (const [from, toKey] of [[a, kb], [b, ka]]) {
-      const cs = cenOf.get(blobKey(from)), cp = cenOf.get(toKey);
-      if (!cs || !cp) continue;
-      const d = [cp[0] - cs[0], cp[1] - cs[1], cp[2] - cs[2]];
-      const dl = Math.hypot(d[0], d[1], d[2]) || 1;
-      const acc = crossDir.get(from.id) || [0, 0, 0];
-      acc[0] += d[0] / dl * w; acc[1] += d[1] / dl * w; acc[2] += d[2] / dl * w;
-      crossDir.set(from.id, acc);
-      crossN.set(from.id, (crossN.get(from.id) || 0) + 1);
-    }
-  }
-  for (const g of gs) {
-    const c = cenOf.get(g.key), R = blobRad(g, c);
-    g.idx.forEach((i, k) => {
-      const nd = pairs[i].n;
-      const dir = crossDir.get(nd.id);
-      if (!dir) return;                                   /* 纯块内节点:不动,保持语义位置 */
-      const dl = Math.hypot(dir[0], dir[1], dir[2]);
-      if (dl < 1e-6) return;
-      const u = [dir[0] / dl, dir[1] / dl, dir[2] / dl];
-      const p = P[i];
-      let r = [p[0] - c[0], p[1] - c[1], p[2] - c[2]];
-      const rl = Math.hypot(r[0], r[1], r[2]) || 1e-6;
-      const keep = Math.min(1, rl / Math.max(1e-6, R));
-      r = [r[0] / rl, r[1] / rl, r[2] / rl];
-      /* 外向度 = 跨块连线数 ÷ 总连线数。90% 的点都沾跨块连线 —— 全推到外缘会把团掏空成环,
-       * 所以按外向度**平滑部分推进**:内向的留在原地(团保住体积),主要靠跨系连接的才上外缘。 */
-      const cn = crossN.get(nd.id) || 0;
-      const outRatio = cn / Math.max(1, degAll.get(nd.id) || cn);
-      const pushK = Math.max(0, Math.min(1, (outRatio - 0.25) / 0.60)) * 0.90;
-      if (pushK <= 0.01) return;
-      const B = 0.30 + 0.45 * pushK;                      /* 方向:部分朝对端,保留语义切向 */
-      let v = [r[0] * (1 - B) + u[0] * B, r[1] * (1 - B) + u[1] * B, r[2] * (1 - B) + u[2] * B];
-      const vl = Math.hypot(v[0], v[1], v[2]) || 1;
-      v = [v[0] / vl, v[1] / vl, v[2] / vl];
-      const targetR = R * (0.62 + 0.34 * Math.min(1, cn / 4));   /* 外向度越高越贴边(最多 0.96R) */
-      const radFinal = rl * (1 - pushK) + targetR * pushK;
-      for (let a2 = 0; a2 < 3; a2++) p[a2] = c[a2] + v[a2] * radFinal;
+    const center = blobCenter(g);
+    const vectors = g.idx.map(i => pairs[i].v);
+    let local = null;
+    try { local = umapNd(vectors, 3); } catch (e) { console.error('constellation UMAP failed:', e.message); }
+    if (!local) local = pcaCoords(vectors, 3);
+    const mean = [0, 1, 2].map(a => local.reduce((s,p) => s+p[a], 0)/local.length);
+    const distances = local.map(p => Math.hypot(...p.map((v,a) => v-mean[a])));
+    const sorted = distances.slice().sort((a,b) => a-b);
+    const radius = Math.max(1e-6, sorted[Math.floor((sorted.length-1)*0.95)]);
+    const targetRadius = 9 + 8 * Math.sqrt(Math.max(0, g.idx.length-1));
+    const scale = targetRadius / radius;
+    local.forEach((p,j) => {
+      const t = distances[j] / radius;
+      const tail = t > 1 ? (1 + 0.28 * Math.log1p((t-1)/0.28)) / t : 1;
+      p.forEach((v,a) => {g.pts[j][a] = center[a] + (v-mean[a])*scale*tail;});
     });
-  }
-  /* 上外缘后再轻推 6 轮,避免贴边时互相重叠 */
-  for (const g of gs) {
-    const c0 = blobCen(g), R0 = blobRad(g, c0);
-    const minSep = Math.max(0.6, 0.80 * R0 / Math.sqrt(Math.max(1, g.idx.length)));
-    const nudge = (a, b) => ((a * 7919 + b * 104729) % 1000) / 1000 - 0.5;
-    for (let it = 0; it < 6; it++) {
-      let moved = 0;
-      for (let a = 0; a < g.idx.length; a++) {
-        for (let b = a + 1; b < g.idx.length; b++) {
-          const p = P[g.idx[a]], q = P[g.idx[b]];
-          const d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
-          let L = Math.hypot(d[0], d[1], d[2]);
-          if (L >= minSep) continue;
-          if (L < 1e-6) { d[0] = nudge(a, b); d[1] = nudge(b, a); d[2] = nudge(a + 1, b + 2); L = Math.hypot(d[0], d[1], d[2]) || 1; }
-          const push = (minSep - L) / 2 / L;
-          for (let c2 = 0; c2 < 3; c2++) { p[c2] -= d[c2] * push; q[c2] += d[c2] * push; }
-          moved++;
+    // Resolve only near-coincident points; retain the density difference between knots and chains.
+    if (g.pts.length > 2) {
+      const nearest = g.pts.map((p,i) => Math.min(...g.pts.filter((q,j) => j!==i)
+        .map(q => Math.hypot(...q.map((v,a) => v-p[a]))))).sort((a,b) => a-b);
+      const floor = Math.max(0.12, nearest[Math.floor(nearest.length/2)] * 0.30);
+      for (let pass=0;pass<8;pass++) {
+        for(let i=0;i<g.pts.length;i++) for(let j=i+1;j<g.pts.length;j++) {
+          const p=g.pts[i],q=g.pts[j];
+          let d=q.map((v,a) => v-p[a]),len=Math.hypot(...d);
+          if(len>=floor) continue;
+          if(len<1e-9) {d=[Math.sin(i*7+j),Math.cos(j*11+i),Math.sin(i+j*3)];len=Math.hypot(...d);}
+          const push=(floor-Math.hypot(...q.map((v,a)=>v-p[a]))) * 0.5/len;
+          for(let a=0;a<3;a++) {p[a]-=d[a]*push;q[a]+=d[a]*push;}
         }
       }
-      if (!moved) break;
     }
   }
-  const blobCenter = blobCen;   /* 兼容后续调用点 */
-  const radii = gs.map(g => {
-    const c = blobCenter(g);
-    let r = 0;
-    for (const p of g.pts) r = Math.max(r, Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2]));
-    return r;
-  }).sort((a, b) => a - b);
-  const medR = radii[Math.floor(radii.length / 2)] || 25;
-  /* 团间真空按半径比例给（v1.23.2）：factor 1.32 = 两团半径和之外再留 32%，
-   * 小团不会被固定 gap 推到很远变成孤岛；大团之间仍有明显空隙。 */
-  const off = sepBlobsND(gs, 0, 3, 1.32);
+  const separation = sepBlobsND(gs, 8, 3, 1.10);
   for (const g of gs) {
-    const o = off.get(g.key) || [0, 0, 0];
-    for (const i of g.idx) { P[i][0] += o[0]; P[i][1] += o[1]; P[i][2] += o[2]; }
+    const delta = separation.get(g.key);
+    for (const p of g.pts) for (let a=0;a<3;a++) p[a] += delta[a];
   }
-  /* 写回节点(同时记入 nodeXY:缓存命中时用它重放坐标,否则节点会退回旧布局) */
+
+  /* Write coordinates and replay them from the layout cache on later requests. */
   const placed = new Set();
   const nodeXY = new Map();
   pairs.forEach((p, i) => {

@@ -44,7 +44,7 @@ function updateNebulaState(points) {
     const vis = !n.dimmed;
     const emph = n.id === selectedNodeId || n.id === hoveredNodeId;
     const alpha = aAlpha.array[i];
-    const want = vis ? (emph ? 1.0 : 0.85) : 0.05;
+    const want = vis ? (emph ? 1.0 : 0.96) : 0.05;
     if (alpha !== want) aAlpha.array[i] = want;
     if (aSize) {
       const ss = window.__nebulaSizeScale || 1;
@@ -343,7 +343,7 @@ function layoutNebula(nodes, SPACE) {
   });
   window.__universeR = Math.max(span, SPACE/2)/2 * (1/s > 0 ? 2 : 1);
 }
-/* 点云本体 + 外晕(ShaderMaterial,agent-skills-network 双层辉光) */
+/* 单层恒星精灵：紧致亮核 + Moffat 光翼，以 screen 混合保留星光而不直接累加溢白。 */
 function addNebulaClouds(real) {
   if (!graphInstance || typeof THREE === 'undefined') return;
   try {
@@ -363,6 +363,7 @@ function addNebulaClouds(real) {
     const colors = new Float32Array(N*3);
     const sizes = new Float32Array(N);
     const alphas = new Float32Array(N);
+    const luminosities = new Float32Array(N);
     for (let i=0;i<N;i++) {
       const n = real[i];
       positions[i*3]=n.x||0; positions[i*3+1]=n.y||0; positions[i*3+2]=n.z||0;
@@ -371,7 +372,8 @@ function addNebulaClouds(real) {
        * 同名星座撞成一模一样的颜色 —— 用户实测反馈"Hermes 的颜色怎么和 LobeHub 一样了"。 */
       const c = new THREE.Color(brightenTintHex(n.__nebulaTint) || liftColor(memColor(n), 0.42));   /* v1.40 与点色同步提亮 */
       colors[i*3]=c.r; colors[i*3+1]=c.g; colors[i*3+2]=c.b;
-      sizes[i]=baseDot; alphas[i]=1.0;
+      sizes[i]=baseDot; alphas[i]=0.96;
+      luminosities[i]=0.78 + 0.30 * hash01(n.id, 73);
     }
     window.__nebulaReal = real; window.__nebulaColBuf = colors;   /* 自检用 */
     const geo = new THREE.BufferGeometry();
@@ -379,30 +381,45 @@ function addNebulaClouds(real) {
     geo.setAttribute('color', new THREE.BufferAttribute(colors,3));
     geo.setAttribute('aSize', new THREE.BufferAttribute(sizes,1));
     geo.setAttribute('aAlpha', new THREE.BufferAttribute(alphas,1));
-    const mkMat = (sizeMult, alphaScale) => new THREE.ShaderMaterial({
+    geo.setAttribute('aLuminosity', new THREE.BufferAttribute(luminosities,1));
+    const mkMat = (sizeMult) => new THREE.ShaderMaterial({
       /* uScale 由场景半径推出(不写死):gl_PointSize = aSize*uScale/视深,
        * 视觉尺寸 ≈ aSize*uScale/相机距离 —— 写死常量时换布局尺度就会变成亚像素隐形。 */
-      uniforms: { uScale: { value: sizeMult } },
-      vertexShader: `attribute float aSize; attribute float aAlpha; uniform float uScale; varying vec3 vColor; varying float vAlpha;
-        void main(){ vColor=color; vAlpha=aAlpha; vec4 mv=modelViewMatrix*vec4(position,1.0);
-        gl_PointSize=aSize*uScale/max(1.0,-mv.z); gl_Position=projectionMatrix*mv; }`,
-      /* v1.23.2: 边界清晰的实心光点 + 很薄的外晕（原实现 0.04~0.5 全段渐变，
-       * 点一大就糊成光团，边界看不见）。
-       * core 在 d=0.44~0.5 之间快速收边 → 明确的圆边；halo 只保留 0.22 的柔光。 */
-      fragmentShader: `varying vec3 vColor; varying float vAlpha;
+      uniforms: { uScale: { value: sizeMult }, uIntensity: { value: 1.15 } },
+      vertexShader: `attribute float aSize; attribute float aAlpha; attribute float aLuminosity; uniform float uScale; varying vec3 vColor; varying float vAlpha; varying float vLuminosity;
+        void main(){ vColor=color; vAlpha=aAlpha; vLuminosity=aLuminosity; vec4 mv=modelViewMatrix*vec4(position,1.0);
+        gl_PointSize=clamp(1.9*aSize*uScale/max(1.0,-mv.z),3.5,aSize*7.5); gl_Position=projectionMatrix*mv; }`,
+      /* 借鉴恒星 PSF：高斯亮核 + 较弱 Moffat 翼。整个圆面不再等亮，
+       * 亚像素核按像素足迹适当展宽并补偿能量，避免远景闪烁/漏采样。
+       * 光翼在边界前渐隐；无需额外球体或全屏 bloom。 */
+      fragmentShader: `uniform float uIntensity; varying vec3 vColor; varying float vAlpha; varying float vLuminosity;
         void main(){
-          float d = length(gl_PointCoord - vec2(0.5));
-          if (d > 0.5) discard;
-          float core = smoothstep(0.5, 0.47, d);
-          float halo = 0.08 * pow(smoothstep(0.5, 0.18, d), 3.0);
-          float a = clamp(core + halo, 0.0, 1.0);
-          gl_FragColor = vec4(vColor * (0.74 + 0.26 * core), a * vAlpha * ${alphaScale});
+          vec2 p = 2.0 * gl_PointCoord - 1.0;
+          float r2 = dot(p,p);
+          if (r2 > 1.0) discard;
+          float pixel = max(length(fwidth(p)), 0.001);
+          float variance = 0.028 + pixel * pixel / 12.0;
+          float core = exp(-r2 / variance);
+          float wing = pow(1.0 + r2 / 0.12, -2.5);
+          float taper = 1.0 - smoothstep(0.65, 1.0, sqrt(r2));
+          float energy = 0.90 * core * (0.028 / variance) + 0.28 * wing;
+          float alpha = min(0.98, energy * vLuminosity) * vAlpha * taper;
+          vec3 starColor = mix(vColor * uIntensity, vec3(1.0), 0.42 * core);
+          gl_FragColor = vec4(starColor, alpha);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+          gl_FragColor.rgb *= gl_FragColor.a;
         }`,
-      /* v1.23.2: 点层改用普通混合。叠加混合下几百个点重叠会把中心推到纯白，
-       * 整团糊成一块；普通混合保留每个点的清晰边界（重叠处只是后画的点覆盖前一个）。 */
-      transparent: true, depthWrite: false, blending: THREE.NormalBlending, vertexColors: true,
+      /* screen: src + dst*(1-src)，src 已预乘 alpha。弱光翼能透叠，
+       * 核心不被后画的暗点盖住，也不使用无上限的加法增亮。 */
+      transparent: true, depthWrite: false, vertexColors: true,
+      blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+      blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcColorFactor,
+      blendEquationAlpha: THREE.AddEquation,
+      blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+      extensions: { derivatives: true },
     });
-    nebulaPoints = new THREE.Points(geo, mkMat(String(sceneR * 4.0), '0.95'));
+    nebulaPoints = new THREE.Points(geo, mkMat(sceneR * 4.0));
     scene.add(nebulaPoints);
     /* v1.35 去掉所有光晕:这里原本还有一层 sceneR*110 的辉光点(整片光的雾),已删。 */
   } catch (e) { console.error('nebula clouds:', e.message); }

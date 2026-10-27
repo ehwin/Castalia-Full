@@ -19,6 +19,7 @@ import { resolveFedLibraries } from './federation/index.js';
 import { currentMemDir, DatabaseManager, generateId, initProjectSchema, memTypeDir } from './db.js';
 import { makeLlmChannel, callLlm, REFLECT_DEEP_MAX_TOKENS } from './reflectionLlm.js';
 import { normalizeMemType } from './memType.js';
+import { normalizeTags, serializeTags } from './tags.js';
 import { reflectionFidelityPrompt, wholeRecordBatches } from './reflectionFidelity.js';
 const DEFAULT_MAX_TOTAL = Number.MAX_SAFE_INTEGER;
 const DEFAULT_MAX_PER_LIB = Number.MAX_SAFE_INTEGER;
@@ -329,7 +330,7 @@ export async function runReflectAll(opts) {
                 db.prepare(`
           INSERT INTO memory (id, text, project, type, mem_type, category, tags, importance, source, subject, tier, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count, metadata)
           VALUES (?, ?, 'reflect', 'semantic', ?, 'general', ?, ?, 'reflect-all', ?, 'standard', 1, ?, ?, ?, 0, 0, ?)
-        `).run(generateId(), ins.text, mt, JSON.stringify(tags), ins.importance, ins.subject, now, now, now, JSON.stringify({ reflection: { sources: ins.sources } }));
+        `).run(generateId(), ins.text, mt, serializeTags(normalizeTags(tags)), ins.importance, ins.subject, now, now, now, JSON.stringify({ reflection: { sources: ins.sources } }));
                 saved++;
             }
             catch (e) {

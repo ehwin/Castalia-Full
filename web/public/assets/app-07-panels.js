@@ -451,6 +451,7 @@ function fillConfigForm(d) {
   document.getElementById('embApiUrl').value = emb.api_url || '';
   document.getElementById('embApiKey').value = emb.api_key && emb.api_key !== '****' ? emb.api_key : '';
   document.getElementById('embApiModel').value = emb.api_model || '';
+  document.getElementById('embDim').value = emb.dim ?? 1024;
   const ref = d.reflect || {};
   document.getElementById('refUrl').value = ref.llm_url || 'https://api.deepseek.com/v1';
   document.getElementById('refKey').value = ref.api_key && ref.api_key !== '****' ? ref.api_key : '';
@@ -507,6 +508,7 @@ async function saveAllConfig() {
       api_url: document.getElementById('embApiUrl').value.trim(),
       api_key: document.getElementById('embApiKey').value.trim(),
       api_model: document.getElementById('embApiModel').value.trim(),
+      dim: parseInt(document.getElementById('embDim').value, 10) || 1024,
     },
     reflect: {
       llm_url: document.getElementById('refUrl').value.trim(),

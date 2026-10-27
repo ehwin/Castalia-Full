@@ -101,7 +101,67 @@ function openDb(readonly = false) {
 }
 
 // ═══ 嵌入配置 ═══
-function normalizeConfig(cfg = {}) {
+/**
+ * 只读原始 config.json(不注入任何默认值)。
+ *
+ * 2026-10-27 修复(E2):必须区分"文件里真的写了什么"与"生效值(含默认值/环境变量)"。
+ * 旧实现只有后者,GET 把默认 dim=1024 物化进返回体,UI 原样回传后就被 POST 写成
+ * 显式配置,进而让引擎把 4096 维库静默降维清库。
+ */
+function rawConfig() {
+  return rawConfigInDir(dirname(CONFIG_PATH));
+}
+
+function rawConfigInDir(dir) {
+  const p = join(dir, 'config.json');
+  if (!existsSync(p)) return {};
+  try { return JSON.parse(readFileSync(p, 'utf-8').replace(/^\uFEFF+/, '')); } catch { return {}; }
+}
+
+/** 实际生效的向量维度:显式 env 优先 → 该目录 config.json 的 embedding.dim → 内置默认 1024(与引擎 db.ts 口径一致) */
+function effectiveVecDimInDir(dir) {
+  const envRaw = (process.env.EMBEDDING_DIM || process.env.VEC_DIM || '').trim();
+  const fileRaw = rawConfigInDir(dir)?.embedding?.dim;
+  for (const raw of [envRaw, fileRaw]) {
+    const n = parseInt(raw, 10);
+    if (Number.isFinite(n) && n > 0 && n <= 65536) return n;
+  }
+  return 1024;
+}
+
+/** 当前实例(CONFIG_PATH 所在目录)的生效维度 */
+function effectiveVecDim() {
+  return effectiveVecDimInDir(dirname(CONFIG_PATH));
+}
+
+/**
+ * 从"归一化后的配置"里删掉 `embedding.dim`(2026-10-27 修复 E2)。
+ *
+ * 归一化会注入生效维度(env 优先),UI 原样回传;若照单全收就会把默认值/环境派生值
+ * 写成显式配置,随后引擎据此 DROP vec 表并清空 embedding_cache。
+ * `onlyIfEffective=true` 用于"用户提交的 payload":只有取值恰好等于当前生效值
+ * (说明用户没改过这个输入框)才删;用户真改了维度时保留。
+ */
+function withoutImplicitDim(cfg, rawCfg, onlyIfEffective, effDim = effectiveVecDim(), formDims = null) {
+  const e = cfg?.embedding;
+  if (!e || e.dim == null) return cfg;
+  const explicit = !!(rawCfg?.embedding && Object.prototype.hasOwnProperty.call(rawCfg.embedding, 'dim'));
+  if (explicit) return cfg;
+  if (onlyIfEffective) {
+    // 2026-10-27 修复(P1-1,复核提出):联邦 applyTo=all 时,payload 里的 dim 可能来自
+    // **任意一个**同级实例的 GET 回显。若只跟"该实例自己的维度"比,A=4096、B 无 dim 的
+    // 组合会把 4096 判成"用户改过"并写进 B,导致 B 下次开库 DROP + 清缓存。
+    // 所以凡属于"当前生效维度集合"的值都视为回显,只有集合外的值才算用户真的改了。
+    const n = Number(e.dim);
+    const fromForm = formDims ? formDims.has(n) : n === effDim;
+    if (!fromForm) return cfg;
+  }
+  const copy = { ...cfg, embedding: { ...e } };
+  delete copy.embedding.dim;
+  return copy;
+}
+
+function normalizeConfig(cfg = {}, dim = effectiveVecDim()) {
   return {
     ...cfg,
     embedding: {
@@ -110,6 +170,8 @@ function normalizeConfig(cfg = {}) {
       model: 'yuan-embedding-2.0-zh',
       api_url: '', api_key: '', api_model: '',
       ...(cfg.embedding || {}),
+      // 生效维度(env 优先):不要把默认值当成"已配置值"暴露出去
+      dim,
     },
     reflect: {
       llm_url: 'https://api.deepseek.com/v1', api_key: '', model: 'deepseek-chat',
@@ -142,6 +204,14 @@ function saveConfig(cfg) {
   writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf-8');
 }
 
+/**
+ * v1.25: 建 vec0 表用的维度 —— 取自 bank config.json 的 embedding.dim(env EMBEDDING_DIM 可覆盖),
+ * 非法/未配置回退 1024。与引擎侧 db.ts 的 vecDim() 取值口径一致,避免 web 建库把维度写死。
+ */
+function configuredVecDim() {
+  return effectiveVecDim();
+}
+
 function loadConfigFromDir(dir) {
   const p = join(dir, 'config.json');
   let cfg = {};
@@ -150,7 +220,8 @@ function loadConfigFromDir(dir) {
     exists = true;
     try { cfg = JSON.parse(readFileSync(p, 'utf-8')); } catch {}
   }
-  return { path: p, exists, config: normalizeConfig(cfg) };
+  // 每个实例按自己的 config.json 解析生效维度,不要串用本地实例的
+  return { path: p, exists, config: normalizeConfig(cfg, effectiveVecDimInDir(dir)) };
 }
 
 function saveConfigToDir(dir, cfg) {
@@ -485,8 +556,8 @@ function ensureLibSchema(db) {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
-  try { db.exec('CREATE VIRTUAL TABLE IF NOT EXISTS vec_memory USING vec0(embedding float[1024])'); } catch (e) { console.error('vec_memory create failed:', e.message); }
-  try { db.exec('CREATE VIRTUAL TABLE IF NOT EXISTS vec_facts USING vec0(embedding float[1024])'); } catch (e) {}
+  try { db.exec('CREATE VIRTUAL TABLE IF NOT EXISTS vec_memory USING vec0(embedding float[' + configuredVecDim() + '])'); } catch (e) { console.error('vec_memory create failed:', e.message); }
+  try { db.exec('CREATE VIRTUAL TABLE IF NOT EXISTS vec_facts USING vec0(embedding float[' + configuredVecDim() + '])'); } catch (e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_memory_project ON memory(project, is_active)'); } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_memory_mem_type ON memory(mem_type, is_active)'); } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_memory_tier ON memory(tier, is_active)'); } catch {}
@@ -497,7 +568,8 @@ function ensureLibSchema(db) {
 
 export {
   ROOT, DB_DIR, DB_PATH, CONFIG_PATH, NODE_BIN, MCP_SERVER, LEGACY_DB_PATH, PORT,
-  loadConfig, saveConfig, loadAllInstanceConfigs, saveConfigToDir, mergePreserveKeys,
+  loadConfig, saveConfig, rawConfig, rawConfigInDir, effectiveVecDim, effectiveVecDimInDir, withoutImplicitDim,
+  loadAllInstanceConfigs, saveConfigToDir, mergePreserveKeys,
   openDb, openLibDb, openDbByProject,
   AGGREGATE_DIRS, getAggregateDirs, sameDbDir, libFiles, libFileByProject, currentInstanceLibs, findLib,
   resolveSourceFile, ensureLibSchema, safeFilePart, libFilePath, dbDirHasData,

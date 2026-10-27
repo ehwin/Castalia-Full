@@ -60,88 +60,52 @@ const CATEGORY_LABELS = {
   agent_mood: '心境', general: '通用', custom: '自定义', default: '默认',
 };
 function catLabel(c) { return CATEGORY_LABELS[c] || c; }
-const RG_HUE = { 'Hermes': 168, 'LobeHub': 212, 'AIRI': 335, '联邦': 44,
-  'hermes': 168, 'lobehub': 212, 'airi': 335, 'lobehub ': 212 };
+const RG_HUE = { 'Hermes': 192, 'LobeHub': 220, 'DSH': 264, 'AIRI': 352, '联邦': 30,
+  'hermes': 192, 'lobehub': 220, 'dsh': 264, 'airi': 352, 'lobehub ': 220 };
 const RG_NAME = { 'Hermes': 'Hermes', 'LobeHub': 'LobeHub', 'AIRI': 'AIRI', '联邦': '总反思', 'federation': '联邦总图',
   'hermes': 'Hermes', 'lobehub': 'LobeHub', 'airi': 'AIRI' };
 function regionHueOf(rg) { return RG_HUE[rg] != null ? RG_HUE[rg] : Math.floor(hash01(String(rg), 7) * 360); }
-function regionColorOf(rg) { return 'hsl(' + regionHueOf(rg) + ', 72%, 56%)'; }
-/* v1.32 亮度拉齐:同样 L 下蓝/紫的**感知亮度**只有青绿/琥珀的约 1/3
- * —— 用户实测:"LobeHub 看着比 Hermes 暗淡好多"(LobeHub 主色 hsl(216,66%,50%) Y=0.17,
- * Hermes 主色 hsl(172,66%,50%) Y=0.51)。做法:按感知亮度给每个色相算一个整体提亮量
- * (以 50% 亮度的基准色为准),色阶梯度(l=50→80)照旧保留,只是整片抬亮。 */
-const _shadeLift = new Map();
-function hslRelLum(h, s, l) {   /* s,l ∈ 0..1;返回 sRGB 相对亮度(与 hslStyleToHex 同一套公式) */
-  const a = s * Math.min(l, 1 - l);
-  const f = (n) => {
-    const k = (n + h / 30) % 12;
-    return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
-  };
-  const lin = (c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
-  return 0.2126 * lin(f(0)) + 0.7152 * lin(f(8)) + 0.0722 * lin(f(4));
-}
-function lightForRelLum(h, s, target) {   /* 二分出最接近目标感知亮度的 L(百分数) */
-  let lo = 20, hi = 92;
-  for (let i = 0; i < 16; i++) {
-    const mid = (lo + hi) / 2;
-    if (hslRelLum(h, s, mid / 100) < target) lo = mid; else hi = mid;
-  }
-  return hi;
-}
-const SHADE_MIN_LUM = 0.30;   /* 基准色最低感知亮度(达不到就抬亮;已经更亮的星域不动) */
-const SHADE_MAX_L = 88;       /* 抬亮后最高亮度上限,避免糊成白 */
+function regionColorOf(rg) { return 'hsl(' + regionHueOf(rg) + ', 52%, 66%)'; }
+/* Astronomical-image palette: cool blue / cyan / violet, hydrogen rose,
+ * and warm stellar amber. Fixed slots keep colors stable as counts change. */
 function consShadeOf(rg, cons, ci, total) {
-  const h = regionHueOf(rg);
-  const drift = (ci % 2 === 0 ? -1 : 1) * (4 + (ci % 3) * 3);
-  const t = total > 1 ? ci / (total - 1) : 0.4;
-  const hue = (h + drift + 360) % 360;
-  const sat = Math.round(66 - 10 * t);
-  let lift = _shadeLift.get(hue);
-  if (lift == null) {
-    lift = Math.max(0, lightForRelLum(hue, 0.66, SHADE_MIN_LUM) - 50);
-    _shadeLift.set(hue, lift);
-  }
-  const l = Math.min(SHADE_MAX_L, Math.round(50 + 30 * t + lift));
-  return 'hsl(' + hue + ', ' + sat + '%, ' + l + '%)';
+  const slots = ['user', 'project', 'general', 'reference', 'feedback',
+    'conversation', 'knowledge', 'milestone', 'identity', 'relationship',
+    'emotional', 'mood_snapshot', 'preference', 'decision', 'mistake',
+    'session', 'session_promoted', 'agent_mood', 'custom', 'default'];
+  const slot = slots.indexOf(String(cons));
+  const rank = slot >= 0 ? slot : Math.floor(hash01(String(cons), 19) * 20);
+  const index = rank % 5;
+  const hue = (regionHueOf(rg) + [-7, 5, -2, 9, 0][index] + 360) % 360;
+  const saturation = [58, 52, 40, 48, 34][index];
+  const lightness = [57, 67, 63, 77, 72][index];
+  return 'hsl(' + hue + ', ' + saturation + '%, ' + lightness + '%)';
 }
 
-/* v1.31:hsl 串('hsl(168, 72%, 56%)')→ hex(three 的 Color 解析各版本不一,自己转最稳) */
-/* ═══ v1.43 亮度/色相平衡 ═════════════════════════════════════════════════
- * 用户:"亮度够了,但是色相低了" —— 往白里提(liftColor)虽然提亮,但饱和度被稀释。
- * 做法:把目标亮度定为"白化 t=0.42 时的**感知亮度 Y**"不变,色相不动、饱和度 +0.22,
- * 再二分求出达到该亮度所需的 L → 亮度一样,颜色更实(色相回来了)。
- */
-const TINT_SAT_BOOST = 0.22;      /* 饱和度补偿(白化丢掉的色) */
-const TINT_MAX_SAT = 0.94, TINT_MAX_L = 88;
-const WHITE_LERP_EQ = 0.42;       /* 等价于原 liftColor(...,0.42) 的亮度 */
-const _lin = (c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
-function hsl2rgb01(h, s, l) {
-  const a = s * Math.min(l, 1 - l);
-  const f = (n) => { const k = (n + h / 30) % 12; return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); };
-  return [f(0), f(8), f(4)];
-}
-function relLum01(r, g, b) { return 0.2126 * _lin(r) + 0.7152 * _lin(g) + 0.0722 * _lin(b); }
-function hex01(r, g, b) {
-  return '#' + [r, g, b].map((c) => ('0' + Math.round(Math.max(0, Math.min(1, c)) * 255).toString(16)).slice(-2)).join('');
-}
-/* 'hsl(h,s%,l%)' → 亮度对齐、饱和度补偿后的 hex */
+/* Apply only a modest luminance floor; preserve the palette's saturation
+ * and shade contrast instead of whitening and boosting every color to neon. */
 function brightenTintHex(str) {
-  const m = /hsl\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%\s*\)/.exec(String(str || ''));
-  if (!m) return null;
-  const h = +m[1], s = +m[2] / 100, l = +m[3] / 100;
-  const base = hsl2rgb01(h, s, l);
-  /* 目标亮度 = 白化后的感知亮度 */
-  const wl = base.map((c) => c + (1 - c) * WHITE_LERP_EQ);
-  const targetY = relLum01(wl[0], wl[1], wl[2]);
-  const s2 = Math.min(TINT_MAX_SAT, s + TINT_SAT_BOOST);
-  let lo = 0.05, hi = TINT_MAX_L / 100;
-  for (let i = 0; i < 18; i++) {
-    const mid = (lo + hi) / 2;
-    const c = hsl2rgb01(h, s2, mid);
-    if (relLum01(c[0], c[1], c[2]) < targetY) lo = mid; else hi = mid;
+  const match = /hsl\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%\s*\)/.exec(String(str || ''));
+  if (!match) return null;
+  const h = +match[1], s = +match[2], initialL = +match[3];
+  const luminance = l => {
+    const a = (s / 100) * Math.min(l, 1 - l);
+    const component = n => {
+      const k = (n + h / 30) % 12;
+      const v = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+      return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * component(0) + 0.7152 * component(8) + 0.0722 * component(4);
+  };
+  let lo = initialL, hi = Math.max(initialL, 78);
+  if (luminance(lo / 100) < 0.25) {
+    for (let i = 0; i < 16; i++) {
+      const mid = (lo + hi) / 2;
+      if (luminance(mid / 100) < 0.25) lo = mid; else hi = mid;
+    }
+    lo = hi;
   }
-  const rgb = hsl2rgb01(h, s2, hi);
-  return hex01(rgb[0], rgb[1], rgb[2]);
+  return hslStyleToHex('hsl(' + h + ', ' + s + '%, ' + lo + '%)');
 }
 
 /* v1.40 提亮:把任意颜色往白里提 t(0~1),色相基本不变、只提亮度 */
@@ -307,6 +271,8 @@ function buildNode(node) {
     new THREE.MeshBasicMaterial({ color: glowColor, transparent: true, opacity: 0.30,
       blending: THREE.AdditiveBlending, depthWrite: false })
   );
+  /* 星云记忆点由点云层统一绘制，避免半透明球再次加亮、叠出虚边。 */
+  glowMesh.visible = currentView !== 'nebula';
   group.add(glowMesh);
   const hit = new THREE.Mesh(
     sphereGeo(Math.max(size * 2.1, 6)),
@@ -327,7 +293,7 @@ function buildNode(node) {
   }
 
   let starMesh = null;
-  if (node.starred) {
+  if (node.starred && currentView !== 'nebula') {
     starMesh = new THREE.Mesh(sphereGeo(size * 0.2), new THREE.MeshBasicMaterial({ color: 0xf43f5e }));
     starMesh.position.set(0, size + 2, 0);
     group.add(starMesh);
@@ -369,6 +335,11 @@ function applyNodeVisual(node) {
     node.__coreMat.opacity = isDim ? 0.3 : 1;
   }
   if (!node.__glowMat) return;
+  if (currentView === 'nebula' && !node.group) {
+    if (node.__glowMesh) node.__glowMesh.visible = false;
+    node.__glowMat.opacity = 0;
+    return;
+  }
   const base = node.__baseColor || '#64748b';
   // 簇成员:基础光晕色 = 簇色(非 dim/导览/选中/悬停态时显示簇色扎堆)
   const baseGlowColor = base;   /* v1.37:不再用语义簇色,光晕跟点同色(避免异色外环) */
@@ -391,16 +362,21 @@ function applyNodeSizeAndStar(node) {
   if (typeof THREE === 'undefined') return;
   const size = node.size || 6;
   if (node.__coreMesh) node.__coreMesh.geometry = sphereGeo(size * 0.5);
-  if (node.__glowMesh) node.__glowMesh.geometry = sphereGeo(node.__important ? size * 1.15 : size * 0.85);
+  if (node.__glowMesh) {
+    const nebulaDot = currentView === 'nebula' && !node.group;
+    node.__glowMesh.geometry = sphereGeo(nebulaDot ? size * 0.62 : (node.__important ? size * 1.15 : size * 0.85));
+    node.__glowMesh.visible = !nebulaDot;
+  }
   if (node.__labelSprite) {
     node.__labelSprite.position.set(0, -(size + 4), 0);
     node.__labelSprite.scale.set(size * 6, size * 0.9, 1);
   }
-  if (node.starred && !node.__starMesh) {
+  const showStarMarker = node.starred && currentView !== 'nebula';
+  if (showStarMarker && !node.__starMesh) {
     node.__starMesh = new THREE.Mesh(sphereGeo(size * 0.2), new THREE.MeshBasicMaterial({ color: 0xf43f5e }));
     node.__starMesh.position.set(0, size + 2, 0);
     node.__group.add(node.__starMesh);
-  } else if (!node.starred && node.__starMesh) {
+  } else if (!showStarMarker && node.__starMesh) {
     node.__group.remove(node.__starMesh);
     node.__starMesh = null;
   }

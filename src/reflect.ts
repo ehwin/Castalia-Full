@@ -19,6 +19,7 @@ import { getEmbeddingCached } from './ollama.js';
 import { saveFacts, saveMemory, reEmbedMemory, batchEmbedPending, updateMemory, applyIdentityActions, findDbByMemoryId, type IdentityActions } from './store.js';
 import { normalizeProject } from './env.js';
 import { MemType, isMemType, MEM_TYPES } from './memType.js';
+import { parseTagsSafe, serializeTags } from './tags.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { protectedReflectionProject, reflectionPolicy, wholeRecordBatches, fidelitySystemPrompt } from './reflectionFidelity.js';
@@ -130,11 +131,7 @@ export function listAllMemories(characterId: string = 'airi', limit: number = 20
   const rows = all.slice(0, limit);
 
   return rows.map(r => {
-    let tags: string[] = [];
-    try {
-      const parsed = JSON.parse(r.tags || '[]');
-      tags = Array.isArray(parsed) ? parsed : [];
-    } catch { tags = []; }
+    const tags = parseTagsSafe(r.tags);
 
     return {
     id: r.id,
@@ -473,7 +470,7 @@ export async function applyReflectActions(actions: ReflectAction[], characterId:
               result.receipts.push(receipt);
             continue;
             }
-            updates.push('tags = ?'); values.push(JSON.stringify(valid));
+            updates.push('tags = ?'); values.push(serializeTags(valid));
           }
           if (action.newMemType) {
             if (!isMemType(action.newMemType)) {
