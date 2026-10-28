@@ -90,7 +90,9 @@ function pickGalaxyMorph(p, count, nTypes, gi) {
   if (nTypes >= 3 && count > 28) return 'spiral';
   return 'elliptical';
 }
-const GRAPH_SCOPE = (new URLSearchParams(location.search).get('scope') || 'local').toLowerCase();
+const GRAPH_SCOPE = (new URLSearchParams(location.search).get('scope')
+  || window.__GRAPH_DEFAULT_SCOPE__   /* 服务端按实例注入(汇总星图=federation) */
+  || 'local').toLowerCase();
 const IS_FED = GRAPH_SCOPE === 'federation' || GRAPH_SCOPE === 'all' || GRAPH_SCOPE === 'fed';
 const GRAPH_PROJECT = new URLSearchParams(location.search).get('project') || '';
 const MAP_LINKS = {

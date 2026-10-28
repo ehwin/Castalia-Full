@@ -86,8 +86,21 @@ function edgeStrength(type, similarity) {
 }
 
 // ═══ API: GET /api/graph ═══
+/**
+ * 本实例的默认作用域（请求没带 scope 时用）。
+ * 2026-10-28: 汇总星图(Full)的内存库是空的,它的数据只在 federation 视图里 —— 裸调用
+ * /api/graph 会得到 0 节点。castalia_config 会给 `federation: true` 的实例注入
+ * FEDERATION_DIRS/MEMBERS,这里据此判断默认作用域,和页面注入的
+ * __GRAPH_DEFAULT_SCOPE__ 用同一套规则,避免"页面有数据、接口却空"。
+ */
+function defaultScope() {
+  if (process.env.GRAPH_SCOPE) return String(process.env.GRAPH_SCOPE).toLowerCase();
+  const fed = ['FEDERATION_DIRS', 'FEDERATION_MEMBERS']
+    .some(k => String(process.env[k] || '[]').replace(/[\[\]\s"]/g, '') !== '');
+  return fed ? 'federation' : 'local';
+}
 function graphScope(req) {
-  return String(req.query.scope || process.env.GRAPH_SCOPE || 'local').toLowerCase();
+  return String(req.query.scope || '').toLowerCase() || defaultScope();
 }
 function libsForScope(scope) {
   if (scope === 'federation' || scope === 'all' || scope === 'fed') return libFiles();
@@ -1093,7 +1106,9 @@ const gNames = [...byGroup.keys()];
 
 // ═══ API: GET /api/stats ═══
 router.get('/stats', (req, res) => {
-  const libs = currentInstanceLibs();
+  // 2026-10-28: 原来恒读本实例库 → 汇总星图(本库为空)永远返回 0,和 /api/graph 吵架。
+  // 现在与 /api/graph 同一套作用域规则(未传 scope 时按实例默认,联邦实例=federation)。
+  const libs = libsForScope(graphScope(req));
   if (!libs.length) return res.json({ total: 0, edges: 0 });
   let total = 0, edges = 0;
   for (const l of libs) {

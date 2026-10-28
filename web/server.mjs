@@ -78,7 +78,16 @@ for (const f of ['castalia-mark.png', 'castalia.png', 'favicon.png']) {
 app.use((req, res, next) => { res.setHeader('Cache-Control', 'no-cache'); next(); });
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(readFileSync(join(__dirname, 'public', 'index.html'), 'utf-8'));
+  // 2026-10-28: 汇总星图的本库是空的,数据只在 federation 视图里 —— 直接访问 / 时页面
+  // 默认 scope=local 会得到一张 0 节点空星图。这里把"本实例默认作用域"注入页面:
+  //   优先 GRAPH_SCOPE,其次"进程里配了联邦成员"(castalia_config 会为 federation:true 注入
+  //   FEDERATION_DIRS/MEMBERS),否则 local。页面只在 URL 未带 scope 时才采用它。
+  const fedEnv = ['FEDERATION_DIRS', 'FEDERATION_MEMBERS']
+    .some(k => String(process.env[k] || '[]').replace(/[\[\]\s"]/g, '') !== '');
+  const defaultScope = String(process.env.GRAPH_SCOPE || (fedEnv ? 'federation' : 'local')).toLowerCase();
+  const html = readFileSync(join(__dirname, 'public', 'index.html'), 'utf-8')
+    .replace('</head>', `<script>window.__GRAPH_DEFAULT_SCOPE__=${JSON.stringify(defaultScope)};</script></head>`);
+  res.send(html);
 });
 app.get('/aggregate.html', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
