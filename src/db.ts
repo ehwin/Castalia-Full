@@ -154,6 +154,10 @@ function reconcileVecDim(db: Database.Database): void {
   try { db.exec(`DELETE FROM embedding_cache`); } catch (_e) {}
 }
 
+export function generateId(): string {
+  return crypto.randomUUID();
+}
+
 /** 表是否存在(用于旧库/半初始化库的安全探测) */
 function tableExists(db: Database.Database, name: string): boolean {
   try {
@@ -164,7 +168,7 @@ function tableExists(db: Database.Database, name: string): boolean {
 }
 
 /**
- * 孤儿向量自愈(v1.25-fix,移植自 Lite)。
+ * 孤儿向量自愈(v1.25-fix)。
  *
  * vec_memory / vec_facts 是 vec0 虚表,主键是源表 rowid。任何绕过 store 层的硬删
  * (手写 SQL、外部工具、历史 bug)都会留下孤儿向量:它既会污染 KNN 结果,又会在
@@ -211,10 +215,6 @@ export function healVecOrphans(db: Database.Database): { memory: number; facts: 
     }
   }
   return healed;
-}
-
-export function generateId(): string {
-  return crypto.randomUUID();
 }
 
 /** memory 目录:env MEMORY_DB_DIR 或 <cwd>/memory/ */
@@ -496,6 +496,21 @@ export function initProjectSchema(db: Database.Database) {
   try { db.exec(`ALTER TABLE facts ADD COLUMN valid_to DATETIME`); } catch (_e) { /* already exists */ }
   try { db.exec(`ALTER TABLE facts ADD COLUMN evidence TEXT`); } catch (_e) { /* already exists */ }
 
+  // v1.24 记忆血缘（Graphiti EntityEdge 语义）：合并必须可追溯，旧行不得消失
+  //   valid_at       事实/记忆何时开始成立
+  //   expired_at     何时被系统取代（soft supersede，与"事实不再成立"区分）
+  //   reference_time 产生它的来源时间（用于相对日期归一）
+  //   merged_from    这条合并结果吃掉了哪些 id（JSON 数组）
+  //   merged_quotes  合并结果的逐字引证（JSON 数组，写入时做子串校验）
+  //   merged_into    反向指针：这条被谁取代（旧行 → 新行）
+  try { db.exec(`ALTER TABLE memory ADD COLUMN valid_at DATETIME`); } catch (_e) { /* already exists */ }
+  try { db.exec(`ALTER TABLE memory ADD COLUMN expired_at DATETIME`); } catch (_e) { /* already exists */ }
+  try { db.exec(`ALTER TABLE memory ADD COLUMN reference_time DATETIME`); } catch (_e) { /* already exists */ }
+  try { db.exec(`ALTER TABLE memory ADD COLUMN merged_from TEXT`); } catch (_e) { /* already exists */ }
+  try { db.exec(`ALTER TABLE memory ADD COLUMN merged_quotes TEXT`); } catch (_e) { /* already exists */ }
+  try { db.exec(`ALTER TABLE memory ADD COLUMN merged_into TEXT`); } catch (_e) { /* already exists */ }
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_merged_into ON memory(merged_into)`); } catch (_e) {}
+
   // v1.23.1: 衰减基线。importance 会被 consolidate 按年龄衰减；如果每次都在“已衰减值”上再乘一次，
   // 衰减速度就取决于 consolidate 跑了几次而不是记忆多老（实测 61 天 0.9 分 7 次运行后跌破阈值被删）。
   // base_importance 保存原始值，衰减永远从基线算；触发器覆盖所有 INSERT 路径。
@@ -508,6 +523,34 @@ export function initProjectSchema(db: Database.Database) {
              WHEN NEW.base_importance IS NULL
              BEGIN UPDATE memory SET base_importance = NEW.importance WHERE id = NEW.id; END`);
   } catch (_e) { /* trigger 已存在或旧库不支持 */ }
+
+  // v1.24: 词法通道（FTS5 trigram + 外部内容表 + 触发器）。
+  // 现有三路（tags LIKE / 向量 KNN / text LIKE）对"精确短语"无能为力：
+  // 古籍原句、卦名、错误码、路径、端口都查不到 —— 这是用户笔记里记过的老问题。
+  // 外部内容表 + 触发器让同步完全由 SQLite 负责，不需要在每个写路径上手插索引。
+  try {
+    const exists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='memory_fts'").get();
+    if (!exists) {
+      db.exec(`CREATE VIRTUAL TABLE memory_fts USING fts5(
+        text, tags, category, content='memory', content_rowid='rowid', tokenize='trigram'
+      )`);
+      db.exec(`CREATE TRIGGER IF NOT EXISTS trg_memory_fts_ai AFTER INSERT ON memory BEGIN
+        INSERT INTO memory_fts(rowid, text, tags, category) VALUES (new.rowid, new.text, new.tags, new.category);
+      END`);
+      db.exec(`CREATE TRIGGER IF NOT EXISTS trg_memory_fts_ad AFTER DELETE ON memory BEGIN
+        INSERT INTO memory_fts(memory_fts, rowid, text, tags, category) VALUES ('delete', old.rowid, old.text, old.tags, old.category);
+      END`);
+      db.exec(`CREATE TRIGGER IF NOT EXISTS trg_memory_fts_au AFTER UPDATE OF text, tags, category ON memory BEGIN
+        INSERT INTO memory_fts(memory_fts, rowid, text, tags, category) VALUES ('delete', old.rowid, old.text, old.tags, old.category);
+        INSERT INTO memory_fts(rowid, text, tags, category) VALUES (new.rowid, new.text, new.tags, new.category);
+      END`);
+      // 建表后立刻用现有行回填（外部内容表的一次性 rebuild）
+      db.exec(`INSERT INTO memory_fts(memory_fts) VALUES('rebuild')`);
+    }
+  } catch (e: any) {
+    // 无 FTS5 的构建：检索侧会自动回落到 LIKE，这里只记一次日志
+    console.error(`[db] memory_fts 不可用（${e.message}），词法检索回落 LIKE`);
+  }
 
   // Unique index for fact dedup (per-project: same SPO allowed across projects)
   // v1.23.1-fix: 不再每次启动 DROP。旧实现 DROP 成功、CREATE 因历史重复失败且被吞掉，
@@ -549,7 +592,8 @@ export function initProjectSchema(db: Database.Database) {
   // 放在建表之后、批量嵌入之前;EMBED_MODE=none 时只告警不动数据。
   ensureEmbedSpace(db);
 
-  // v1.23.3-fix: 开库时自愈历史硬删留下的孤儿向量（必须在 vec 表建好之后）
+  // v1.25-fix: 孤儿向量自愈(硬删残留 / 历史 bug 留下的 rowid 已不存在的 vec 行)。
+  // 必须在 vec 表建好之后、批量嵌入之前跑;每库每进程只跑一次。
   healVecOrphans(db);
 
   // Seed default categories (SynaBun-style hierarchical)

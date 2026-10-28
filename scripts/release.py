@@ -1,9 +1,14 @@
-"""统一发布门：版本一致性 → 构建两套引擎 → 跑全部回归+对账 → 部署 → 校验漂移。
+"""统一发布门：版本一致性 → 构建（Lite 核心 / Full 总线 / Anima）→ 跑回归+对账 → 部署 → 校验漂移。
 
 一条命令覆盖原来"手工 build / 手工 deploy / 手工对账"的全过程；任何一步失败即中止。
+
+架构（v1.25 起）：**Lite（Castalia）= 引擎核心源；Full = 总线接口（总线 + 总反思 +
+聚合星图），核心由 sync_core 同步；Anima = 情感变体，自己一条引擎线。**
+所以版本锚是 **Lite**，Full 必须与它同版；Anima 只校验自身一致（它有自己的版本号）。
+
 用法（任意目录）：
     py Castalia-Full/scripts/release.py            # 全流程
-    py Castalia-Full/scripts/release.py --check    # 只做版本检查与构建，不部署
+    py Castalia-Full/scripts/release.py --check    # 只做版本检查、构建与回归，不部署
 """
 import json
 import subprocess
@@ -11,6 +16,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+LITE = ROOT / "Castalia"
 FULL = ROOT / "Castalia-Full"
 ANIMA = ROOT / "Castalia-Anima"
 RUN = ROOT / "run"
@@ -45,61 +51,78 @@ def last_json(text):
 
 
 def check_versions():
-    version = (FULL / "VERSION").read_text(encoding="utf-8").strip()
+    version = (LITE / "VERSION").read_text(encoding="utf-8").strip()
     if not version:
-        fail("Castalia-Full/VERSION 为空")
-    if (ANIMA / "VERSION").read_text(encoding="utf-8").strip() != version:
-        fail("两套引擎的 VERSION 不一致")
+        fail("Castalia/VERSION 为空")
+    # Full = 总线接口，核心与 Lite 同源 → 必须同版
+    if (FULL / "VERSION").read_text(encoding="utf-8").strip() != version:
+        fail(f"Castalia-Full/VERSION={(FULL / 'VERSION').read_text(encoding='utf-8').strip()} != Lite {version}"
+             "（Full 是总线接口，核心跟 Lite 同步）")
+    # Anima 有自己的引擎线，只要求自身 VERSION ↔ version.ts 一致
+    anima_version = (ANIMA / "VERSION").read_text(encoding="utf-8").strip()
+    if not anima_version:
+        fail("Castalia-Anima/VERSION 为空")
 
-    for repo in (FULL, ANIMA):
-        pkg = json.loads((repo / "package.json").read_text(encoding="utf-8"))
-        if pkg.get("version") != version:
-            fail(f"{repo.name}/package.json version={pkg.get('version')} != {version}")
+    for repo, want in ((FULL, version), (ANIMA, anima_version)):
         vt = (repo / "src" / "version.ts").read_text(encoding="utf-8")
-        if f"'{version}'" not in vt:
+        if f"'{want}'" not in vt:
             fail(f"{repo.name}/src/version.ts 未同步（先跑 scripts/gen_version.mjs）")
+        pkg_path = repo / "package.json"
+        pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
+        if pkg.get("version") != want:
+            # package.json 历史上一直没跟着 VERSION 走（gen_version 只写 version.ts），
+            # 当门禁硬失败会把发布卡死在无关字段上，这里只提示。
+            print(f"[release] WARN {repo.name}/package.json version={pkg.get('version')} != {want}")
+
+    lite_pkg = json.loads((LITE / "package.json").read_text(encoding="utf-8"))
+    if lite_pkg.get("version") != version:
+        print(f"[release] WARN Castalia/package.json version={lite_pkg.get('version')} != {version}")
 
     for cfg_path in (RUN / "Castalia" / "scripts" / "castalia.config.json",
                      RUN / "LobeHub" / "scripts" / "castalia.config.json"):
         if not cfg_path.exists():
             fail(f"缺少 {cfg_path}")
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-        if (cfg.get("app") or {}).get("version") != version:
-            fail(f"{cfg_path} app.version={(cfg.get('app') or {}).get('version')} != {version}")
         variants = {i.get("variant") for i in cfg.get("instances") or []}
         if not variants <= {"full", "anima"}:
             fail(f"{cfg_path} 仍有非统一变体: {sorted(variants)}")
-    print(f"[release] version OK: {version}")
+    print(f"[release] version OK: Lite {version} / Anima {anima_version}")
     return version
 
 
 def check_core():
-    """Lite 是引擎核心源；Full 的核心必须与之一致（Full 只多 bus 模块）。"""
+    """Lite 是引擎核心源；Full（总线接口）的核心必须与之一致，且总线工具必须在。"""
     proc = subprocess.run([PY, "Castalia-Full/scripts/sync_core.py"], cwd=str(ROOT),
                           capture_output=True, text=True, encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         print(proc.stdout or "")
-        fail("Full 核心与 Lite 漂移（跑 sync_core.py --apply）")
-    pkg = json.loads((ROOT / "Castalia" / "package.json").read_text(encoding="utf-8"))
-    if pkg.get("version") != (FULL / "VERSION").read_text(encoding="utf-8").strip():
-        fail("Lite package.json 版本不一致")
-    print("[release] core sync OK (Lite -> Full)")
+        fail("Full 核心与 Lite 漂移，或总线工具缺失（跑 sync_core.py --apply 后再看 busMissing）")
+    pkg = json.loads((LITE / "package.json").read_text(encoding="utf-8"))
+    if pkg.get("version") not in (None, (LITE / "VERSION").read_text(encoding="utf-8").strip()):
+        print("[release] WARN Lite package.json 与 VERSION 不一致（不影响发布）")
+    print("[release] core sync OK (Lite -> Full bus)")
 
 
 def build():
-    for repo in (FULL, ANIMA, ROOT / "Castalia"):
+    """Lite 核心 / Full 总线（含 fedServer 独立进程）/ Anima 三条产物都要能构建。"""
+    for repo in (LITE, FULL, ANIMA):
         if not (repo / "src").is_dir():
             fail(f"{repo} 缺少 src")
         run([NODE, "scripts/gen_version.mjs"], repo)
         run([NODE, "node_modules/typescript/bin/tsc", "-p", "tsconfig.build.json"], repo)
+    for entry in ("index.js", "fedServer.js"):
+        if not (FULL / "dist" / entry).is_file():
+            fail(f"Full 构建缺少总线产物 dist/{entry}")
 
 
 def tests():
     results = {}
-    full = last_json(run([NODE, "scripts/regression_reflection.mjs"], FULL))
-    if not full or not full.get("ok"):
-        fail(f"Full 回归失败: {full}")
-    results["full"] = full
+    # Full 侧：总反思（reflect_all 的落点）+ 总线面聚合（memory_context/index/context_get 跨库）
+    for script in ("regression_reflection.mjs", "regression_context.mjs", "regression_engine.mjs"):
+        r = last_json(run([NODE, f"scripts/{script}", "."], FULL))
+        if not r or not r.get("ok"):
+            fail(f"Full {script} 失败: {r}")
+        results[script] = r
     for script in ("regression_facts.mjs", "regression_v123_anima.mjs", "regression_anima_audit.mjs"):
         r = last_json(run([NODE, f"scripts/{script}", "."], ANIMA))
         if not r or not r.get("ok"):

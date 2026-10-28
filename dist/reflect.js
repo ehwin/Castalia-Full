@@ -214,11 +214,19 @@ export async function applyReflectActions(actions, characterId = 'airi', project
         };
         try {
             action = { ...action };
-            // v1.23-fix: 整合模式放行 merge（合并结果落库后再软删源，内容可回查）；其余破坏性动作照旧禁止。
-            const mergeAllowedByConsolidation = options.consolidation === true && action.action === 'merge';
-            if ((protectedReflectionProject(project) || (options.automatic && reflectionPolicy(project) === 'evidence')) &&
-                !mergeAllowedByConsolidation &&
-                (['merge', 'delete', 'split', 'identityUpdate'].includes(action.action) || (action.action === 'reclassify' && action.newText !== undefined))) {
+            // v1.24 保真契约（C-1 修正版，与 v1.23-fix 合并后）：
+            //   · verbatim：任何路径都不得改写 —— merge/delete/split/identityUpdate/reclassify(newText) 全拒。
+            //   · evidence + 自动路径（consolidate_deep 启动即跑）：禁止**不可追回**的破坏性动作
+            //     （delete/split/identityUpdate/reclassify-newText）；merge **放行**。
+            // 为什么 merge 放行：v1.23-fix 已经证明"evidence 下拒绝 merge"会让整合退化成
+            // 逐条重摘要（merged 恒 0、净增记忆、token 照烧）；而 C-1 要治的是"无痕"，不是 merge 本身 ——
+            // 现在 merge 强制写 merged_from/merged_quotes，源行标 superseded + merged_into 并保留向量，
+            // 源文可 memory_get(includeInactive) 原样追回。旧实现两者都没做，才留下 424 条死行。
+            const policy = reflectionPolicy(project);
+            const guardActive = policy === 'verbatim' || (options.automatic && policy === 'evidence');
+            const untraceable = ['delete', 'split', 'identityUpdate'].includes(action.action)
+                || (action.action === 'reclassify' && action.newText !== undefined);
+            if (guardActive && (untraceable || (action.action === 'merge' && policy === 'verbatim'))) {
                 throw new Error('preservation policy forbids destructive reflection actions');
             }
             if (action.action === 'reclassify') {
@@ -301,22 +309,56 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                         project,
                         source: 'reflect_merge',
                     });
+                    // ═══ v1.24 (C-2) 血缘：合并必须可追溯，源行不得静默消失 ═══
+                    // Graphiti EntityEdge 语义的本地化：
+                    //   结果行 → merged_from(源 id 列表) + merged_quotes(逐字引证) + valid_at/reference_time
+                    //   源行   → is_active=0 + status='superseded' + expired_at + merged_into(反向指针)
+                    // 向量**保留**（旧实现 DELETE FROM vec_memory，导致源行即使按 id 也取不回原文的可检索性）。
+                    const nowIso = new Date().toISOString();
+                    // 合并前先把源正文读出来：既能算引证，也能在写失败时保持可复述。
+                    const srcTexts = mergeSources
+                        .filter(s => s.id !== merged.id)
+                        .map(s => {
+                        const row = s.db.prepare('SELECT text, created_at FROM memory WHERE id = ?').get(s.id);
+                        return { id: s.id, text: String(row?.text || ''), createdAt: String(row?.created_at || '') };
+                    });
+                    // 引证：每条源取"首个 ≥24 字、≤160 字的连续片段"，最多 3 条。子串天然成立（就是切出来的），
+                    // 但写入前仍做一次 includes 校验，防止 normalizeMarkdown 之类的重写让引证与源脱钩。
+                    const quotes = [];
+                    for (const s of srcTexts) {
+                        if (quotes.length >= 3)
+                            break;
+                        const flat = s.text.replace(/\s+/g, ' ').trim();
+                        const m = /[^。；！？.!?\n]{24,160}/.exec(flat);
+                        const q = (m ? m[0] : flat.slice(0, 120)).trim();
+                        if (!q || q.length < 24)
+                            continue;
+                        if (!flat.includes(q))
+                            continue;
+                        quotes.push({ id: s.id, q });
+                    }
+                    const validAt = srcTexts.map(s => s.createdAt).filter(Boolean).sort()[0] || nowIso;
+                    try {
+                        const mergedDb = memDbFor(merged.id, project, db);
+                        mergedDb.prepare(`UPDATE memory SET merged_from = ?, merged_quotes = ?, valid_at = ?, reference_time = ? WHERE id = ?`)
+                            .run(JSON.stringify(srcTexts.map(s => s.id)), JSON.stringify(quotes), validAt, validAt, merged.id);
+                    }
+                    catch (e) {
+                        console.error('[reflect] merge 血缘写入失败（合并结果仍有效）:', e.message);
+                        receipt.reason = `provenance: ${e.message}`;
+                    }
                     receipt.rowsAffected = mergeSources.length;
-                    // 所有源均已确认 active 且合并结果已落库后，才软删除并清理向量。
+                    // 所有源均已确认 active 且合并结果已落库后，才标记取代（软失效，不删行、不删向量）。
+                    let superseded = 0;
                     for (const src of mergeSources) {
                         if (src.id === merged.id)
                             continue;
-                        src.db.prepare('UPDATE memory SET is_active = 0 WHERE id = ? AND is_active = 1 AND (locked IS NULL OR locked = 0) AND COALESCE(identity_locked, 0) = 0').run(src.id);
-                        try {
-                            const row = src.db.prepare('SELECT rowid FROM memory WHERE id = ?').get(src.id);
-                            if (row)
-                                src.db.prepare('DELETE FROM vec_memory WHERE rowid = ?').run(row.rowid);
-                        }
-                        catch { /* 无向量时不阻断合并 */ }
+                        superseded += src.db.prepare(`UPDATE memory SET is_active = 0, status = 'superseded', expired_at = ?, merged_into = ?
+               WHERE id = ? AND is_active = 1 AND (locked IS NULL OR locked = 0) AND COALESCE(identity_locked, 0) = 0`).run(nowIso, merged.id, src.id).changes;
                     }
                     if (receipt.status === 'applied')
                         result.applied++;
-                    result.details.push(`merge: ${action.sourceIds.length} → 1`);
+                    result.details.push(`merge: ${action.sourceIds.length} → 1（superseded ${superseded}，引证 ${quotes.length}）`);
                     break;
                 }
                 case 'split': {
@@ -456,7 +498,7 @@ export async function applyReflectActions(actions, characterId = 'airi', project
                         const names = { type: 'type', category: 'category', tags: 'tags', mem_type: 'memType', text: 'text' };
                         updates.forEach((field, i) => {
                             const key = field.split(' = ')[0];
-                            patch[names[key]] = key === 'tags' ? JSON.parse(values[i]) : values[i];
+                            patch[names[key]] = key === 'tags' ? parseTagsSafe(values[i]) : values[i];
                         });
                         const updated = await updateMemory(tid, patch);
                         const _recR = { changes: updated ? 1 : 0 };

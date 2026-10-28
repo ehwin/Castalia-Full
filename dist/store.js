@@ -8,8 +8,8 @@ import { DatabaseManager, generateId, listMemTypeDirs } from './db.js';
 import { embed, getEmbeddingCached } from './ollama.js';
 import { CHAR_ID, normalizeProject, isEmbedEnabled } from './env.js';
 import { isMemType, isClosedMemType, normalizeMarkdown, normalizeMemType } from './memType.js';
+import { parseTagsSafe, normalizeTagsForWrite, serializeTags } from './tags.js';
 import { reflectionPolicySafe } from './reflectionFidelity.js';
-import { normalizeTags, normalizeTagsForWrite, parseTagsSafe, serializeTags } from './tags.js';
 let saveCount = 0;
 const CONSOLIDATE_INTERVAL = 50;
 export async function saveMemory(params) {
@@ -122,7 +122,7 @@ export async function saveMemory(params) {
         memType,
         category: params.category ?? 'general',
         subcategory: params.subcategory ?? null,
-        tags: normalizeTags(params.tags),
+        tags: normalizeTagsForWrite(params.tags),
         importance: params.importance ?? 0.5,
         characterId: params.characterId ?? null,
         source: params.source ?? null,
@@ -145,7 +145,7 @@ export async function saveMemory(params) {
         if (!skipEmbed && vector) {
             const info = db.prepare('SELECT rowid FROM memory WHERE id = ?').get(record.id);
             const rowid = BigInt(info.rowid);
-            // v1.23.3-fix: 新行刚拿到该 rowid，memory 里不可能有别的行占用它；
+            // v5.0-fix: 新行刚拿到该 rowid，memory 里不可能有别的行占用它；
             // 若 vec_memory 同 rowid 已有行，必是历史硬删留下的孤儿。先清再插，
             // 否则 sqlite-vec 主键冲突会让整笔记忆永久保存失败。
             try {
@@ -217,7 +217,9 @@ export async function updateMemory(id, updates) {
         const proj = normalizeProject(updates.project);
         const newDb = DatabaseManager.getInstance(proj, newMt);
         const text = updates.text !== undefined ? normalizeMarkdown(updates.text, newMt) : existing.text;
-        const tags = updates.tags !== undefined ? serializeTags(updates.tags) : serializeTags(parseTagsSafe(existing.tags));
+        const tags = updates.tags !== undefined
+            ? serializeTags(updates.tags)
+            : serializeTags(existing.tags);
         const now = new Date().toISOString();
         // v1.23.2-fix: 搬家保留 parent_id/base_importance；先清目标库同 id 的旧向量，
         // 否则 INSERT OR REPLACE 换 rowid 后旧向量成为孤儿（KNN 白占名额，rowid 复用还会算错记忆）。
@@ -247,8 +249,7 @@ export async function updateMemory(id, updates) {
             }
         }
         catch { /* 无向量/损坏忽略 */ }
-        // 源库留墓碑；顺手把历史脏 tags 归一化，避免 tombstone 继续污染 tags 列。
-        db.prepare('UPDATE memory SET is_active = 0, tags = ? WHERE id = ?').run(serializeTags(parseTagsSafe(existing.tags)), id);
+        db.prepare('UPDATE memory SET is_active = 0 WHERE id = ?').run(id);
         db = newDb;
         // 已处理 memType 变更,移除以免重复 SET
         if (updates.memType !== undefined)
@@ -357,8 +358,8 @@ export async function saveConversationTurn(userMsg, assistantMsg, characterId = 
     }
     db.prepare(`
     INSERT INTO memory (id, text, project, type, category, tags, importance, character_id, source, subject, tier, expires_at, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count, metadata)
-    VALUES (?, ?, ?, 'episodic', 'conversation', '[]', 0.3, ?, 'conversation_log', 'user', 'standard', NULL, 0, ?, ?, ?, 0, 0, ?)
-  `).run(id, text, proj, characterId, now, now, now, JSON.stringify(meta));
+    VALUES (?, ?, ?, 'episodic', 'conversation', ?, 0.3, ?, 'conversation_log', 'user', 'standard', NULL, 0, ?, ?, ?, 0, 0, ?)
+  `).run(id, text, proj, serializeTags([]), characterId, now, now, now, JSON.stringify(meta));
     return { id, ok: true };
 }
 /**
@@ -463,7 +464,7 @@ export async function reEmbedMemory(id, project) {
  * v1.5: 支持按项目隔离 — 传 project 只处理该项目;不传则默认项目
  * 扫描 is_active=1 但 vec_memory 中无对应向量的记录
  */
-export async function batchEmbedPending(characterId = 'airi', project) {
+export async function batchEmbedPending(characterId = 'airi', project, opts = {}) {
     if (!isEmbedEnabled())
         return { embedded: 0, embeddedFacts: 0, errors: ['embedding disabled (EMBED_MODE=none)'] };
     const proj = normalizeProject(project);
@@ -473,6 +474,18 @@ export async function batchEmbedPending(characterId = 'airi', project) {
     // memdir:遍历项目全部分类库补嵌入
     for (const mt of DatabaseManager.existingMemTypes(proj)) {
         const db = DatabaseManager.getInstance(proj, mt);
+        // v1.24: 嵌入空间切换后，旧空间留下的失败计数没有意义（失败原因已不存在），
+        // 否则这些行会被 COALESCE(embed_fail_count,0) < 3 永久挡在窗口外 —— 实测本机 190 条
+        // 卡在 fc=3，覆盖率永远是 74%。resetFailures 只清"没有向量"的行，不会掩盖真错误：
+        // 每轮重新失败一样会被重新计数。
+        if (opts.resetFailures) {
+            try {
+                db.prepare(`UPDATE memory SET embed_fail_count = 0
+        WHERE COALESCE(embed_fail_count, 0) >= 3
+          AND rowid NOT IN (SELECT rowid FROM vec_memory)`).run();
+            }
+            catch { /* 旧库无列 */ }
+        }
         // 找所有有记忆但无向量的记录(source 为 NULL 也算,修复 NULL != 'x' 恒假的坑)
         // characterId='any' 时不按角色过滤(跨库产物如 reflect 库 character_id 为 NULL 也能补嵌入)
         const conditions = [
@@ -499,18 +512,49 @@ export async function batchEmbedPending(characterId = 'airi', project) {
         for (const row of pending) {
             try {
                 const vec = new Float32Array(await embed(row.text, project));
+                // v1.24: 先删后插 —— 多个引擎共用一个库时（bridge 各自起进程），
+                // 补历史欠账会并发插同一个 rowid，直接 INSERT 会撞
+                // "UNIQUE constraint failed on vec_memory primary key"（本机实测 165 条）。
+                // 行已被别的进程补上时，这次覆盖是同值，无害。
+                try {
+                    db.prepare('DELETE FROM vec_memory WHERE rowid = ?').run(BigInt(row.rowid));
+                }
+                catch { /* 无 vec 表 */ }
                 db.prepare('INSERT INTO vec_memory (rowid, embedding) VALUES (?, ?)').run(BigInt(row.rowid), vec);
                 db.prepare('UPDATE memory SET embed_fail_count = 0 WHERE rowid = ?').run(row.rowid);
                 embedded++;
             }
             catch (e) {
-                // 失败重试 3 次后跳过，避免坏记录永久堵住窗口
-                try {
-                    db.prepare('UPDATE memory SET embed_fail_count = COALESCE(embed_fail_count, 0) + 1 WHERE rowid = ?').run(row.rowid);
+                // v1.24: 并发/重入时 rowid 可能已被别人补上 —— 只要现在有向量就算成功，
+                // 不要把它记成失败（否则 embed_fail_count 被无谓推到 3，窗口永久跳过）。
+                const dup = /UNIQUE constraint failed on vec_memory/i.test(String(e.message));
+                let nowHasVec = false;
+                if (dup) {
+                    try {
+                        nowHasVec = !!db.prepare('SELECT rowid FROM vec_memory WHERE rowid = ?').get(BigInt(row.rowid));
+                    }
+                    catch { /* 忽略 */ }
                 }
-                catch { /* 旧库无列 */ }
-                errors.push(`${row.id}: ${e.message}`);
+                if (nowHasVec) {
+                    try {
+                        db.prepare('UPDATE memory SET embed_fail_count = 0 WHERE rowid = ?').run(row.rowid);
+                    }
+                    catch { /* 旧库无列 */ }
+                    embedded++;
+                }
+                else {
+                    // 失败重试 3 次后跳过，避免坏记录永久堵住窗口
+                    try {
+                        db.prepare('UPDATE memory SET embed_fail_count = COALESCE(embed_fail_count, 0) + 1 WHERE rowid = ?').run(row.rowid);
+                    }
+                    catch { /* 旧库无列 */ }
+                    errors.push(`${row.id}: ${e.message}`);
+                }
             }
+            // v1.24: 补历史欠账时是连续几百次请求，远端 API 会 429（表现为 fetch failed）。
+            // 加一点间隔比调大重试次数便宜；正常写入路径默认 0 延迟，不受影响。
+            if (opts.paceMs && opts.paceMs > 0)
+                await new Promise(r => setTimeout(r, opts.paceMs));
         }
     }
     // v1.21: facts 补嵌入 —— saveFacts 只在写入那一刻嵌,历史 facts 会永远缺向量(fact_search 的 KNN 搜不到)
@@ -702,8 +746,8 @@ export function upsertSessionMemory(project, sessionId, content, memType) {
     const id = generateId();
     db.prepare(`
     INSERT INTO memory (id, text, project, session_id, type, mem_type, category, tags, importance, source, subject, tier, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
-    VALUES (?, ?, ?, ?, 'episodic', ?, 'session', '[]', 0.5, 'session_memory', 'user', 'standard', 1, ?, ?, ?, 0, 0)
-  `).run(id, content, proj, sessionId, normalizeMemType(memType), now, now, now);
+    VALUES (?, ?, ?, ?, 'episodic', ?, 'session', ?, 0.5, 'session_memory', 'user', 'standard', 1, ?, ?, ?, 0, 0)
+  `).run(id, content, proj, sessionId, normalizeMemType(memType), serializeTags([]), now, now, now);
     return { id, updated: false };
 }
 /**
@@ -808,7 +852,7 @@ export function promoteToProject(project, items, characterId) {
         db.prepare(`
       INSERT INTO memory (id, text, project, session_id, type, mem_type, category, tags, importance, character_id, source, subject, tier, is_active, created_at, updated_at, last_accessed_at, accessed_count, reference_count)
       VALUES (?, ?, ?, NULL, 'semantic', ?, ?, ?, ?, ?, 'session_promoted', 'user', 'standard', 1, ?, ?, ?, 0, 0)
-    `).run(id, md, proj, mt, (item.category && String(item.category).trim().slice(0, 40)) || 'knowledge', '[]', 0.6, cid, now, now, now);
+    `).run(id, md, proj, mt, (item.category && String(item.category).trim().slice(0, 40)) || 'knowledge', serializeTags([]), 0.6, cid, now, now, now);
         ids.push(id);
     }
     return ids;
@@ -886,10 +930,7 @@ export async function applyIdentityActions(actions, project) {
             // merge:tags 合并去重、metadata 对象级 merge,其余字段由 set 覆盖
             const merged = { ...u.set, project, type: 'entity' };
             if (u.set.tags && existing.tags) {
-                try {
-                    merged.tags = [...new Set([...parseTagsSafe(existing.tags), ...normalizeTagsForWrite(u.set.tags)])];
-                }
-                catch { /* 保持 set */ }
+                merged.tags = [...new Set([...parseTagsSafe(existing.tags), ...normalizeTagsForWrite(u.set.tags)])];
             }
             if (u.set.metadata && existing.metadata) {
                 try {

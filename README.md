@@ -1,14 +1,42 @@
 # Castalia — Standalone MCP Memory Server for Agent Harnesses
 
-**Standard MCP stdio server (32 tools in this edition, profile-gated).** Local memory on SQLite (per-project DB files) + sqlite-vec vectors — **zero API cost** for storage, works offline once the embedding model is cached.
+**Bus interface over the Castalia memory engine (34 tools in the engine entry + a standalone bus process with 2 tools).** Local memory on SQLite (per-project DB files) + sqlite-vec vectors — **zero API cost** for storage, works offline once the embedding model is cached.
 
 Independent, neutral, general-purpose memory component. No personality layer, no vendor lock-in — bring your own LLM, bring your own embedding service (any Ollama-compatible `/api/embed`; vector dimension configurable, default 1024).
 
 Designed after studying Claude Code's memory architecture (closed memory types, progressive session maintenance, consolidation) and engram / memory-os patterns.
 
-> **Full edition (this repo):** adds **cross-library federation** — `reflect_all` (LLM-driven cross-library reflection into the `reflect` project) + `memory_search_all` (federation search over `FEDERATION_DIRS`). For the single-instance lite edition see **[Castalia](https://github.com/ehwin/Castalia)**. For the emotional variant (agent state / bias layer / emotion-weighted search), see **[Castalia-Anima](https://github.com/ehwin/Castalia-Anima)**.
+> **This repo is the bus interface, not a separate engine edition (v1.25).** The engine core lives in **[Castalia](https://github.com/ehwin/Castalia)** (Lite) and is copied into this repo by `scripts/sync_core.py`; nothing here diverges except the bus entry. What Full adds on top of the core:
+> * `reflect_all` — LLM-driven **cross-library reflection** into the dedicated `reflect` project (总反思)
+> * `memory_search_all` — federation search over local library dirs or remote MCP endpoints (总线)
+> * `federation_members` — member inventory / capability & scale negotiation, served by the standalone bus process `dist/fedServer.js`
+> * the aggregate star map (web console)
+>
+> The emotional variant (agent state / bias layer / emotion-weighted search) is **[Castalia-Anima](https://github.com/ehwin/Castalia-Anima)**, which keeps its own engine line and its own version.
 
 Full owns its aggregate bank and reflection pipeline. Source banks are read-only inputs; Full's outputs stay in its own `reflect` project and never replace Anima or a neutral harness's local reflection. Consumers such as AIRI read Full and Anima separately and keep their provenance distinct. Full's aggregation prompt is independent of any consumer's persona.
+
+### Runtime layout (what runs where)
+
+| Process | Entry | Port | Role |
+|---|---|---|---|
+| engine entry | `dist/index.js` | — (stdio behind mcp-proxy) | core + `reflect_all` / `memory_search_all` |
+| bus process | `dist/fedServer.js` | — (stdio behind mcp-proxy) | `memory_search_all` / `federation_members`, read-only over members |
+| federation bridge | mcp-proxy → `fedServer.js` | **3314** | the tray-managed bus endpoint |
+| aggregate star map | `web/server.mjs` | **3348** | 3D view over all banks |
+
+### Keeping the bus in sync (scripts/)
+
+```
+py  Castalia-Full/scripts/sync_core.py            # core drift check (Lite -> Full) + bus self-check
+py  Castalia-Full/scripts/sync_core.py --apply    # pull the core from Lite
+py  Castalia-Full/scripts/port_bus_entry.py       # rebuild src/index.ts = Lite entry + bus tools
+py  Castalia-Full/scripts/check_parity.mjs        # lite vs full source markers (anima is a reference column)
+py  Castalia-Full/scripts/release.py --check      # versions + build + regressions, no deploy
+py  Castalia-Full/scripts/deploy_runtime.py       # deploy dist/ into run/* (refuses a bus without fedServer.js)
+```
+
+Version anchor is **Lite**: `Castalia/VERSION` == `Castalia-Full/VERSION`; Anima versions itself.
 
 > 📖 详细技术设计见 [docs/TECHNICAL.md](docs/TECHNICAL.md)(架构/数据模型/管线/决策记录)。
 
@@ -369,7 +397,7 @@ The 3D view is a **semantic map**, not a decorative layout:
 
 Independent evolution of a memory system; design informed by:
 
-- **[Castalia](https://github.com/ehwin/Castalia)** — lite edition of this project (single-instance, no federation); same neutral core
+- **[Castalia](https://github.com/ehwin/Castalia)** — the engine core (Lite) that this bus mounts; single-instance, no federation, same neutral core
 - **[Castalia-Anima](https://github.com/ehwin/Castalia-Anima)** — the emotional variant (personality layer on the same architecture); the repos cross-pollinate — Anima feeds architecture back into Castalia, Castalia keeps the neutral core stable
 - **Claude Code** (Anthropic) — closed memory types (user/feedback/project/reference), MEMORY.md index, progressive session maintenance, consolidation sub-agent, snapshot warnings (patterns re-implemented in SQLite)
 - **engram** — profile-gated tool exposure, setup script

@@ -1,7 +1,12 @@
 """Deploy compiled modules with import preflight, hashes and rollback.
 
-架构：**Lite（Castalia）= 默认记忆引擎**；Anima = 情感变体；Full = 联邦/跨库总线。
-所以普通记忆桥跑 Lite，AIRI 跑 Anima，只有联邦接口跑 Full（bus）。
+架构（v1.25 起）：
+  Lite（Castalia） = 引擎核心源 → run/Castalia、run/LobeHub（普通记忆桥）
+  Anima            = 情感变体  → run/Castalia-Anima（AIRI）
+  Full             = 总线接口  → run/Castalia-Federation（3314：fedServer 总线进程
+                     + 带 reflect_all 的总反思入口 + 聚合星图 3348）
+Full 的核心由 sync_core.py 从 Lite 同步，所以它部署出去的必须是"核心 + 总线模块"
+两样都在的产物：缺 dist/fedServer.js 就只是又一份引擎副本，这里直接拒部署。
 
 This copies code only: no banks, keys, environment or instance configuration.
 """
@@ -31,6 +36,9 @@ def plan():
         dst = ROOT / target / 'dist'
         if not (src / 'index.js').is_file() or not dst.is_dir():
             raise ValueError(f'missing build/runtime: {source} -> {target}')
+        # 总线运行时的最低要求：Full 必须部署出独立总线进程，否则只是引擎副本
+        if source == 'Castalia-Full' and not (src / 'fedServer.js').is_file():
+            raise ValueError(f'Castalia-Full 缺少总线产物 dist/fedServer.js（先构建 Full）')
         wanted = set()
         for file in src.rglob('*.js'):
             text = file.read_text(encoding='utf-8')
