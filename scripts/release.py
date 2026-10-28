@@ -145,14 +145,31 @@ def deploy():
     return before, after
 
 
+def check_tray():
+    """托盘运行时源（Castalia-Full/scripts/tray）→ run/Castalia/scripts 不能漂移。
+
+    实例镜像（LobeHub / AIRI）由 sync_to_instances.py 分发，可能滞后（比如对方机器没部署），
+    所以发布门槛只卡"源→主目录"这一段；镜像漂移数只报出来给人看。
+    """
+    proc = subprocess.run([PY, "Castalia-Full/scripts/deploy_tray.py", "--no-fanout", "--json"],
+                          cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace")
+    summary = last_json(proc.stdout or "")
+    if proc.returncode != 0 or not summary or not summary.get("ok"):
+        fail(f"托盘源与主目录漂移（跑 deploy_tray.py --apply）: {summary or proc.stdout or proc.stderr}")
+    fan = last_json(run([PY, "Castalia-Full/scripts/deploy_tray.py", "--json"], ROOT))
+    return {"files": summary.get("files"), "drift": len(summary.get("primaryDrifted") or []),
+            "fanoutPending": (fan or {}).get("fanoutExit")}
+
+
 def main():
     check_only = "--check" in sys.argv
     version = check_versions()
     check_core()
     build()
     results = tests()
-    summary = {"version": version, "checks": {k: v.get("checks") for k, v in results.items()},
-               "parity": results["parity"].get("features"), "deployed": None}
+    tray = check_tray()
+    summary = {"version": version, "checks": {k: (v or {}).get("checks") for k, v in results.items()},
+               "parity": (results["parity"] or {}).get("features"), "tray": tray, "deployed": None}
     if not check_only:
         before, _ = deploy()
         summary["deployed"] = before.get("changedModules")

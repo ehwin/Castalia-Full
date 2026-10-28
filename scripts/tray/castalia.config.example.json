@@ -1,0 +1,334 @@
+{
+  "_comment": "Castalia 记忆体 · 实例配置。开源用户只需改这里:paths 指向你的目录,instances 按需增删。home 可用环境变量 CASTALIA_HOME 覆盖;相对路径相对本文件所在目录解析。",
+  "app": {
+    "name": "Castalia 记忆体",
+    "version": "1.25.1",
+    "publisher": "Castalia 记忆体项目",
+    "desc": "记忆体联邦控制台与运行时看护"
+  },
+  "env": {
+    "_comment": "部署级个性化:公共源码默认中性(助手=助手、不绑定具体领域);本机在这里恢复。",
+    "CASTALIA_ASSISTANT_NAME": "尤诺",
+    "REFLECT_VERBATIM_PROJECTS": "shushu,术数,bazi,ziwei",
+    "REFLECT_EVIDENCE_PROJECTS": "engineering,工程,castalia,lobehub,dsh,hermes"
+  },
+  "paths": {
+    "home": "D:/AI/castalia",
+    "run": "D:/AI/castalia/run/Castalia",
+    "lobehubRun": "D:/AI/castalia/run/LobeHub",
+    "banks": "D:/AI/castalia/memory-banks",
+    "anima": "D:/AI/castalia/run/Castalia-Anima",
+    "airiBase": "D:/system/AIRI",
+    "lobehubDir": "D:/AI/lobehub",
+    "node": "D:/AI/castalia/run/Castalia/bin/CastaliaNode.exe",
+    "pythonHost": "D:/AI/castalia/run/Castalia/Castalia/Castalia.exe",
+    "runFed": "run/Castalia-Federation"
+  },
+  "instances": [
+    {
+      "id": "hermes",
+      "label": "Hermes 记忆体",
+      "variant": "full",
+      "icon": "tray-icons/brand/lite-tray.png",
+      "bank": "hermes",
+      "char": "hermes",
+      "project": "hermes"
+    },
+    {
+      "id": "dsh",
+      "label": "DSH 记忆体",
+      "variant": "full",
+      "icon": "tray-icons/brand/lite-tray.png",
+      "bank": "dsh",
+      "char": "dsh",
+      "project": "dsh"
+    },
+    {
+      "id": "lobehub",
+      "label": "LobeHub 记忆体",
+      "variant": "full",
+      "icon": "tray-icons/brand/lite-tray.png",
+      "bank": "lobehub",
+      "char": "lobehub",
+      "project": "lobehub"
+    },
+    {
+      "id": "airi",
+      "label": "AIRI（Anima）",
+      "variant": "anima",
+      "icon": "tray-icons/brand/anima-tray.png",
+      "bank": "airi",
+      "char": "airi",
+      "project": "airi"
+    },
+    {
+      "id": "full",
+      "label": "Full 汇总",
+      "variant": "full",
+      "icon": "tray-icons/brand/max-tray.png",
+      "bank": "full",
+      "char": "full",
+      "project": "full"
+    }
+  ],
+  "bridges": [
+    {
+      "id": "lobehub-bridge",
+      "name": "LobeHub 记忆桥",
+      "port": 3310,
+      "instance": "lobehub",
+      "char": "lobehub",
+      "project": "lobehub",
+      "bank": "lobehub"
+    },
+    {
+      "id": "shushu-bridge",
+      "name": "术数记忆桥",
+      "port": 3312,
+      "instance": "lobehub",
+      "char": "shushu",
+      "project": "shushu",
+      "bank": "lobehub",
+      "env": {
+        "REFLECT_PROMPT_FILE": "D:/AI/castalia/run/Castalia/scripts/prompts/shushu-reflect.md",
+        "CONSOLIDATE_PROMPT_FILE": "D:/AI/castalia/run/Castalia/scripts/prompts/shushu-consolidate.md",
+        "CONSOLIDATE_AUTO_ON_START": "0",
+        "REFLECT_MAX_FACTS": "8"
+      }
+    },
+    {
+      "id": "hermes-bridge",
+      "name": "Hermes 记忆桥",
+      "port": 3316,
+      "instance": "hermes",
+      "char": "hermes",
+      "project": "hermes",
+      "bank": "hermes"
+    },
+    {
+      "id": "dsh-bridge",
+      "name": "DSH 记忆桥",
+      "port": 3318,
+      "instance": "dsh",
+      "char": "dsh",
+      "project": "dsh",
+      "bank": "dsh"
+    }
+  ],
+  "viz": [
+    {
+      "id": "hermes",
+      "name": "Hermes 星图",
+      "port": 3345,
+      "instance": "hermes",
+      "dir": "run/viz",
+      "bank": "hermes",
+      "env": {
+        "GRAPH_CATEGORY_INSTANCES": "airi"
+      }
+    },
+    {
+      "id": "dsh",
+      "name": "DSH 星图",
+      "port": 3347,
+      "instance": "dsh",
+      "dir": "run/viz",
+      "bank": "dsh",
+      "env": {
+        "CASTALIA_PROJECT": "dsh",
+        "CHAR_ID": "dsh",
+        "GRAPH_CATEGORY_INSTANCES": "airi"
+      }
+    },
+    {
+      "id": "lobehub",
+      "name": "LobeHub 星图",
+      "port": 3346,
+      "instance": "lobehub",
+      "dir": "lobehubRun/viz",
+      "bank": "lobehub",
+      "env": {
+        "GRAPH_CATEGORY_INSTANCES": "airi"
+      }
+    },
+    {
+      "id": "airi",
+      "name": "AIRI 星图",
+      "port": 3344,
+      "instance": "airi",
+      "dir": "airiBase/viz",
+      "bank": "airi",
+      "env": {
+        "ANIMA_DIR": "anima",
+        "GRAPH_CATEGORY_INSTANCES": "airi",
+        "CASTALIA_MCP": "anima/dist/index.js"
+      }
+    },
+    {
+      "id": "full",
+      "name": "Full 汇总星图",
+      "port": 3348,
+      "instance": "full",
+      "dir": "D:/AI/castalia/Castalia-Full/web",
+      "bank": "full",
+      "federation": true,
+      "env": {
+        "CASTALIA_MCP": "D:/AI/castalia/Castalia-Full/dist/index.js",
+        "GRAPH_CATEGORY_INSTANCES": "airi"
+      }
+    }
+  ],
+  "airiProxy": {
+    "id": "airi-proxy",
+    "name": "AIRI 代理",
+    "port": 5050,
+    "instance": "airi",
+    "script": "airiBase/unified-proxy/proxy.py",
+    "cwd": "airiBase/unified-proxy",
+    "bank": "airi",
+    "char": "airi",
+    "project": "airi",
+    "onDemand": true
+  },
+  "embed": {
+    "id": "embed",
+    "name": "嵌入",
+    "port": 11436,
+    "script": "run/yuan_embed_server.py",
+    "cwd": "run",
+    "onDemand": true
+  },
+  "extraServices": [
+    {
+      "id": "lemonade",
+      "name": "AIRI 分拣",
+      "port": 13305,
+      "instance": "airi",
+      "program": "D:/AI/Lemonade/bin/LemonadeServer.exe",
+      "cwd": "D:/AI/Lemonade/bin",
+      "onDemand": true
+    }
+  ],
+  "federation": [
+    {
+      "name": "Hermes",
+      "dir": "D:/AI/castalia/memory-banks/hermes"
+    },
+    {
+      "name": "DSH",
+      "dir": "D:/AI/castalia/memory-banks/dsh"
+    },
+    {
+      "name": "LobeHub",
+      "dir": "D:/AI/castalia/memory-banks/lobehub"
+    },
+    {
+      "name": "AIRI",
+      "dir": "D:/AI/castalia/memory-banks/airi"
+    },
+    {
+      "name": "Full",
+      "dir": "D:/AI/castalia/memory-banks/full"
+    }
+  ],
+  "shell": {
+    "_comment": "桌面外壳:把星图/记忆总成这些网页收进一个原生窗口(castalia_shell.py)。托盘「打开…」入口优先送进它,已在跑就导航过去。删掉本段即回到浏览器。port = 外壳的本地控制端口。",
+    "id": "shell",
+    "name": "控制台",
+    "port": 3397
+  },
+  "tray": {
+    "_comment": "托盘自身的控制端口(仅 127.0.0.1)。端口即身份:抢到端口=我是唯一托盘,抢不到=已有托盘在跑,第二实例把 --status/--quit/--activate 转发给首实例后退出(与 shell.port 同一套做法)。外部也可直接 Castalia.exe castalia_tray.py --quit 关托盘。",
+    "id": "tray",
+    "name": "托盘",
+    "port": 3398
+  },
+  "webApp": {
+    "_comment": "网页壳偏好:某些入口(如 LobeHub)更适合直接开网页窗口,不收进原生外壳。mode = edge(Edge 应用窗口 --app:无地址栏、独立任务栏图标、沿用默认 Edge 配置的登录态)/ browser(系统默认浏览器)/ shell(与其它入口一致,进原生外壳)。browser 可留空,自动找 Edge。删掉本段 = shell。",
+    "mode": "edge",
+    "browser": ""
+  },
+  "lobehub": {
+    "_comment": "托盘启动后是否顺带把 LobeHub 栈拉起(需 WSL+docker)。autoStart=false = 只保留托盘菜单里的手动开关(旧行为)。delaySeconds 给开机 IO 峰值留余量。compose 目录取自 paths.lobehubDir。",
+    "autoStart": false,
+    "delaySeconds": 45
+  },
+  "federationService": {
+    "id": "federation-bridge",
+    "name": "联邦接口",
+    "port": 3314,
+    "dir": "runFed",
+    "members": [
+      {
+        "id": "hermes",
+        "label": "Hermes 库",
+        "variant": "full",
+        "transport": "local-dir",
+        "target": "banks/hermes"
+      },
+      {
+        "id": "dsh",
+        "label": "DSH 库",
+        "variant": "full",
+        "transport": "local-dir",
+        "target": "banks/dsh"
+      },
+      {
+        "id": "lobehub",
+        "label": "LobeHub 库",
+        "variant": "full",
+        "transport": "local-dir",
+        "target": "banks/lobehub"
+      },
+      {
+        "id": "airi",
+        "label": "Castalia Anima",
+        "variant": "anima",
+        "capabilities": [
+          "emotion"
+        ],
+        "transport": "local-dir",
+        "target": "banks/airi"
+      }
+    ]
+  },
+  "promoteGate": {
+    "_comment": "跨库污染闸门:promote 时若文本提到属于其它库的名字就拒绝,避免跨库串味。foreignNames = 兜底总表;homeNames = 各库自己的名字(优先)。留空则不拦。",
+    "foreignNames": [
+      "AIRI",
+      "Castalia",
+      "LobeHub",
+      "Hermes",
+      "DSH"
+    ],
+    "homeNames": {
+      "airi": [
+        "AIRI"
+      ],
+      "lobehub": [
+        "LobeHub"
+      ],
+      "shushu": [
+        "AIRI",
+        "Castalia",
+        "LobeHub"
+      ],
+      "hermes": [
+        "Hermes"
+      ],
+      "default": [],
+      "dsh": [
+        "DSH"
+      ]
+    }
+  },
+  "hermesHook": {
+    "bridgeId": "hermes-bridge",
+    "db": "D:/AI/hermes-home/state.db",
+    "project": "hermes",
+    "batch": 30,
+    "lookbackHours": 1,
+    "minChars": 2,
+    "_comment": "Hermes 会话转录投喂:计划任务每 2 分钟跑 hermes_memory_hook.py --once;db 已显式写绝对路径(2026-10-06,供多账户共用同一 Hermes home)"
+  }
+}
