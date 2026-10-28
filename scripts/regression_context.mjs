@@ -18,6 +18,7 @@ const env = {
   CASTALIA_PROJECT: 'ctxcheck',
   CHARACTER_ID: 'ctxcheck',
   CASTALIA_BACKGROUND_TASKS: '0',
+  MCP_TOOLS: 'all',   // v1.23.2 起未设置时默认只暴露 agent 组，memory_context 在 admin 组
   TRIAGE_LLM_API_KEY: '',
   REFLECT_LLM_API_KEY: '',
 };
