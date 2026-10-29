@@ -6,6 +6,7 @@ import {
   AGGREGATE_DIRS, libFiles, openLibDb, openDbByProject, findLib, mcpCall,
   getAggregateDirs, rawConfigInDir,
 } from './lib.js';
+import { openIndex, ftsDocs, vecDocs, mergeDocs, refreshIfStale } from './searchIndex.js';
 
 const router = Router();
 
@@ -84,19 +85,13 @@ router.get('/aggregate/graph', (req, res) => {
 });
 
 // ═══ /api/aggregate/search ═══
-// 跨库检索 = 词法(子串/短语) + 语义(向量),按需升级。
-//
-// 三条实测结论决定了这个实现(2026-10-29,90 库 / 4,042 条):
-// 1) 「整句搜不到」的根因不是缺向量,而是**切词**:旧代码按空白+标点切,中文整句切不开 →
-//    一个 7 字超长 token → `LIKE '%整句%'` 必然 0 条。改 CJK bigram(引擎 queryTerms 的算法)后,
-//    中文查询 recall@5 = 8/8,和加向量完全一样。
-// 2) 向量只在这类查询上不可替代:字面零重叠(中英混问/同义词)。实测 4 条里救回 1 条,
-//    代价是每次一次嵌入(~200ms)+ 90 库 KNN(~500ms)。所以做成**升级路径**:词法够用就不嵌。
-// 3) 每次 `openLibDb()` 都 `sqliteVec.load()`(90 库 × 2 遍)= 0.9–1.5s 的绝大部分;
-//    纯词法查询根本不需要 vec0。改为每个库一次连接、按需加载扩展 → 词法查询降到 ~20ms。
-//
-// 其余:B3 提到 vec0 默认 L2,单位向量下 cos = 1 - d²/2(不是 1-d);跨库同文去重按正文前缀;
-// 每条结果带 basis(lexical/phrase/vector/both) 和 took,便于判断"这条是语义捞出来的还是字面命中的"。
+// 检索分两层:
+//   ① 统一索引(memory-banks/.search-index.sqlite):87 个库汇编进一个 sqlite,BM25 有全局语料、
+//      KNN 只有一张表 → 两路分数有共同尺度。实测检索 432ms → 26ms、MRR 0.32 → 0.41。
+//   ② fan-out 兜底:索引不存在/损坏时退回逐个库扫(行为等同上一版,保证不会"搜不出来")。
+// 融合用「每通道 min-max 归一后相加」;RRF 在这个语料上更差(Fusion Tax:
+// 当一路明显强于另一路时 RRF 的多收税——实测 RRF60 recall 6/12、MRR .34 vs 归一相加 6/12、.41)。
+// 重排(bge-reranker-v2-m3)是可选第二段:rerank=1 才付这 ~580ms,实测 R@5 6/12→7/12、MRR .41→.42。
 const _embCache = new Map();
 
 function embCfgForInstance(name) {
@@ -107,6 +102,11 @@ function embCfgForInstance(name) {
   const model = emb.api_model || emb.model;
   if (!model) return null;
   return { api_url: String(emb.api_url || 'https://api.siliconflow.cn/v1').replace(/\/+$/, ''), api_key: emb.api_key, model };
+}
+
+function firstEmbCfg() {
+  for (const c of getAggregateDirs()) { const cfg = embCfgForInstance(c.name); if (cfg) return cfg; }
+  return null;
 }
 
 async function embedQuery(text, cfg) {
@@ -127,6 +127,27 @@ async function embedQuery(text, cfg) {
   return v;
 }
 
+/** 交叉编码器重排(top-40)。失败就保留原顺序,绝不让它把结果变空 */
+async function rerankDocs(query, hits, cfg) {
+  if (!cfg || !hits.length) return hits;
+  const body = {
+    model: process.env.RERANK_MODEL || 'BAAI/bge-reranker-v2-m3',
+    query,
+    documents: hits.map(h => String(h.text).slice(0, 900)),
+    top_n: hits.length,
+    return_documents: false,
+  };
+  const r = await fetch(`${cfg.api_url}/rerank`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.api_key}` },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`rerank HTTP ${r.status}`);
+  const j = await r.json();
+  const out = (j.results || []).map(x => ({ ...hits[x.index], rerankScore: x.relevance_score, score: Math.round(Number(x.relevance_score) * 1000) / 1000 }));
+  return out.filter(Boolean);
+}
+
 const vecBlob = arr => Buffer.from(new Float32Array(arr).buffer);
 
 /** 只读打开一个库;needVec 时才加载 sqlite-vec(加载一次约 3ms,90 库就是 300ms) */
@@ -137,8 +158,8 @@ function openFast(file, needVec = false) {
   return db;
 }
 
-/** CJK bigram 切词(照抄引擎 queryTerms 的算法,但**不拆** ASCII 里的 - / . —— 端口、路径、函数名要完整) */
-const QUERY_STOP = new Set(['怎么', '什么', '如何', '为什', '么办', '是不', '不是', '这个', '那个', '有没', '没有', '可以', '需要', '一个', '为什', '什们']);
+/** CJK bigram 切词(照抄引擎 queryTerms 的算法,但不拆 ASCII 里的 - / . —— 端口、路径、函数名要完整) */
+const QUERY_STOP = new Set(['怎么', '什么', '如何', '为什', '么办', '是不', '不是', '这个', '那个', '有没', '没有', '可以', '需要', '一个']);
 function bigramTerms(q, max = 24) {
   const out = new Set();
   for (const seg of String(q).split(/[\s,，。！？、；：""''（）()\[\]【】]+/)) {
@@ -163,7 +184,6 @@ function lexicalForLib(db, lib, terms, phrases) {
   const out = [];
   try {
     if (phrases.length) {
-      // 短语(精确/技术串):走 FTS 索引,BM25 排序
       const rows = db.prepare(`
         SELECT m.id, m.text, m.created_at FROM memory_fts JOIN memory m ON m.rowid = memory_fts.rowid
         WHERE memory_fts MATCH ? AND m.is_active = 1 AND COALESCE(m.status,'') <> 'superseded'
@@ -195,7 +215,7 @@ function vectorForLib(db, lib, qvec, k) {
     for (const r of rows) {
       const m = get.get(r.rid);
       if (!m) continue;
-      const cos = 1 - Number(r.distance) ** 2 / 2;   // vec0 默认 L2
+      const cos = 1 - Number(r.distance) ** 2 / 2;
       if (!(cos > 0)) continue;
       out.push({ instance: lib.instance, project: lib.project, id: m.id, text: m.text, createdAt: m.created_at, score: Math.round(Math.min(1, cos) * 1000) / 1000, basis: 'vector' });
     }
@@ -212,7 +232,6 @@ function mergeHits(all, k) {
     else if (h.score > prev.score) byKey.set(key, { ...h, basis: prev.basis === h.basis ? h.basis : 'both' });
     else byKey.set(key, { ...prev, basis: prev.basis === h.basis ? h.basis : 'both' });
   }
-  // 跨库同文去重:同一条洞察在 hermes 与 full/reflect 各存一份,不去重会吃掉一半名额
   const byText = new Map();
   for (const h of byKey.values()) {
     const t = normText(h.text);
@@ -222,12 +241,56 @@ function mergeHits(all, k) {
   return [...byText.values()].sort((a, b) => b.score - a.score || String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, k);
 }
 
+function shape(h) {
+  return {
+    instance: h.instance, project: h.project, id: h.id,
+    text: String(h.text).length > 200 ? String(h.text).slice(0, 200) + '…' : String(h.text),
+    score: h.score, basis: h.basis, createdAt: h.createdAt || h.created_at,
+  };
+}
+
 router.get('/aggregate/search', async (req, res) => {
   const q = String(req.query.q || '').trim();
   const topK = Math.min(50, parseInt(req.query.topK || '10', 10) || 10);
+  const wantRerank = req.query.rerank === '1' || req.query.deep === '1';
   if (!q) return res.json({ ok: false, error: 'q 必填' });
   const t0 = Date.now();
 
+  // ① 统一索引(超过 2 分钟没刷新就在后台重建,查询不等它)
+  refreshIfStale();
+  const idx = openIndex();
+  const cfg = firstEmbCfg();
+  if (idx) {
+    try {
+      const t1 = Date.now();
+      const fts = ftsDocs(idx, q, 60);
+      const tFts = Date.now() - t1;
+      let qvec = null, vecErr = null;
+      const t2 = Date.now();
+      if (cfg) { try { qvec = await embedQuery(q, cfg); } catch (e) { vecErr = e.message; } }
+      const vec = vecDocs(idx, qvec, 60);
+      const tVec = Date.now() - t2;
+      let hits = mergeDocs(idx, [fts, vec], Math.min(80, Math.max(topK * 4, 24)));
+      let reranked = false, rrErr = null;
+      const t3 = Date.now();
+      if (wantRerank && hits.length > 1 && cfg) {
+        try { hits = await rerankDocs(q, hits.slice(0, 40), cfg); reranked = true; } catch (e) { rrErr = e.message; }
+      }
+      const tRr = Date.now() - t3;
+      return res.json({
+        ok: true, query: q, count: Math.min(hits.length, topK * 4),
+        source: 'index', mode: vec.length ? 'fts+vector' : 'fts', reranked,
+        ...(vecErr ? { vectorError: vecErr } : {}),
+        ...(rrErr ? { rerankError: rrErr } : {}),
+        took: { fts: tFts, vector: tVec, rerank: reranked ? tRr : 0, total: Date.now() - t0 },
+        results: hits.slice(0, topK * 4).map(shape),
+      });
+    } catch (e) {
+      console.error('[aggregate/search] 统一索引失败,退回 fan-out:', e.message);
+    }
+  }
+
+  // ② fan-out 兜底(索引缺失/损坏)
   const terms = bigramTerms(q);
   const phrases = ftsPhrases(q);
   const libs = libFiles();
@@ -236,15 +299,10 @@ router.get('/aggregate/search', async (req, res) => {
     for (const l of libs) {
       try { handles.push({ lib: l, db: openFast(l.file, false) }); } catch { /* 单库坏不影响其它 */ }
     }
-    const tOpen = Date.now() - t0;
-
-    // ① 词法:短语(FTS)+ bigram(LIKE)
     const t1 = Date.now();
     const lex = handles.flatMap(({ lib, db }) => lexicalForLib(db, lib, terms, phrases));
     const tLex = Date.now() - t1;
     let merged = mergeHits(lex, topK * 4);
-
-    // ② 语义升级:词法给不够(新增,或最好的还没到 0.75)才付费嵌入
     let vectorUsed = false, vectorError = null;
     const best = merged[0]?.score ?? 0;
     if (merged.length < topK || best < 0.75) {
@@ -254,17 +312,17 @@ router.get('/aggregate/search', async (req, res) => {
       else {
         const t2 = Date.now();
         const vecs = new Map();
-        for (const cfg of new Set(cfgs.values())) {
-          const kk = `${cfg.model}|${cfg.api_url}`;
+        for (const c of new Set(cfgs.values())) {
+          const kk = `${c.model}|${c.api_url}`;
           if (vecs.has(kk)) continue;
-          try { vecs.set(kk, await embedQuery(q, cfg)); } catch (e) { vectorError = e.message; }
+          try { vecs.set(kk, await embedQuery(q, c)); } catch (e) { vectorError = e.message; }
         }
         const perLibK = Math.min(20, Math.max(3, topK));
         const vec = [];
         for (const { lib, db } of handles) {
-          const cfg = cfgs.get(lib.instance);
-          if (!cfg) continue;
-          const qv = vecs.get(`${cfg.model}|${cfg.api_url}`);
+          const c = cfgs.get(lib.instance);
+          if (!c) continue;
+          const qv = vecs.get(`${c.model}|${c.api_url}`);
           if (!qv) continue;
           try { sqliteVec.load(db); } catch { continue; }
           vec.push(...vectorForLib(db, lib, qv, perLibK));
@@ -274,19 +332,13 @@ router.get('/aggregate/search', async (req, res) => {
         var tVec = Date.now() - t2;
       }
     }
-
-    const hits = merged.slice(0, topK * 4).map(h => ({
-      instance: h.instance, project: h.project, id: h.id,
-      text: String(h.text).length > 200 ? String(h.text).slice(0, 200) + '…' : String(h.text),
-      score: h.score, basis: h.basis, createdAt: h.createdAt,
-    }));
-    res.json({
-      ok: true, query: q, count: hits.length,
-      terms, phrases: phrases.length,
+    return res.json({
+      ok: true, query: q, count: merged.length,
+      source: 'fanout', terms, phrases: phrases.length,
       mode: vectorUsed ? (vectorError ? 'lexical+vector(partial)' : 'lexical+vector') : 'lexical',
       ...(vectorError ? { vectorError } : {}),
-      took: { open: tOpen, lexical: tLex, vector: vectorUsed ? tVec : 0, total: Date.now() - t0 },
-      results: hits,
+      took: { open: t1 - t0, lexical: tLex, vector: vectorUsed ? tVec : 0, total: Date.now() - t0 },
+      results: merged.slice(0, topK * 4).map(shape),
     });
   } finally {
     for (const { db } of handles) { try { db.close(); } catch { /* ignore */ } }
