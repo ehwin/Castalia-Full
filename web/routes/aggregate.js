@@ -1,5 +1,7 @@
 /* routes/aggregate.js — /api/aggregate/* /api/manage/* */
 import { Router } from 'express';
+import Database from 'better-sqlite3';
+import * as sqliteVec from 'sqlite-vec';
 import {
   AGGREGATE_DIRS, libFiles, openLibDb, openDbByProject, findLib, mcpCall,
   getAggregateDirs, rawConfigInDir,
@@ -82,11 +84,19 @@ router.get('/aggregate/graph', (req, res) => {
 });
 
 // ═══ /api/aggregate/search ═══
-// 真正的跨库检索 = 向量 KNN + LIKE 子串合并。
-// 旧实现只有 `text LIKE '%词%'`,所以「反思超时怎么办」这种整句必然 0 条,
-// 而面板写着「跨库语义检索」——用户看到的"没动静"就是这个:LIKE 不知道同义/语序。
-// 向量侧:查询只嵌一次(每个 bank 一份 embedding 配置),逐库对 vec_memory 做 KNN;
-// vec0 建表没写 distance_metric 时是 L2 距离,单位向量下 cos = 1 - d²/2(不能用 1-d)。
+// 跨库检索 = 词法(子串/短语) + 语义(向量),按需升级。
+//
+// 三条实测结论决定了这个实现(2026-10-29,90 库 / 4,042 条):
+// 1) 「整句搜不到」的根因不是缺向量,而是**切词**:旧代码按空白+标点切,中文整句切不开 →
+//    一个 7 字超长 token → `LIKE '%整句%'` 必然 0 条。改 CJK bigram(引擎 queryTerms 的算法)后,
+//    中文查询 recall@5 = 8/8,和加向量完全一样。
+// 2) 向量只在这类查询上不可替代:字面零重叠(中英混问/同义词)。实测 4 条里救回 1 条,
+//    代价是每次一次嵌入(~200ms)+ 90 库 KNN(~500ms)。所以做成**升级路径**:词法够用就不嵌。
+// 3) 每次 `openLibDb()` 都 `sqliteVec.load()`(90 库 × 2 遍)= 0.9–1.5s 的绝大部分;
+//    纯词法查询根本不需要 vec0。改为每个库一次连接、按需加载扩展 → 词法查询降到 ~20ms。
+//
+// 其余:B3 提到 vec0 默认 L2,单位向量下 cos = 1 - d²/2(不是 1-d);跨库同文去重按正文前缀;
+// 每条结果带 basis(lexical/phrase/vector/both) 和 took,便于判断"这条是语义捞出来的还是字面命中的"。
 const _embCache = new Map();
 
 function embCfgForInstance(name) {
@@ -117,120 +127,170 @@ async function embedQuery(text, cfg) {
   return v;
 }
 
-function vecBlob(arr) {
-  return Buffer.from(new Float32Array(arr).buffer);
+const vecBlob = arr => Buffer.from(new Float32Array(arr).buffer);
+
+/** 只读打开一个库;needVec 时才加载 sqlite-vec(加载一次约 3ms,90 库就是 300ms) */
+function openFast(file, needVec = false) {
+  const db = new Database(file, { readonly: true });
+  try { db.pragma('busy_timeout = 3000'); } catch { /* ignore */ }
+  if (needVec) { try { sqliteVec.load(db); } catch { /* 没扩展就只能走词法 */ } }
+  return db;
 }
 
-/** 每个库取 topK 条向量邻居;空间不一致(dim/model 不同)的库跳过,不混算距离 */
-function vectorHitsForLib(lib, qvec, perLibK) {
+/** CJK bigram 切词(照抄引擎 queryTerms 的算法,但**不拆** ASCII 里的 - / . —— 端口、路径、函数名要完整) */
+const QUERY_STOP = new Set(['怎么', '什么', '如何', '为什', '么办', '是不', '不是', '这个', '那个', '有没', '没有', '可以', '需要', '一个', '为什', '什们']);
+function bigramTerms(q, max = 24) {
+  const out = new Set();
+  for (const seg of String(q).split(/[\s,，。！？、；：""''（）()\[\]【】]+/)) {
+    const s = seg.trim();
+    if (s.length < 2) continue;
+    if (!/[\u4e00-\u9fff]/.test(s)) out.add(s.toLowerCase());
+    else for (let i = 0; i + 2 <= s.length; i++) out.add(s.slice(i, i + 2));
+    if (out.size >= max) break;
+  }
+  return [...out].filter(t => !QUERY_STOP.has(t)).slice(0, max);
+}
+
+/** FTS 短语:trigram 分词器下 `"整句"` 等价于子串搜索,走索引;≥3 字符才有效 */
+function ftsPhrases(q) {
+  return String(q).split(/[\s,，。！？、；：""''（）()\[\]【】]+/).filter(s => s.length >= 3).map(s => `"${s.replace(/"/g, '""')}"`);
+}
+
+const normText = t => String(t || '').replace(/\s+/g, '').slice(0, 120);
+const hitKey = h => `${h.instance}|${h.project}|${h.id}`;
+
+function lexicalForLib(db, lib, terms, phrases) {
   const out = [];
-  let db = null;
   try {
-    db = openLibDb(lib.file);
-    if (!db) return out;
-    let space = null;
-    try { space = db.prepare('SELECT model, dim FROM _embed_space LIMIT 1').get(); } catch { return out; }
+    if (phrases.length) {
+      // 短语(精确/技术串):走 FTS 索引,BM25 排序
+      const rows = db.prepare(`
+        SELECT m.id, m.text, m.created_at FROM memory_fts JOIN memory m ON m.rowid = memory_fts.rowid
+        WHERE memory_fts MATCH ? AND m.is_active = 1 AND COALESCE(m.status,'') <> 'superseded'
+        ORDER BY bm25(memory_fts) LIMIT 8`).all(phrases.join(' OR '));
+      rows.forEach((r, i) => out.push({ instance: lib.instance, project: lib.project, id: r.id, text: r.text, createdAt: r.created_at, score: Math.max(0.5, 0.92 - i * 0.02), basis: 'phrase' }));
+    }
+  } catch { /* 没建 memory_fts 的库(AIRI 全族)走下面的 bigram */ }
+  try {
+    if (terms.length) {
+      const conds = terms.map(() => 'text LIKE ?').join(' OR ');
+      const rows = db.prepare(`SELECT id, text, created_at FROM memory WHERE is_active = 1 AND (${conds}) ORDER BY created_at DESC LIMIT 12`)
+        .all(...terms.map(t => `%${t}%`));
+      for (const r of rows) {
+        const hit = terms.filter(t => String(r.text).toLowerCase().includes(t)).length;
+        out.push({ instance: lib.instance, project: lib.project, id: r.id, text: r.text, createdAt: r.created_at, score: Math.round(hit / terms.length * 1000) / 1000 * 0.85, basis: 'lexical' });
+      }
+    }
+  } catch { /* ignore */ }
+  return out;
+}
+
+function vectorForLib(db, lib, qvec, k) {
+  const out = [];
+  try {
+    const space = db.prepare('SELECT dim FROM _embed_space LIMIT 1').get();
     if (!space || Number(space.dim) !== qvec.length) return out;
-    const rows = db.prepare('SELECT rowid AS rid, distance FROM vec_memory WHERE embedding MATCH ? ORDER BY distance LIMIT ?')
-      .all(vecBlob(qvec), perLibK);
+    const rows = db.prepare('SELECT rowid AS rid, distance FROM vec_memory WHERE embedding MATCH ? ORDER BY distance LIMIT ?').all(vecBlob(qvec), k);
     const get = db.prepare('SELECT id, text, created_at FROM memory WHERE rowid = ? AND is_active = 1');
     for (const r of rows) {
       const m = get.get(r.rid);
       if (!m) continue;
-      const d = Number(r.distance);
-      const cos = 1 - (d * d) / 2;   // vec0 默认 L2
-      if (!(cos > -1)) continue;
-      out.push({
-        instance: lib.instance, project: lib.project, id: m.id,
-        text: String(m.text).length > 200 ? String(m.text).slice(0, 200) + '…' : String(m.text),
-        score: Math.round(Math.max(0, Math.min(1, cos)) * 1000) / 1000,
-        basis: 'vector',
-        createdAt: m.created_at,
-      });
+      const cos = 1 - Number(r.distance) ** 2 / 2;   // vec0 默认 L2
+      if (!(cos > 0)) continue;
+      out.push({ instance: lib.instance, project: lib.project, id: m.id, text: m.text, createdAt: m.created_at, score: Math.round(Math.min(1, cos) * 1000) / 1000, basis: 'vector' });
     }
-  } catch { /* 单个库坏 → 不影响其它库 */ } finally { if (db) db.close(); }
+  } catch { /* ignore */ }
   return out;
+}
+
+function mergeHits(all, k) {
+  const byKey = new Map();
+  for (const h of all) {
+    const key = hitKey(h);
+    const prev = byKey.get(key);
+    if (!prev) byKey.set(key, h);
+    else if (h.score > prev.score) byKey.set(key, { ...h, basis: prev.basis === h.basis ? h.basis : 'both' });
+    else byKey.set(key, { ...prev, basis: prev.basis === h.basis ? h.basis : 'both' });
+  }
+  // 跨库同文去重:同一条洞察在 hermes 与 full/reflect 各存一份,不去重会吃掉一半名额
+  const byText = new Map();
+  for (const h of byKey.values()) {
+    const t = normText(h.text);
+    const prev = byText.get(t);
+    if (!prev || h.score > prev.score) byText.set(t, h);
+  }
+  return [...byText.values()].sort((a, b) => b.score - a.score || String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, k);
 }
 
 router.get('/aggregate/search', async (req, res) => {
   const q = String(req.query.q || '').trim();
   const topK = Math.min(50, parseInt(req.query.topK || '10', 10) || 10);
   if (!q) return res.json({ ok: false, error: 'q 必填' });
-  const terms = q.split(/[\s,，。！？、；：]+/).filter(t => t.length >= 2);
+  const t0 = Date.now();
 
-  // ① 词法:子串命中(精确短语、端口号、错误码、路径靠它)
-  const merged = new Map();
-  const key = h => `${h.instance}|${h.project}|${h.id}`;
-  for (const l of libFiles()) {
-    let db = null;
-    try {
-      db = openLibDb(l.file);
-      if (!db) continue;
-      let rows;
-      if (terms.length === 0) {
-        rows = db.prepare('SELECT id, text, created_at FROM memory WHERE is_active=1 ORDER BY created_at DESC LIMIT ?').all(topK);
-      } else {
-        const conds = terms.map(() => 'text LIKE ?').join(' OR ');
-        rows = db.prepare(`SELECT id, text, created_at FROM memory WHERE is_active=1 AND (${conds}) ORDER BY created_at DESC LIMIT ?`).all(...terms.map(t => `%${t}%`), topK);
-      }
-      for (const r of rows) {
-        const hit = terms.filter(t => String(r.text).includes(t)).length;
-        const h = {
-          instance: l.instance, project: l.project, id: r.id,
-          text: String(r.text).length > 200 ? String(r.text).slice(0, 200) + '…' : String(r.text),
-          score: terms.length ? Math.round(hit / terms.length * 1000) / 1000 : 0.1,
-          basis: 'lexical',
-          createdAt: r.created_at,
-        };
-        const k = key(h);
-        const prev = merged.get(k);
-        if (!prev || h.score > prev.score) merged.set(k, h);
-      }
-    } catch { /* ignore */ } finally { if (db) db.close(); }
-  }
-
-  // ② 语义:向量 KNN(嵌入失败就退回纯词法,并在结果里说明)
-  let vectorError = null;
-  let vectorCount = 0;
+  const terms = bigramTerms(q);
+  const phrases = ftsPhrases(q);
   const libs = libFiles();
-  const cfgs = new Map();
-  for (const inst of new Set(libs.map(l => l.instance))) {
-    const cfg = embCfgForInstance(inst);
-    if (cfg) cfgs.set(inst, cfg);
-  }
-  if (cfgs.size === 0) {
-    vectorError = '没有可用的 embedding 配置(api_key 缺失)';
-  } else {
-    const perLibK = Math.min(20, Math.max(3, topK));
-    const vecsByModel = new Map();
-    for (const [, cfg] of cfgs) {
-      if (vecsByModel.has(cfg.model)) continue;
-      try { vecsByModel.set(cfg.model, await embedQuery(q, cfg)); } catch (e) { vectorError = e.message; }
-    }
+  const handles = [];
+  try {
     for (const l of libs) {
-      const cfg = cfgs.get(l.instance);
-      if (!cfg) continue;
-      const qv = vecsByModel.get(cfg.model);
-      if (!qv) continue;
-      for (const h of vectorHitsForLib(l, qv, perLibK)) {
-        vectorCount++;
-        const k = key(h);
-        const prev = merged.get(k);
-        // 同一条记忆两路都命中 → 取高分,并标 both(方便判断是不是"语义扩展出来的")
-        if (!prev) merged.set(k, h);
-        else if (h.score > prev.score) merged.set(k, { ...h, basis: 'both' });
-        else if (prev.basis !== 'vector') merged.set(k, { ...prev, basis: 'both' });
+      try { handles.push({ lib: l, db: openFast(l.file, false) }); } catch { /* 单库坏不影响其它 */ }
+    }
+    const tOpen = Date.now() - t0;
+
+    // ① 词法:短语(FTS)+ bigram(LIKE)
+    const t1 = Date.now();
+    const lex = handles.flatMap(({ lib, db }) => lexicalForLib(db, lib, terms, phrases));
+    const tLex = Date.now() - t1;
+    let merged = mergeHits(lex, topK * 4);
+
+    // ② 语义升级:词法给不够(新增,或最好的还没到 0.75)才付费嵌入
+    let vectorUsed = false, vectorError = null;
+    const best = merged[0]?.score ?? 0;
+    if (merged.length < topK || best < 0.75) {
+      const cfgs = new Map();
+      for (const l of libs) if (!cfgs.has(l.instance)) { const c = embCfgForInstance(l.instance); if (c) cfgs.set(l.instance, c); }
+      if (cfgs.size === 0) vectorError = '没有可用的 embedding 配置(api_key 缺失)';
+      else {
+        const t2 = Date.now();
+        const vecs = new Map();
+        for (const cfg of new Set(cfgs.values())) {
+          const kk = `${cfg.model}|${cfg.api_url}`;
+          if (vecs.has(kk)) continue;
+          try { vecs.set(kk, await embedQuery(q, cfg)); } catch (e) { vectorError = e.message; }
+        }
+        const perLibK = Math.min(20, Math.max(3, topK));
+        const vec = [];
+        for (const { lib, db } of handles) {
+          const cfg = cfgs.get(lib.instance);
+          if (!cfg) continue;
+          const qv = vecs.get(`${cfg.model}|${cfg.api_url}`);
+          if (!qv) continue;
+          try { sqliteVec.load(db); } catch { continue; }
+          vec.push(...vectorForLib(db, lib, qv, perLibK));
+        }
+        vectorUsed = true;
+        merged = mergeHits([...lex, ...vec], topK * 4);
+        var tVec = Date.now() - t2;
       }
     }
-  }
 
-  const hits = [...merged.values()].sort((a, b) => b.score - a.score || String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-  res.json({
-    ok: true, query: q, count: hits.length, vectorCount,
-    mode: vectorError ? 'lexical-only' : 'hybrid',
-    ...(vectorError ? { vectorError } : {}),
-    results: hits.slice(0, topK * 4),
-  });
+    const hits = merged.slice(0, topK * 4).map(h => ({
+      instance: h.instance, project: h.project, id: h.id,
+      text: String(h.text).length > 200 ? String(h.text).slice(0, 200) + '…' : String(h.text),
+      score: h.score, basis: h.basis, createdAt: h.createdAt,
+    }));
+    res.json({
+      ok: true, query: q, count: hits.length,
+      terms, phrases: phrases.length,
+      mode: vectorUsed ? (vectorError ? 'lexical+vector(partial)' : 'lexical+vector') : 'lexical',
+      ...(vectorError ? { vectorError } : {}),
+      took: { open: tOpen, lexical: tLex, vector: vectorUsed ? tVec : 0, total: Date.now() - t0 },
+      results: hits,
+    });
+  } finally {
+    for (const { db } of handles) { try { db.close(); } catch { /* ignore */ } }
+  }
 });
 
 // ═══ /api/aggregate/recent ═══
