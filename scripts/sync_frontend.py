@@ -74,6 +74,7 @@ SYNC_ITEMS = [
     'routes/memberRegistry.js',
     'routes/memory.js',
     'routes/reflect.js',
+    'routes/reflectJob.js',
 ]
 
 # 这些后缀的文件出现在目标目录但不在同步清单里 → 视为滞留旧版,删除

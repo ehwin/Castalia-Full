@@ -550,14 +550,20 @@ async function saveAllConfig() {
 
 async function runReflect(mode) {
   const btn = mode === 'deep' ? document.getElementById('btnDeep') : document.getElementById('btnRun');
-  btn.disabled = true; btn.textContent = '⏳ 反思中(可能需 1-2 分钟)...';
+  btn.disabled = true; btn.textContent = '⏳ 提交任务…';
   log(mode === 'deep' ? '🔬 深度校准 — 分析全部记忆...' : '▶ 日常反思...', 'log-hl');
   try {
     const r = await fetch('/api/reflect/run', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ mode })
     });
-    const d = await r.json();
+    let d = await r.json();
+    /* 后端改成后台任务：POST 立刻回 jobId，再轮询结果。
+     * 这样长反思不会被固定超时判成「反思失败」（旧版 300s）。 */
+    if (d.jobId) {
+      log(`⏳ 已提交后台任务 ${d.jobId}，等待结果…`, 'log-info');
+      d = await waitReflectJob(d.jobId);
+    }
     if (d.error) {
       log('❌ ' + d.error, 'log-err');
     } else if (d.skipped) {
@@ -572,6 +578,24 @@ async function runReflect(mode) {
     log('❌ 反思失败: ' + e.message, 'log-err');
   }
   btn.disabled = false; btn.textContent = mode === 'deep' ? '🔬 深度校准' : '▶ 日常反思';
+}
+
+/** 轮询后台反思任务，返回最终 result（失败抛错） */
+async function waitReflectJob(jobId) {
+  for (;;) {
+    await new Promise(res => setTimeout(res, 5000));
+    const r = await fetch('/api/reflect/job/' + encodeURIComponent(jobId), { cache: 'no-store' });
+    const d = await r.json();
+    if (!d.ok || !d.job) throw new Error(d.error || '任务状态读取失败');
+    const j = d.job;
+    if (j.status === 'running') {
+      const sec = Math.round((Date.now() - Date.parse(j.startedAt)) / 1000);
+      log(`⏳ 运行中 ${Math.floor(sec / 60)}分${String(sec % 60).padStart(2, '0')}秒…`, 'log-info');
+      continue;
+    }
+    if (j.status === 'error') throw new Error(j.error || '任务异常结束');
+    return j.result || {};
+  }
 }
 
 function clearLog() { document.getElementById('log').innerHTML = ''; }
