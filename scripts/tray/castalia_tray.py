@@ -1652,6 +1652,60 @@ def open_logs(icon=None, item=None):
     subprocess.Popen(["explorer", SCRIPTS], creationflags=NOWIN)
 
 
+# ── 记忆维护(2026-10-28)─────────────────────────────────────────────────
+# 这一轮给记忆栈加了「句级片段索引 / 注入评测 / 坏向量修复 / 嵌入自检」,原先只能手敲
+# CastaliaNode.exe 才用得上。统一收进 Castalia-Anima/scripts/memory_maintenance.mjs 一个入口,
+# 托盘只负责在后台跑它:最后一行 RESULT 弹窗+通知,完整输出进 castalia-tray.log。
+MAINT_SCRIPT = os.path.join(AIRI_ANIMA, "scripts", "memory_maintenance.mjs")
+MAINT_BANK = "airi"
+
+
+def run_maintenance(cmd, label, confirm=None):
+    """后台跑记忆维护命令 —— 不阻塞托盘事件循环;危险动作先弹确认框。"""
+    def _job():
+        try:
+            import ctypes
+            if confirm and ctypes.windll.user32.MessageBoxW(0, confirm, f"{APP_NAME} · {label}", 0x44) != 6:
+                logger.info("维护 %s: 用户取消", cmd)
+                return
+            if not os.path.exists(MAINT_SCRIPT):
+                _notify(APP_NAME, f"缺少维护脚本: {MAINT_SCRIPT}")
+                return
+            t0 = time.time()
+            proc = subprocess.run([NODE, MAINT_SCRIPT, cmd, MAINT_BANK, MAINT_BANK],
+                                  capture_output=True, text=True, timeout=1800,
+                                  creationflags=NOWIN, stdin=subprocess.DEVNULL)
+            out = (proc.stdout or "") + (proc.stderr or "")
+            lines = [l.rstrip() for l in out.splitlines() if l.strip() and not l.startswith("[config]")]
+            result = next((l[len("RESULT:"):].strip() for l in reversed(lines) if l.startswith("RESULT:")), None)
+            if result is None:
+                result = lines[-1] if lines else f"无输出 (exit={proc.returncode})"
+            logger.info("维护 %s → %s（%.1fs）", cmd, result, time.time() - t0)
+            for l in lines[-14:]:
+                logger.info("  %s", l)
+            _notify(label, result)
+            ctypes.windll.user32.MessageBoxW(0, (result + "\n\n" + "\n".join(lines[-10:]))[:1800],
+                                             f"{APP_NAME} · {label}", 0x40)
+        except subprocess.TimeoutExpired:
+            logger.error("维护 %s 超时", cmd)
+            _notify(label, "超时（30 分钟）")
+        except Exception as e:
+            logger.error("维护 %s 失败: %r", cmd, e)
+            _notify(label, f"失败: {e}")
+    _bg(_job)
+
+
+def open_ledger(icon=None, item=None):
+    for p in (os.path.join(BASE, "..", "FUSION-老部署-20261028.md"), "D:/AI/castalia/FUSION-老部署-20261028.md"):
+        if os.path.exists(p):
+            try:
+                os.startfile(p)
+                return
+            except Exception as e:
+                logger.error("ledger open failed: %r", e)
+    _notify(APP_NAME, "找不到维护台账 FUSION-老部署-20261028.md")
+
+
 def _about_text():
     """关于对话框正文 —— 版本 + 实时组件状态 + 路径(大厂式信息面)。"""
     def st(fn):
@@ -1908,7 +1962,12 @@ def build_menu():
         services.append(pystray.MenuItem(lambda item: '控制台  ' + ('运行中' if shell_up() else '未运行'),
             pystray.Menu(pystray.MenuItem('打开', lambda icon, item: _run_action(start_shell)),
                          pystray.MenuItem('关闭窗口', lambda icon, item: _run_action(stop_shell)))))
-    services.append(pystray.MenuItem(lambda item: '云端嵌入：已配置（未验证）' if embed_is_api() else '云端嵌入：未配置', None, enabled=False))
+    # 云端嵌入:升级成可点的子菜单 —— 光写"已配置(未验证)"没有下一步,这里给出验证动作
+    services.append(pystray.MenuItem(
+        lambda item: '云端嵌入：已配置（未验证）' if embed_is_api() else '云端嵌入：未配置',
+        pystray.Menu(
+            pystray.MenuItem('验证连接（一次真实调用）', lambda icon, item: run_maintenance('probe-embed', '嵌入自检')),
+            pystray.MenuItem('打开记忆库配置目录', lambda icon, item: subprocess.Popen(['explorer', BANKS], creationflags=NOWIN)))))
     services += endpoint_menu_items([EMBED, AIRI_PROXY] + C.EXTRAS)
     if AIRI_PROXY:
         services.append(pystray.MenuItem(lambda item: 'AIRI  ' + ('运行中' if airi_running() else '未运行'),
@@ -1922,6 +1981,19 @@ def build_menu():
         pystray.MenuItem('打开控制台', lambda icon, item: _run_action(start_shell), default=True, visible=bool(SHELL)),
         pystray.MenuItem('打开', pystray.Menu(*opening)),
         pystray.MenuItem('服务', pystray.Menu(*services)), pystray.Menu.SEPARATOR,
+        pystray.MenuItem('记忆维护', pystray.Menu(
+            pystray.MenuItem('体检（索引 / 坏向量 / 片段）', lambda icon, item: run_maintenance('health', '记忆体检')),
+            pystray.MenuItem('评测（注入质量 14 问 + 8 噪音）', lambda icon, item: run_maintenance('eval', '注入评测')),
+            pystray.MenuItem('自检（云端嵌入连通性）', lambda icon, item: run_maintenance('probe-embed', '嵌入自检')),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem('重建片段索引（幂等）', lambda icon, item: run_maintenance('rebuild-chunks', '重建片段索引')),
+            pystray.MenuItem('修复向量索引（清空重建）', lambda icon, item: run_maintenance(
+                'repair', '修复向量索引',
+                confirm='将清空并重建派生索引（整行向量 + 句级片段 + 嵌入缓存）。\n记忆正文与关系不受影响，可随时重建。继续？')),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem('打开维护台账', open_ledger),
+            pystray.MenuItem('打开记忆库目录', lambda icon, item: subprocess.Popen(['explorer', BANKS], creationflags=NOWIN)))),
+        pystray.Menu.SEPARATOR,
         pystray.MenuItem('设置…', open_settings), pystray.MenuItem('复制状态', copy_status),
         pystray.MenuItem('打开日志', open_logs),
         pystray.MenuItem('托盘开机启动', toggle_autostart, checked=lambda item: autostart_on()),

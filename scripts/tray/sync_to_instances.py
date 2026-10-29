@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """把**运行时组件**从主脚本目录同步到各实例(LobeHub / AIRI)。
 
-设计:主目录 D:/AI/castalia/run/Castalia/scripts 是唯一"源",
+设计:主目录 D:/castalia/run/Castalia/scripts 是唯一"源",
       各实例目录是镜像 —— 改完主目录跑一次本脚本即可,避免多份手工维护。
 
 用法:
@@ -28,7 +28,7 @@ ITEMS = [
 ]
 
 TARGETS = [
-    (r"D:/AI/castalia/run/LobeHub/scripts", "LobeHub"),
+    (r"D:/castalia/run/LobeHub/scripts", "LobeHub"),
     (r"D:/system/AIRI/scripts", "AIRI"),
 ]
 

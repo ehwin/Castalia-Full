@@ -25,6 +25,8 @@ import re
 import shutil
 import sys
 
+from deploy_paths import run_dir
+
 # Windows 控制台默认 GBK:输出里的 ▸ / ✗ / ✓ 会直接抛 UnicodeEncodeError,
 # 同步还没开始就中断(2026-10-17 实测)。改成不可编码字符替换,保证脚本可跑。
 try:
@@ -39,8 +41,8 @@ SRC_ROOT = os.path.normpath(os.path.join(HERE, '..', 'web'))
 # 部署目标(viz 根)。默认只同步仓库内/相对路径的两端;
 # 额外实例(如 AIRI)通过环境变量 AIRI_VIZ_DIR 声明,公共仓库不写死本机路径。
 TARGETS = {
-    'run/Castalia':  os.path.normpath(os.path.join(HERE, '..', '..', 'run', 'Castalia', 'viz')),
-    'run/LobeHub':   os.path.normpath(os.path.join(HERE, '..', '..', 'run', 'LobeHub', 'viz')),
+    'run/Castalia':              str(run_dir('Castalia', 'viz')),
+    'run/Castalia-Federation':   str(run_dir('Castalia-Federation', 'web')),
 }
 _airi = os.environ.get('AIRI_VIZ_DIR')
 if _airi:
@@ -76,6 +78,7 @@ SYNC_ITEMS = [
     'routes/reflect.js',
     'routes/reflectJob.js',
     'routes/searchIndex.js',
+    'scripts/build_search_index.mjs',
 ]
 
 # 这些后缀的文件出现在目标目录但不在同步清单里 → 视为滞留旧版,删除

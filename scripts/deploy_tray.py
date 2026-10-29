@@ -36,10 +36,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from deploy_paths import deploy_root
 
 ROOT = Path(__file__).resolve().parents[2]
+# 运行时根用 deploy_paths 解析:2026-10-29 起运行时在 D:\castalia,源码仓仍在 D:\AI\castalia
 SOURCE = ROOT / "Castalia-Full" / "scripts" / "tray"
-PRIMARY = ROOT / "run" / "Castalia" / "scripts"
+PRIMARY = deploy_root() / "run" / "Castalia" / "scripts"
 FANOUT = PRIMARY / "sync_to_instances.py"
 
 # 与 sync_to_instances.py 的 ITEMS 取交集：只搬"代码/脚本"，本机运行时数据不搬。
@@ -103,8 +105,8 @@ def main():
 
     drifted, missing, absent_assets = primary_plan()
     summary = {
-        "source": str(SOURCE.relative_to(ROOT)),
-        "primary": str(PRIMARY.relative_to(ROOT)),
+        "source": str(SOURCE.relative_to(ROOT)) if str(SOURCE).startswith(str(ROOT)) else str(SOURCE),
+        "primary": str(PRIMARY),
         "files": len(FILES),
         "primaryDrifted": drifted,
         "missingInSource": missing,
@@ -136,10 +138,10 @@ def main():
         for name in drifted:
             dst = PRIMARY / name
             if dst.is_file():
-                bdst = backup / dst.relative_to(ROOT)
+                bdst = backup / dst.relative_to(PRIMARY)
                 bdst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(dst, bdst)
-        print(f"已备份 {len(drifted)} 个旧文件 → {backup.relative_to(ROOT)}")
+        print(f"已备份 {len(drifted)} 个旧文件 → {backup}")
         for name in drifted:
             atomic_copy(SOURCE / name, PRIMARY / name)
         print(f"已部署到主目录: {', '.join(drifted)}")

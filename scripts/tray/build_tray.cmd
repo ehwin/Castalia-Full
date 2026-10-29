@@ -29,5 +29,5 @@ if errorlevel 1 exit /b 1
 echo Build ready: %CD%\build-staging\Castalia
 echo Close Castalia services before replacing the working host directory.
 echo.
-echo 输出: D:\AI\castalia\run\Castalia\Castalia\Castalia.exe
+echo 输出: D:\castalia\run\Castalia\Castalia\Castalia.exe
 exit /b 0

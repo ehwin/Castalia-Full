@@ -19,9 +19,13 @@ import re
 import shutil
 import tempfile
 import time
+from deploy_paths import deploy_root
 
 ROOT = Path(__file__).resolve().parents[2]
-MAPPING = [('Castalia', 'run/LobeHub'), ('Castalia', 'run/Castalia'),
+DEPLOY = deploy_root()
+# 2026-10-29 迁移后:运行时只有 run/Castalia(主,hermes/lobehub 两个桥共用)、
+# run/Castalia-Federation(总线)、run/Castalia-Anima。旧的 run/LobeHub 已并入 run/Castalia。
+MAPPING = [('Castalia', 'run/Castalia'),
            ('Castalia-Full', 'run/Castalia-Federation'), ('Castalia-Anima', 'run/Castalia-Anima')]
 
 
@@ -33,7 +37,7 @@ def plan():
     stale = []
     for source, target in MAPPING:
         src = ROOT / source / 'dist'
-        dst = ROOT / target / 'dist'
+        dst = DEPLOY / target / 'dist'
         if not (src / 'index.js').is_file() or not dst.is_dir():
             raise ValueError(f'missing build/runtime: {source} -> {target}')
         # 总线运行时的最低要求：Full 必须部署出独立总线进程，否则只是引擎副本
@@ -72,20 +76,20 @@ def main():
     print(json.dumps({'mapping': MAPPING, 'changedModules': len(files), 'staleModules': len(stale)}, ensure_ascii=False))
     if not args.apply:
         return 1 if (files or stale) else 0
-    backup = ROOT / '_归档' / ('runtime-deploy-' + time.strftime('%Y%m%d-%H%M%S'))
+    backup = DEPLOY / '_归档' / ('runtime-deploy-' + time.strftime('%Y%m%d-%H%M%S'))
     backup.mkdir(parents=True)
     manifest = []
     # Save every old file (and every stale file) before the first runtime mutation.
     for src, dst in files:
-        old = backup / dst.relative_to(ROOT)
+        old = backup / dst.relative_to(DEPLOY)
         if dst.exists():
             old.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(dst, old)
-        manifest.append({'source': str(src.relative_to(ROOT)), 'target': str(dst.relative_to(ROOT)),
+        manifest.append({'source': str(src.relative_to(ROOT)), 'target': str(dst.relative_to(DEPLOY)),
                          'sha256': sha(src), 'existed': dst.exists()})
     for dst in stale:
-        old = backup / dst.relative_to(ROOT)
+        old = backup / dst.relative_to(DEPLOY)
         old.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(dst, old)
-        manifest.append({'source': None, 'target': str(dst.relative_to(ROOT)),
+        manifest.append({'source': None, 'target': str(dst.relative_to(DEPLOY)),
                          'sha256': None, 'existed': True, 'deleted': True})
     (backup / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
     installed = []
@@ -99,7 +103,7 @@ def main():
     except BaseException:
         for dst, item in reversed(installed):
             if item['existed']:
-                atomic_copy(backup / dst.relative_to(ROOT), dst)
+                atomic_copy(backup / dst.relative_to(DEPLOY), dst)
             else:
                 dst.unlink(missing_ok=True)
         raise

@@ -8,7 +8,7 @@
  */
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import { existsSync, statSync } from 'fs';
+import { existsSync, statSync, readdirSync } from 'fs';
 import { execFile } from 'child_process';
 import path from 'path';
 import { getAggregateDirs } from './lib.js';
@@ -17,18 +17,38 @@ import { getAggregateDirs } from './lib.js';
  *  不能写死 D:/AI —— 这台机器同时有 D:/system/AIRI 那套平行栈,写死会让那边必然退回 fan-out。 */
 function resolveIndexFile() {
   if (process.env.SEARCH_INDEX_FILE) return process.env.SEARCH_INDEX_FILE;
+  // 从每个 member 目录往上找 4 层:谁旁边已经有 .search-index.sqlite 就用谁;
+  // 都没有时优先 memory-banks/ 。不能只用"共同父目录"判断 —— 只解析出 1 个 member 时
+  // 会算成 run/Castalia-Federation(实测踩过:refreshIfStale 因此永远认为索引不存在)。
+  const cands = new Set();
   try {
-    const parents = [...new Set(getAggregateDirs().map(d => path.dirname(path.resolve(d.dir))))];
-    if (parents.length === 1) return path.join(parents[0], '.search-index.sqlite');
-    const marker = parents.find(p => /memory-banks$/i.test(p));
-    if (marker) return path.join(marker, '.search-index.sqlite');
+    for (const d of getAggregateDirs()) {
+      let cur = path.resolve(d.dir);
+      for (let i = 0; i < 4; i++) {
+        cands.add(path.join(cur, '.search-index.sqlite'));
+        const up = path.dirname(cur);
+        if (up === cur) break;
+        cur = up;
+      }
+    }
   } catch { /* ignore */ }
-  return path.join(process.env.CASTALIA_BANK_ROOT || 'D:/AI/castalia/memory-banks', '.search-index.sqlite');
+  for (const c of cands) { try { if (existsSync(c)) return c; } catch { /* ignore */ } }
+  const mb = [...cands].find(c => /memory-banks[\/]\.search-index\.sqlite$/.test(c));
+  if (mb) return mb;
+  return path.join(process.env.CASTALIA_BANK_ROOT || 'D:/castalia/memory-banks', '.search-index.sqlite');
 }
 
 let INDEX_FILE = resolveIndexFile();
-const BUILDER = process.env.SEARCH_INDEX_BUILDER
-  || path.resolve(process.cwd(), 'scripts/build_search_index.mjs');
+/** 建索引脚本:随 web 一起部署(cwd = web 根),所以默认就在 ./scripts 下 */
+function resolveBuilder() {
+  const cands = [
+    process.env.SEARCH_INDEX_BUILDER,
+    path.resolve(process.cwd(), 'scripts/build_search_index.mjs'),
+    path.resolve(path.dirname(INDEX_FILE), '..', 'run', 'Castalia-Federation', 'web', 'scripts', 'build_search_index.mjs'),
+  ];
+  for (const c of cands) if (c && existsSync(c)) return c;
+  return null;
+}
 const NODE = process.env.NODE_BIN || process.execPath;
 
 let _db = null;
@@ -53,22 +73,53 @@ export function openIndex() {
 /** 后台增量刷新:索引过期(mtime 落后于最近写入)时异步跑一次,不阻塞本次查询 */
 export function refreshIndexAsync() {
   if (_builderRunning) return;
-  if (!existsSync(BUILDER)) return;
+  const builder = resolveBuilder();
+  if (!builder) return;
   _builderRunning = true;
-  execFile(NODE, [BUILDER], { cwd: path.dirname(path.dirname(BUILDER)), timeout: 120000 }, (err) => {
+  // 把 bank 根与索引路径显式传给子进程:两个平行栈(D:\castalia / D:\system\AIRI)各建各的,
+  // 不能靠脚本里的默认值去猜。
+  const env = { ...process.env, CASTALIA_BANK_ROOT: path.dirname(resolveIndexFile()), SEARCH_INDEX_FILE: resolveIndexFile() };
+  execFile(NODE, [builder], { cwd: path.dirname(builder), env, timeout: 120000 }, (err) => {
     _builderRunning = false;
     if (err) console.error('[search-index] 刷新失败:', String(err.message).slice(0, 200));
   });
 }
 
-/** 索引超过 STALE_SEC 秒没更新就后台重建一次(空跑 0.1s,全量 0.7s),不阻塞本次查询 */
-export function refreshIfStale(staleSec = 120) {
+let _lastCheck = 0;
+let _lastNewest = 0;
+
+/** 库比索引新 → 后台重建。
+ *  判据必须是「最新的库文件 mtime > 索引 mtime」,不能用"索引多久没变":
+ *  增量跑完全部 kept 时 sqlite 不写盘、mtime 不变,用时间判会永远判过期(实测踩过)。
+ *  92 个文件 stat 约 1ms;检查本身有 30s 冷却。 */
+export function refreshIfStale(cooldownSec = 30) {
+  const now = Date.now();
+  if (now - _lastCheck < cooldownSec * 1000) return false;
+  _lastCheck = now;
   try {
-    INDEX_FILE = resolveIndexFile();
-    if (!existsSync(INDEX_FILE)) return;
-    const age = (Date.now() - statSync(INDEX_FILE).mtimeMs) / 1000;
-    if (age > staleSec) refreshIndexAsync();
-  } catch { /* ignore */ }
+    const idxFile = resolveIndexFile();
+    if (!existsSync(idxFile)) return false;
+    const idxM = statSync(idxFile).mtimeMs;
+    let newest = 0;
+    try {
+      for (const d of getAggregateDirs()) {
+        const root = path.resolve(d.dir);
+        const stack = [root];
+        let depth = 0;
+        while (stack.length && depth++ < 400) {
+          const cur = stack.pop();
+          let st;
+          try { st = statSync(cur); } catch { continue; }
+          if (st.isDirectory()) {
+            for (const e of readdirSync(cur)) stack.push(path.join(cur, e));
+          } else if (cur.endsWith('memory.sqlite') && st.mtimeMs > newest) newest = st.mtimeMs;
+        }
+      }
+    } catch { /* ignore */ }
+    _lastNewest = newest;
+    if (newest > idxM + 1000) { refreshIndexAsync(); return true; }
+    return false;
+  } catch { return false; }
 }
 
 export function indexStats() {

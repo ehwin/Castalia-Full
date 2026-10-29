@@ -32,16 +32,16 @@ FALLBACK = {
     "app": {"name": "Castalia 记忆体", "version": "1.22.0",
             "publisher": "Castalia 记忆体项目", "desc": "记忆体联邦控制台与运行时看护"},
     "paths": {
-        "home": r"D:\AI\castalia",
-        "run": r"D:\AI\castalia\run\Castalia",
-        "lobehubRun": r"D:\AI\castalia\run\LobeHub",
-        "banks": r"D:\AI\castalia\memory-banks",
-        "anima": r"D:\AI\castalia\run\Castalia-Anima",
-        "full": r"D:\AI\castalia\Castalia-Full",
+        "home": r"D:\castalia",
+        "run": r"D:\castalia\run\Castalia",
+        "lobehubRun": r"D:\castalia\run\LobeHub",
+        "banks": r"D:\castalia\memory-banks",
+        "anima": r"D:\castalia\run\Castalia-Anima",
+        "full": r"D:\castalia\run\Castalia-Federation",
         "airiBase": r"D:\system\AIRI",
         "lobehubDir": r"D:\AI\lobehub",
-        "node": r"D:\AI\castalia\run\Castalia\bin\CastaliaNode.exe",
-        "pythonHost": r"D:\AI\castalia\run\Castalia\Castalia\Castalia.exe",
+        "node": r"D:\castalia\run\Castalia\bin\CastaliaNode.exe",
+        "pythonHost": r"D:\castalia\run\Castalia\Castalia\Castalia.exe",
     },
     "instances": [
         {"id": "hermes", "label": "Hermes 记忆体", "variant": "full",
@@ -94,10 +94,10 @@ FALLBACK = {
     "shell": {"id": "shell", "name": "控制台", "port": 3397},
     "tray": {"id": "tray", "name": "托盘", "port": 3398},
     "federation": [
-        {"name": "DSH", "dir": "D:/AI/castalia/memory-banks/dsh"},
-        {"name": "Hermes", "dir": "D:/AI/castalia/memory-banks/hermes"},
-        {"name": "LobeHub", "dir": "D:/AI/castalia/memory-banks/lobehub"},
-        {"name": "AIRI", "dir": "D:/AI/castalia/memory-banks/airi"},
+        {"name": "DSH", "dir": "D:/castalia/memory-banks/dsh"},
+        {"name": "Hermes", "dir": "D:/castalia/memory-banks/hermes"},
+        {"name": "LobeHub", "dir": "D:/castalia/memory-banks/lobehub"},
+        {"name": "AIRI", "dir": "D:/castalia/memory-banks/airi"},
     ],
 }
 
@@ -120,7 +120,7 @@ class Config:
         self.AIRI_BASE = self.PATHS.get("airiBase", "")
         self.AIRI_ANIMA = self.PATHS.get("anima", "")
         self.LOBEHUB_DIR = self.PATHS.get("lobehubDir", "")
-        self.MCP_PROXY = os.path.join(self.LOBEHUB_RUN, "node_modules", "mcp-proxy",
+        self.MCP_PROXY = os.path.join(self.PATHS.get("proxyDeps") or self.LOBEHUB_RUN, "node_modules", "mcp-proxy",
                                       "dist", "bin", "mcp-proxy.mjs")
         self.FEDERATION = json.dumps(
             [{"name": f["name"], "dir": self._resolve(f["dir"])} for f in (data.get("federation") or [])],
@@ -235,7 +235,7 @@ class Config:
             "cmd": [self.NODE, self.MCP_PROXY, "--host", "0.0.0.0", "--port", str(int(b["port"])),
                     "--connectionTimeout", "180000",          # 开机 IO 峰值下给引擎更多握手时间
                     "--server", "stream", "--", self.NODE, "dist/index.js"],
-            "cwd": self.LOBEHUB_RUN,
+            "cwd": self.PATHS.get("run") or self.LOBEHUB_RUN,
             "env": env,
         }
 

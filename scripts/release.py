@@ -14,12 +14,13 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from deploy_paths import deploy_root
 
 ROOT = Path(__file__).resolve().parents[2]
 LITE = ROOT / "Castalia"
 FULL = ROOT / "Castalia-Full"
 ANIMA = ROOT / "Castalia-Anima"
-RUN = ROOT / "run"
+RUN = deploy_root() / "run"
 NODE = "node"
 PY = sys.executable
 
@@ -78,8 +79,7 @@ def check_versions():
     if lite_pkg.get("version") != version:
         print(f"[release] WARN Castalia/package.json version={lite_pkg.get('version')} != {version}")
 
-    for cfg_path in (RUN / "Castalia" / "scripts" / "castalia.config.json",
-                     RUN / "LobeHub" / "scripts" / "castalia.config.json"):
+    for cfg_path in (RUN / "Castalia" / "scripts" / "castalia.config.json",):
         if not cfg_path.exists():
             fail(f"缺少 {cfg_path}")
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
