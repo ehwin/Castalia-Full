@@ -668,6 +668,10 @@ def start_shell(url=None, view=""):
         fed = bool(v and (v.get("federation") or str(_venv.get("FEDERATION_DIRS") or "[]") not in ("[]", "")
                           or str(_venv.get("FEDERATION_MEMBERS") or "[]") not in ("[]", "")))
         url = f"http://127.0.0.1:{port}/?scope={'federation' if fed else 'local'}&embed=1"
+    # 2026-10-29:进控制台第一眼要「记忆体」(记忆总成),不是星图。
+    # 星图没被删,仍在 v-viz 页签上,点一下即回;这里只改打开的落点。
+    if not view:
+        view = "agg"
     if open_in_shell(url, view):
         return "正在打开控制台"
     return "没有能跑外壳的宿主(缺 pywebview)"
