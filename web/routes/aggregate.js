@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import {
   AGGREGATE_DIRS, libFiles, openLibDb, openDbByProject, findLib, mcpCall,
+  getAggregateDirs, rawConfigInDir,
 } from './lib.js';
 
 const router = Router();
@@ -81,12 +82,85 @@ router.get('/aggregate/graph', (req, res) => {
 });
 
 // ═══ /api/aggregate/search ═══
-router.get('/aggregate/search', (req, res) => {
+// 真正的跨库检索 = 向量 KNN + LIKE 子串合并。
+// 旧实现只有 `text LIKE '%词%'`,所以「反思超时怎么办」这种整句必然 0 条,
+// 而面板写着「跨库语义检索」——用户看到的"没动静"就是这个:LIKE 不知道同义/语序。
+// 向量侧:查询只嵌一次(每个 bank 一份 embedding 配置),逐库对 vec_memory 做 KNN;
+// vec0 建表没写 distance_metric 时是 L2 距离,单位向量下 cos = 1 - d²/2(不能用 1-d)。
+const _embCache = new Map();
+
+function embCfgForInstance(name) {
+  const c = getAggregateDirs().find(x => x.name === name);
+  if (!c) return null;
+  const emb = rawConfigInDir(c.dir)?.embedding;
+  if (!emb || !emb.api_key) return null;
+  const model = emb.api_model || emb.model;
+  if (!model) return null;
+  return { api_url: String(emb.api_url || 'https://api.siliconflow.cn/v1').replace(/\/+$/, ''), api_key: emb.api_key, model };
+}
+
+async function embedQuery(text, cfg) {
+  const key = `${cfg.model}::${text}`;
+  const hit = _embCache.get(key);
+  if (hit) return hit;
+  const r = await fetch(`${cfg.api_url}/embeddings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.api_key}` },
+    body: JSON.stringify({ model: cfg.model, input: [text] }),
+  });
+  if (!r.ok) throw new Error(`embeddings HTTP ${r.status}`);
+  const j = await r.json();
+  const v = j?.data?.[0]?.embedding;
+  if (!Array.isArray(v) || !v.length) throw new Error('embeddings 返回为空');
+  if (_embCache.size > 300) _embCache.clear();
+  _embCache.set(key, v);
+  return v;
+}
+
+function vecBlob(arr) {
+  return Buffer.from(new Float32Array(arr).buffer);
+}
+
+/** 每个库取 topK 条向量邻居;空间不一致(dim/model 不同)的库跳过,不混算距离 */
+function vectorHitsForLib(lib, qvec, perLibK) {
+  const out = [];
+  let db = null;
+  try {
+    db = openLibDb(lib.file);
+    if (!db) return out;
+    let space = null;
+    try { space = db.prepare('SELECT model, dim FROM _embed_space LIMIT 1').get(); } catch { return out; }
+    if (!space || Number(space.dim) !== qvec.length) return out;
+    const rows = db.prepare('SELECT rowid AS rid, distance FROM vec_memory WHERE embedding MATCH ? ORDER BY distance LIMIT ?')
+      .all(vecBlob(qvec), perLibK);
+    const get = db.prepare('SELECT id, text, created_at FROM memory WHERE rowid = ? AND is_active = 1');
+    for (const r of rows) {
+      const m = get.get(r.rid);
+      if (!m) continue;
+      const d = Number(r.distance);
+      const cos = 1 - (d * d) / 2;   // vec0 默认 L2
+      if (!(cos > -1)) continue;
+      out.push({
+        instance: lib.instance, project: lib.project, id: m.id,
+        text: String(m.text).length > 200 ? String(m.text).slice(0, 200) + '…' : String(m.text),
+        score: Math.round(Math.max(0, Math.min(1, cos)) * 1000) / 1000,
+        basis: 'vector',
+        createdAt: m.created_at,
+      });
+    }
+  } catch { /* 单个库坏 → 不影响其它库 */ } finally { if (db) db.close(); }
+  return out;
+}
+
+router.get('/aggregate/search', async (req, res) => {
   const q = String(req.query.q || '').trim();
   const topK = Math.min(50, parseInt(req.query.topK || '10', 10) || 10);
   if (!q) return res.json({ ok: false, error: 'q 必填' });
   const terms = q.split(/[\s,，。！？、；：]+/).filter(t => t.length >= 2);
-  const hits = [];
+
+  // ① 词法:子串命中(精确短语、端口号、错误码、路径靠它)
+  const merged = new Map();
+  const key = h => `${h.instance}|${h.project}|${h.id}`;
   for (const l of libFiles()) {
     let db = null;
     try {
@@ -101,17 +175,62 @@ router.get('/aggregate/search', (req, res) => {
       }
       for (const r of rows) {
         const hit = terms.filter(t => String(r.text).includes(t)).length;
-        hits.push({
+        const h = {
           instance: l.instance, project: l.project, id: r.id,
           text: String(r.text).length > 200 ? String(r.text).slice(0, 200) + '…' : String(r.text),
           score: terms.length ? Math.round(hit / terms.length * 1000) / 1000 : 0.1,
+          basis: 'lexical',
           createdAt: r.created_at,
-        });
+        };
+        const k = key(h);
+        const prev = merged.get(k);
+        if (!prev || h.score > prev.score) merged.set(k, h);
       }
-    } catch {} finally { if (db) db.close(); }
+    } catch { /* ignore */ } finally { if (db) db.close(); }
   }
-  hits.sort((a, b) => b.score - a.score || String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-  res.json({ ok: true, query: q, count: hits.length, results: hits.slice(0, topK * 4) });
+
+  // ② 语义:向量 KNN(嵌入失败就退回纯词法,并在结果里说明)
+  let vectorError = null;
+  let vectorCount = 0;
+  const libs = libFiles();
+  const cfgs = new Map();
+  for (const inst of new Set(libs.map(l => l.instance))) {
+    const cfg = embCfgForInstance(inst);
+    if (cfg) cfgs.set(inst, cfg);
+  }
+  if (cfgs.size === 0) {
+    vectorError = '没有可用的 embedding 配置(api_key 缺失)';
+  } else {
+    const perLibK = Math.min(20, Math.max(3, topK));
+    const vecsByModel = new Map();
+    for (const [, cfg] of cfgs) {
+      if (vecsByModel.has(cfg.model)) continue;
+      try { vecsByModel.set(cfg.model, await embedQuery(q, cfg)); } catch (e) { vectorError = e.message; }
+    }
+    for (const l of libs) {
+      const cfg = cfgs.get(l.instance);
+      if (!cfg) continue;
+      const qv = vecsByModel.get(cfg.model);
+      if (!qv) continue;
+      for (const h of vectorHitsForLib(l, qv, perLibK)) {
+        vectorCount++;
+        const k = key(h);
+        const prev = merged.get(k);
+        // 同一条记忆两路都命中 → 取高分,并标 both(方便判断是不是"语义扩展出来的")
+        if (!prev) merged.set(k, h);
+        else if (h.score > prev.score) merged.set(k, { ...h, basis: 'both' });
+        else if (prev.basis !== 'vector') merged.set(k, { ...prev, basis: 'both' });
+      }
+    }
+  }
+
+  const hits = [...merged.values()].sort((a, b) => b.score - a.score || String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  res.json({
+    ok: true, query: q, count: hits.length, vectorCount,
+    mode: vectorError ? 'lexical-only' : 'hybrid',
+    ...(vectorError ? { vectorError } : {}),
+    results: hits.slice(0, topK * 4),
+  });
 });
 
 // ═══ /api/aggregate/recent ═══
