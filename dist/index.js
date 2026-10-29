@@ -1180,11 +1180,14 @@ register('project_create', 'admin', 'Create a new project (library) namespace. I
 //   · 两个工具都是"接口"，引擎不会自动合并任何库；跨库语义由调用方决定
 //   · 源库只读打开，绝不写回；输出只落 project=reflect
 // ═══════════════════════════════════════════════════════════════════
-register('reflect_all', 'admin', 'Cross-library reflection & consolidation (non-destructive): scan active memories from every memory library (this instance + FEDERATION_DIRS external instances), let the LLM merge duplicates and distill high-value insights across libraries, then write the result into the dedicated project=reflect library (skipping already-existing texts). dryRun=true only analyzes without writing. Source libraries are opened read-only and never modified. Requires REFLECT LLM channel (config.json reflect section).', {
-    maxTotal: z.number().optional().describe('Optional total sampling limit; omitted = all active memories. coverage reports deferred records.'),
-    maxPerLib: z.number().optional().describe('Optional per-library sampling limit; omitted = all active memories'),
+register('reflect_all', 'admin', 'Cross-library reflection & consolidation (non-destructive): scan active memories from every memory library (this instance + FEDERATION_DIRS external instances), let the LLM merge duplicates and distill high-value insights across libraries, then write the result into the dedicated project=reflect library (skipping already-existing texts). INCREMENTAL BY DEFAULT: records already covered by a previous run (key = id + content hash) are skipped, and the result reports coverage.fresh/covered plus usage/cost; pass all=true to force a full re-scan. dryRun=true only analyzes without writing. Source libraries are opened read-only and never modified. Requires REFLECT LLM channel (config.json reflect section).', {
+    maxTotal: z.number().optional().describe('Optional total sampling limit; omitted = all (incremental) uncovered records. coverage reports deferred records.'),
+    maxPerLib: z.number().optional().describe('Optional per-library sampling limit; omitted = all (incremental) uncovered records'),
     dryRun: z.boolean().optional().describe('true = analyze only, do not write into reflect library (default false)'),
     projects: z.array(z.string()).optional().describe('Only reflect the specified project libraries (e.g. ["hermes"]); default = all libraries'),
+    all: z.boolean().optional().describe('true = ignore the covered-ledger and re-scan every active memory (expensive; use for periodic full sweeps)'),
+    batchRecords: z.number().optional().describe('Records per LLM call (default 12; larger amortizes per-call reasoning overhead)'),
+    contextPerProject: z.number().optional().describe('How many already-reflected recent records to attach per library as context (default 3; 0 disables)'),
 }, async (args) => {
     try {
         const r = await runReflectAll({
@@ -1192,6 +1195,9 @@ register('reflect_all', 'admin', 'Cross-library reflection & consolidation (non-
             maxPerLib: args.maxPerLib,
             dryRun: args.dryRun,
             projects: args.projects,
+            all: args.all,
+            batchRecords: args.batchRecords,
+            contextPerProject: args.contextPerProject,
         });
         return ok(r);
     }

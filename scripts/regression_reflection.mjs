@@ -331,7 +331,7 @@ try {
   check(r.ok && calls.some(b => b.messages[1].content.includes('关键修正')), 'cross-library reflection includes beyond 300 chars');
   respond = () => json({ insights: [{ text: 'invented source', sources: [{ instance: 'fake', project: 'missing', id: 'no-id' }] }] });
   r = await runReflectAll({ projects: ['deep-evidence'], dryRun: true });
-  check(!r.ok && r.llm.saved === 0, 'cross-library fabricated provenance is refused');
+  check(!r.ok && r.llm.saved === 0, 'cross-library fabricated provenance is refused: ' + JSON.stringify({ ok: r.ok, llm: r.llm, coverage: r.coverage, warnings: r.warnings, errors: r.errors, insights: r.insightList?.length }));
   respond = body => {
     const [record] = records(body);
     return json({ insights: [{ text: 'Full provenance record', sources: [{ instance: record.instance, project: record.project, id: record.id, memType: record.memType }] }] });

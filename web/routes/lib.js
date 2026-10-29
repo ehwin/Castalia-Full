@@ -86,6 +86,11 @@ function historyEntry(out, projects) {
     ok: out.ok === true,
     scanned: out.scanned || { libraries: 0, memories: 0 },
     llm: out.llm || { insights: 0, skipped: 0, saved: 0 },
+    /* 增量批次:本轮有多少是新增、多少被账本跳过、附了多少上下文;以及真实用量与成本 */
+    coverage: out.coverage,
+    usage: out.usage,
+    skipReason: out.skipReason,
+    warnings: out.warnings,
     errors: out.errors || [],
     insightTexts: list.map(i => (typeof i.text === 'string' ? i.text : '')),
     sources: list.map(i => (Array.isArray(i.sources) ? i.sources : [])),

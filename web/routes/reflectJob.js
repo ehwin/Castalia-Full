@@ -56,6 +56,10 @@ async function runReflectAll(body) {
   if (mode === 'project') args.projects = projects;
   if (Number.isFinite(Number(body.maxTotal)) && Number(body.maxTotal) > 0) args.maxTotal = Number(body.maxTotal);
   if (Number.isFinite(Number(body.maxPerLib)) && Number(body.maxPerLib) > 0) args.maxPerLib = Number(body.maxPerLib);
+  // 增量反思:默认只跑「没被上一轮覆盖过」的记录;all=true 是全量重扫(贵)
+  if (body.all === true) args.all = true;
+  if (Number.isFinite(Number(body.batchRecords)) && Number(body.batchRecords) > 0) args.batchRecords = Number(body.batchRecords);
+  if (Number.isFinite(Number(body.contextPerProject)) && Number(body.contextPerProject) >= 0) args.contextPerProject = Number(body.contextPerProject);
 
   const base = {
     ok: false, mode, dryRun,
@@ -80,6 +84,9 @@ async function runReflectAll(body) {
       scanned: parsed.scanned || { libraries: 0, memories: 0 },
       coverage: parsed.coverage,
       llm: parsed.llm || { insights: 0, skipped: 0, saved: 0 },
+      usage: parsed.usage,
+      skipReason: parsed.skipReason,
+      warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
       errors: Array.isArray(parsed.errors) ? parsed.errors : [],
       insightList: Array.isArray(parsed.insightList) ? parsed.insightList : [],
     };

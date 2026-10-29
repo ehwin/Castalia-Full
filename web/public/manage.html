@@ -127,6 +127,7 @@
     <label><input type="radio" name="reflectMode" value="project"> 项目级反思</label>
     <span id="reflectProjectWrap" style="display:none">库名 <input type="text" id="reflectProject" placeholder="hermes" value="hermes"></span>
     <label><input type="checkbox" id="reflectDryRun" checked> dryRun 预演</label>
+    <label title="默认只反思上一轮没覆盖过的记录（按 id+内容哈希判定）。勾选则忽略账本重扫全库，慢且贵。"><input type="checkbox" id="reflectFullScan"> 全量重扫（忽略已反思账本）</label>
     <button id="btnReflect" onclick="runReflectPanel()">🧠 运行反思</button>
     <span id="reflectStatus"></span>
   </div>
@@ -522,7 +523,10 @@ async function runReflectPanel() {
   try {
     const r = await fetch('/api/reflect/run', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode, projects: mode === 'project' ? projects : undefined, dryRun }),
+      body: JSON.stringify({
+        mode, projects: mode === 'project' ? projects : undefined, dryRun,
+        all: $('reflectFullScan') ? $('reflectFullScan').checked : false,
+      }),
     });
     const d = await r.json();
     /* 后端已改成「立刻返回 jobId + 后台跑」：全量反思要几十批 LLM，
@@ -575,11 +579,20 @@ function renderReflectResult(d) {
   const writeLabel = d.dryRun ? 'dryRun 预演（未写入 reflect 库）' : '已真实写入 reflect 库';
   const scanned = d.scanned || {};
   const llm = d.llm || {};
+  const cov = d.coverage || {};
+  const use = d.usage || {};
   const L = [];
   L.push(`反思结果 — ${modeLabel} · ${writeLabel}`);
   L.push('');
-  L.push(`扫描: ${scanned.libraries ?? 0} 库 / ${scanned.memories ?? 0} 条记忆`);
-  L.push(`洞察: ${llm.insights ?? 0} 条 · 写入 ${llm.saved ?? 0} 条 · 跳过 ${llm.skipped ?? 0} 条`);
+  if (d.skipReason === 'no-new') L.push('⏭ 没有新增记忆：全部已被上一轮反思覆盖，本轮未调用 LLM（成本 ¥0）');
+  L.push(`扫描: ${scanned.libraries ?? 0} 库 / ${scanned.memories ?? 0} 条记忆` +
+    (cov.incremental === false ? '（全量重扫）' : `（增量：新增 ${cov.fresh ?? '?'} / 已跳过 ${cov.covered ?? '?'} / 上下文 ${cov.context ?? 0}）`));
+  L.push(`洞察: ${llm.insights ?? 0} 条 · 写入 ${llm.saved ?? 0} 条 · 跳过 ${llm.skipped ?? 0} 条`
+    + (llm.cacheHits ? ` · 缓存命中 ${llm.cacheHits} 批` : ''));
+  if (use.calls) {
+    L.push(`用量: ${use.calls} 次调用 · 输入 ${use.prompt ?? 0}（缓存 ${use.cached ?? 0}）· 输出 ${use.completion ?? 0}（思考 ${use.reasoning ?? 0}）`
+      + `\n成本: ≈¥${use.costCny ?? '?'}${use.peak ? '（高峰时段，闲时省一半）' : '（闲时价）'} · 模型 ${use.model || '?'}`);
+  }
   L.push('');
   const list = d.insightList || [];
   if (list.length) {
@@ -593,6 +606,12 @@ function renderReflectResult(d) {
     L.push('（无洞察）');
   }
   const errs = d.errors || [];
+  const warns = d.warnings || [];
+  if (warns.length) {
+    L.push('');
+    L.push('── 提示（不影响本轮结果）──');
+    warns.forEach(w => L.push('・' + w));
+  }
   if (errs.length) {
     L.push('');
     L.push('── 错误 ──');
