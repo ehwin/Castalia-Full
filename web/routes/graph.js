@@ -701,32 +701,51 @@ async function buildGraphPayload({ scope, fed, project, instance, libs, cacheKey
 
       for (const [rawId, vec] of snap.vecs) vecById.set(graphNodeId(lib, rawId), vec);
 
-      // 库内相似度链接(v1.18.11:上限 100→400,大库不再整库断链)
-      if (libNodes.length > 0 && libNodes.length <= 400) {
+      /* ═══ 团内相似度边(2026-10-30 重写)══════════════════════════════════════════════
+       * 旧代码的硬上限 `libNodes.length <= 400` 会**整库跳过**:超过 400 条的库一条边都不发。
+       * 实测后果(先是"某个星域内部看不到线"的现象,根因就在这里,与元数据、与前端都无关):
+       *   reflect/user 450 条 → 0 段线;hermes/project 619 条 → 0 段线;
+       *   而同一个库里 132 条的 feedback 有 137 段 —— 团越大越像空的。
+       * 现在:不限规模,每个点只留最近的 2 条(相似度 < 0.65 丢弃),向量先归一化,
+       *   扫描时只留 best1/best2,不再为每个点分配 n 个 {id,sim} 对象:
+       *   450 / 619 这种规模的库 = 几千万次乘加,每 32 行让一次事件循环。
+       * **只连同一个文件(=同一个星座/团)内部的点**:跨团、跨星域一条都不发
+       *   —— 连线只表达"团内语义相近",团与团之间没有结构边,免得图上看着很密、实际全是噪声。 */
+      if (libNodes.length >= 2) {
         try {
-          const embeddings = libNodes
-            .map(n => ({ id: n.id, vec: vecById.get(n.id) }))
-            .filter(x => x.vec);
-          const cosSim = (a, b) => {
-            let dot = 0, ma = 0, mb = 0;
-            for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; ma += a[i] * a[i]; mb += b[i] * b[i]; }
-            return dot / (Math.sqrt(ma) * Math.sqrt(mb));
-          };
-          const SIM_THRESHOLD = 0.65;
-          const existing = new Set(links.map(l => `${l.source}|${l.target}`));
-          for (let i = 0; i < embeddings.length; i++) {
-            const sims = [];
-            for (let j = 0; j < embeddings.length; j++) {
-              if (i === j) continue;
-              sims.push({ id: embeddings[j].id, sim: cosSim(embeddings[i].vec, embeddings[j].vec) });
-            }
-            sims.sort((a, b) => b.sim - a.sim);
-            for (const s of sims.slice(0, 2)) {
-              if (s.sim < SIM_THRESHOLD) break;
-              const k1 = `${embeddings[i].id}|${s.id}`, k2 = `${s.id}|${embeddings[i].id}`;
-              if (!existing.has(k1) && !existing.has(k2)) {
-                links.push({ source: embeddings[i].id, target: s.id, type: 'similarity', similarity: Math.round(s.sim * 100) / 100, strength: edgeStrength('similarity', Math.round(s.sim * 100) / 100) });
+          const src = libNodes.map(n => ({ id: n.id, v: vecById.get(n.id) })).filter(x => x.v);
+          if (src.length >= 2) {
+            const dim = src[0].v.length;
+            const norm = src.map(e => {
+              let s2 = 0;
+              for (let i = 0; i < dim; i++) s2 += e.v[i] * e.v[i];
+              const d = Math.sqrt(s2) || 1;
+              const v = new Float64Array(dim);
+              for (let i = 0; i < dim; i++) v[i] = e.v[i] / d;
+              return { id: e.id, v };
+            });
+            const SIM_THRESHOLD = 0.65;
+            const existing = new Set(links.map(l => `${l.source}|${l.target}`));
+            for (let i = 0; i < norm.length; i++) {
+              if ((i & 31) === 31) await new Promise(r => setImmediate(r));   /* 别堵死 /api/status */
+              const a = norm[i].v;
+              let s1 = -2, j1 = -1, s2 = -2, j2 = -1;
+              for (let j = 0; j < norm.length; j++) {
+                if (i === j) continue;
+                const b = norm[j].v;
+                let dot = 0;
+                for (let k = 0; k < dim; k++) dot += a[k] * b[k];
+                if (dot > s1) { s2 = s1; j2 = j1; s1 = dot; j1 = j; }
+                else if (dot > s2) { s2 = dot; j2 = j; }
+              }
+              for (const [sim, j] of [[s1, j1], [s2, j2]]) {
+                if (j < 0 || sim < SIM_THRESHOLD) continue;
+                const sid = norm[i].id, tid = norm[j].id;
+                const k1 = `${sid}|${tid}`, k2 = `${tid}|${sid}`;
+                if (existing.has(k1) || existing.has(k2)) continue;
                 existing.add(k1);
+                const rounded = Math.round(sim * 100) / 100;
+                links.push({ source: sid, target: tid, type: 'similarity', similarity: rounded, strength: edgeStrength('similarity', rounded) });
               }
             }
           }
@@ -742,43 +761,15 @@ async function buildGraphPayload({ scope, fed, project, instance, libs, cacheKey
   // Cross-library links must see the final region before grouping (previously all used "default").
   for (const n of nodes) n.layoutGroup = layoutGroupOf(n, fed);
 
-  /* v1.18.11 跨库相似边:同星域内、不同主文件夹(星座)之间 top-2——库间干线原料。
-   * 星座=库之后,库内边全是同星座(淡线),星门干线必须靠跨库边。单库星域(AIRI)自动跳过。 */
-  try {
-    const byInst = new Map();
-    for (const n of nodes) {
-      const k = String(n.layoutGroup || 'default');
-      if (!byInst.has(k)) byInst.set(k, []);
-      byInst.get(k).push(n);
-    }
-    const existing = new Set(links.map(l => `${l.source}|${l.target}`));
-    const CROSS_SIM = 0.55;
-    for (const [, ns] of byInst) {
-      await new Promise(r => setImmediate(r));   /* 让出事件循环:kNN 之外的同步段也别堵死 HTTP */
-      const libs = new Set(ns.map(n => n.lib || 'default'));
-      if (libs.size < 2) continue; /* 单库星域无跨库概念 */
-      const withV = ns.map(n => ({ n, v: vecById.get(n.id) })).filter(x => x.v);
-      if (withV.length < 4) continue;
-      for (let i = 0; i < withV.length; i++) {
-        const a = withV[i];
-        const sims = [];
-        for (let j = 0; j < withV.length; j++) {
-          if (i === j) continue;
-          const b = withV[j];
-          if (String(b.n.lib || 'default') === String(a.n.lib || 'default')) continue; /* 只跨库 */
-          sims.push({ id: b.n.id, sim: cosine(a.v, b.v) });
-        }
-        sims.sort((x, y) => y.sim - x.sim);
-        for (const s of sims.slice(0, 2)) {
-          if (s.sim < CROSS_SIM) break;
-          const k1 = `${a.n.id}|${s.id}`, k2 = `${s.id}|${a.n.id}`;
-          if (existing.has(k1) || existing.has(k2)) continue;
-          existing.add(k1);
-          links.push({ source: a.n.id, target: s.id, type: 'similarity', similarity: Math.round(s.sim * 100) / 100, strength: edgeStrength('similarity', Math.round(s.sim * 100) / 100) });
-        }
-      }
-    }
-  } catch (e) { console.error('cross-lib links failed:', e.message); }
+  /* ── 跨团相似边(原 v1.18.11"星门干线原料"):2026-10-30 停发 ──────────────────────
+   * 为什么停:这些边连的是**同一个星域里不同团(星座)之间**的点,而画它们的干道层
+   * 在 v1.25 已按产品定稿整体删除 —— 于是它们只剩下两个作用:
+   *   ① 顶部"连线 N"里白白多出 2410 条(实测 Hermes 734 + LobeHub 1114 + AIRI 562),
+   *      点开却一条都看不到(现象:连线很多,图反而更乱);
+   *   ② 把每点的度数抬高,影响标签/亮度排名和语义聚类。
+   * 产品口径:**每个团内部要有线,团外不连**。所以这里不再生成跨团边,
+   * 只保留上面每个库(团)内部的 kNN。恢复办法:从 git 历史取回这段(2a50506 及以前)。
+   */
 
   progress('计算语义投影', 0.24);
   const byGroup = new Map();
