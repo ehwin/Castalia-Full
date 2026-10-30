@@ -51,6 +51,19 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
   background: radial-gradient(ellipse at 50% 45%, transparent 42%, rgba(0,0,0,0.55) 100%); }
 #loading { position: fixed; top: 50%; left: calc(50% + var(--rail)/2); transform: translate(-50%,-50%); font-size: .95rem; color: var(--accent); letter-spacing: 0.14em; z-index: 5; }
 #loading.error { color: var(--red); }
+/* 加载进度(2026-10-30):服务端重建整图时是同步阻塞的,推不出真实百分比。
+ * 这里只求"看得出在动":估算条 + 真实已等秒数,算完立刻跳到完成。 */
+#loadprog { position: fixed; top: calc(50% + 28px); left: calc(50% + var(--rail)/2);
+  transform: translateX(-50%); width: min(320px, 46vw); z-index: 6; }
+#loadprog[hidden] { display: none; }
+#loadprog .lp-track { height: 4px; border-radius: 2px; background: rgba(255,255,255,0.10); overflow: hidden; }
+#loadprog .lp-fill { height: 100%; width: 0; border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), #7C6BFF); transition: width .25s ease-out; }
+#loadprog .lp-row { display: flex; justify-content: space-between; gap: 14px; margin-top: 6px;
+  font-size: .72rem; letter-spacing: .06em; color: rgba(255,255,255,0.55); }
+#loadprog .lp-time { font-variant-numeric: tabular-nums; }
+#loadprog { transition: opacity .19s ease-out; }
+body.embed #loadprog { left: 50%; }
 
 #rail { position: fixed; left: 0; top: 0; bottom: 0; width: var(--rail); z-index: 12;
   background: rgba(8,10,15,.92); border-right: 1px solid var(--line);

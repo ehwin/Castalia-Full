@@ -1,10 +1,13 @@
 /* routes/graph.js — /api/graph /api/stats /api/status */
 import { Router } from 'express';
-import { existsSync } from 'fs';
+import { existsSync, statSync, readFileSync as fsRead, writeFileSync as fsWrite, mkdirSync, renameSync } from 'fs';
+import { gzipSync } from 'node:zlib';
+import { Worker } from 'node:worker_threads';
 import { join } from 'node:path';
 import { createRequire } from 'module';
 import { createHash } from 'node:crypto';
 import { DB_DIR, DB_PATH, LEGACY_DB_PATH, CONFIG_PATH, loadConfig, openLibDb, libFiles, currentInstanceLibs, dbDirHasData, AGGREGATE_DIRS, sameDbDir } from './lib.js';
+import { groupIndex, priorCoverage, nebulaGeometry, flattenVectors, pca2d } from './layout-geometry.mjs';
 
 /* 星座键:默认=文件夹(memType,通用版口径);实例设 GRAPH_CONSTELLATION=category 时按 category 分
  * (anima 不用四个 memType 文件夹,它的分类轴是 category → AIRI 星域才不会只剩一个「通用」星座) */
@@ -20,8 +23,73 @@ const consKeyOf = (n) => {
 };
 
 const router = Router();
-const NEBULA_CACHE = new Map();
-const NEBULA_CACHE_MAX = 8;
+
+/* ═══ 打开速度(v1.19):整响应缓存 + 增量布局 ═══
+ * 旧实现的代价叠起来就是"每次打开都要等几十秒"(2026-10-30 实测 Full 汇总 4306 点):
+ *   · 布局签名 = 把一个节点的 JSON + 1024 维向量全喂进 sha256(约 17MB)→ 记忆体每 2 分钟
+ *     有新写入就整盘失效,缓存几乎从不命中;
+ *   · 失效即全量重算:全局 UMAP(4302 点 × 1024 维 × 350 epoch)18s + 每星座 UMAP 13s;
+ *   · 同一次请求还算了两块前端根本不读的投影,其中整库 PCA 是 n×n Gram 矩阵(O(n²d));
+ * 现在:签名只看各库文件(含 -wal)的 size/mtime(毫秒级、写入立即可见),
+ * 命中直接回缓存的整段 JSON(带 ETag + gzip);未命中则优先"旧坐标不动 + 新点就地插入"。 */
+const GRAPH_CACHE = new Map();          /* key: scope|project|instance → { sig, body, gzip, etag } */
+const GRAPH_CACHE_MAX = 4;
+const LAYOUT_REUSE = String(process.env.GRAPH_LAYOUT_REUSE ?? '1') !== '0';
+const UNIVERSE_LAYOUT = String(process.env.GRAPH_UNIVERSE_LAYOUT || '') === '1';
+/* 文件指纹:主库 + WAL。记忆体是 WAL 模式(写入先进 -wal,主文件可能几分钟不动),
+ * 只看主文件 mtime 会把"刚写的记忆"判成没变 —— 那是缓存最危险的错法。 */
+function fileStamp(file) {
+  const parts = [];
+  for (const f of [file, file + '-wal']) {
+    try { const st = statSync(f); parts.push(st.size + ':' + Math.round(st.mtimeMs)); }
+    catch { parts.push('-'); }
+  }
+  return parts.join('/');
+}
+function snapshotSignature(libs, scope, project, instance) {
+  return [scope, project, instance, CONS_KIND, CATEGORY_INSTANCES.join(',')]
+    .concat(libs.map(l => `${l.instance || ''}~${l.project}~${l.file}~${fileStamp(l.file)}`))
+    .join(';');
+}
+
+/* 布局持久化:进程重启/看护重启不该从头再算一遍 UMAP(坐标是纯几何,存下来就能用) */
+function layoutCacheDir() {
+  const base = process.env.VIZ_LAYOUT_DIR
+    || join(process.env.LOCALAPPDATA || process.env.TMPDIR || '.', 'Castalia', 'viz-layouts');
+  try { mkdirSync(base, { recursive: true }); } catch { /* 只读环境:退回纯内存 */ }
+  return base;
+}
+/* 文件名必须带**库身份**:scope=local 在四个星图里指四个不同的记忆库,
+ * 只按 scope 取名会让 Hermes 星图读到 Full 的坐标(实测:覆盖率不足 → 退化成全量重排)。 */
+function layoutCacheFile(scope, project, instance) {
+  const owner = instanceName() || 'local';
+  const dbTag = String(DB_DIR || '').replace(/[^A-Za-z0-9_.-]/g, '_').slice(-48);
+  const name = ['layout', owner, dbTag, scope, project || '_', instance || '_'].join('_')
+    .replace(/[^A-Za-z0-9_.-]/g, '_');
+  return join(layoutCacheDir(), name + '.json');
+}
+function loadPriorLayout(scope, project, instance) {
+  try {
+    const f = layoutCacheFile(scope, project, instance);
+    if (!existsSync(f)) return null;
+    const j = JSON.parse(fsRead(f, 'utf-8'));
+    if (!j || !j.coords || typeof j.coords !== 'object') return null;
+    const m = new Map(Object.entries(j.coords));
+    m.mode = j.mode || '';
+    m.savedAt = j.savedAt || 0;
+    return m;
+  } catch { return null; }
+}
+function savePriorLayout(scope, project, instance, nodeXY, mode) {
+  try {
+    const f = layoutCacheFile(scope, project, instance);
+    const coords = {};
+    for (const [id, v] of nodeXY) coords[id] = [v[0], v[1], v[2]];
+    const tmp = f + '.tmp';
+    fsWrite(tmp, JSON.stringify({ savedAt: Date.now(), count: nodeXY.size, mode: mode || '', coords }));
+    renameSync(tmp, f);
+  } catch (e) { console.error('layout persist failed:', e.message); }
+}
 
 // IDs describe storage ownership, not mutable memory metadata. JSON tuples avoid separator collisions.
 function graphNodeId(lib, rawId) {
@@ -57,19 +125,6 @@ function resolveGraphRelations(nodes, pendingEdges) {
     out.push({ source, target, type: edge.relation_type, strength: edgeStrength(edge.relation_type) });
   }
   return out;
-}
-function graphLayoutSignature(scope, nodes, links, vecById) {
-  // Hash the actual snapshot, including vectors and edges: catches updates with unchanged counts/timestamps,
-  // WAL writes, and membership/filter changes without depending on filesystem timestamp resolution.
-  const hash = createHash('sha256');
-  hash.update(JSON.stringify([scope, CONS_KIND, CATEGORY_INSTANCES]));
-  for (const n of [...nodes].sort((a, b) => a.id.localeCompare(b.id))) {
-    hash.update(JSON.stringify(n));
-    const v = vecById.get(n.id);
-    if (v) hash.update(Buffer.from(new Float32Array(v).buffer));
-  }
-  for (const l of links.map(l => JSON.stringify(l)).sort()) hash.update(l);
-  return hash.digest('hex');
 }
 
 /* D1:边强度(server 侧计算,不改引擎 schema)
@@ -144,94 +199,6 @@ function centroid(vecs) {
   for (let i = 0; i < d; i++) c[i] /= n;
   return Array.from(c);
 }
-function pcaCoords(vectors, dims = 2) {
-  const n = vectors.length;
-  const k = Math.max(1, Math.min(dims, 3));
-  if (!n) return [];
-  if (n === 1) return [Array.from({ length: k }, () => 0)];
-  if (n === 2) {
-    const row0 = Array.from({ length: k }, () => 0); row0[0] = -1;
-    const row1 = Array.from({ length: k }, () => 0); row1[0] = 1;
-    return [row0, row1];
-  }
-  const d = vectors[0].length;
-  const mean = new Float64Array(d);
-  for (let i = 0; i < n; i++) {
-    const v = vectors[i];
-    for (let t = 0; t < d; t++) mean[t] += v[t];
-  }
-  for (let t = 0; t < d; t++) mean[t] /= n;
-  const X = new Array(n);
-  for (let i = 0; i < n; i++) {
-    const v = vectors[i], row = new Float64Array(d);
-    for (let t = 0; t < d; t++) row[t] = v[t] - mean[t];
-    X[i] = row;
-  }
-  const G = Array.from({ length: n }, () => new Float64Array(n));
-  for (let i = 0; i < n; i++) {
-    for (let j = i; j < n; j++) {
-      let s = 0;
-      const a = X[i], b = X[j];
-      for (let t = 0; t < d; t++) s += a[t] * b[t];
-      G[i][j] = G[j][i] = s;
-    }
-  }
-  function power(excludes) {
-    const list = excludes || [];
-    const u = new Float64Array(n);
-    for (let i = 0; i < n; i++) u[i] = Math.sin(i * 1.718 + 0.31);
-    function ortho(vec) {
-      for (const ex of list) {
-        let dot = 0;
-        for (let i = 0; i < n; i++) dot += vec[i] * ex[i];
-        for (let i = 0; i < n; i++) vec[i] -= dot * ex[i];
-      }
-    }
-    ortho(u);
-    let norm = 0;
-    for (let i = 0; i < n; i++) norm += u[i] * u[i];
-    norm = Math.sqrt(norm) || 1;
-    for (let i = 0; i < n; i++) u[i] /= norm;
-    for (let it = 0; it < 36; it++) {
-      const v = new Float64Array(n);
-      for (let i = 0; i < n; i++) {
-        let s = 0;
-        const row = G[i];
-        for (let j = 0; j < n; j++) s += row[j] * u[j];
-        v[i] = s;
-      }
-      ortho(v);
-      norm = 0;
-      for (let i = 0; i < n; i++) norm += v[i] * v[i];
-      norm = Math.sqrt(norm) || 1;
-      for (let i = 0; i < n; i++) u[i] = v[i] / norm;
-    }
-    let lam = 0;
-    for (let i = 0; i < n; i++) {
-      let s = 0;
-      for (let j = 0; j < n; j++) s += G[i][j] * u[j];
-      lam += u[i] * s;
-    }
-    return { u, lam };
-  }
-  const axes = [];
-  const used = [];
-  for (let a = 0; a < k; a++) {
-    const e = power(used);
-    used.push(e.u);
-    axes.push(e);
-  }
-  const scales = axes.map(e => Math.sqrt(Math.max(e.lam, 0)));
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    const row = [];
-    for (let a = 0; a < k; a++) row.push(axes[a].u[i] * scales[a]);
-    out.push(row);
-  }
-  return out;
-}
-function pca2d(vectors) { return pcaCoords(vectors, 2); }
-
 /* ═══════════════════════════════════════════════════════════════════
  * P0 星云布局(2026-09-13)
  * 口径:形状由点自己长(橡皮泥),不画球/不缩容器;块 = L2 分文件夹(lib+memType);
@@ -240,40 +207,9 @@ function pca2d(vectors) { return pcaCoords(vectors, 2); }
  *      以及 nebula:{blobs[], metaEdges[]}(块轮廓/元边,供图例与干道使用)。
  * 依赖:vendor/umap-js(离线自包含);UMAP 失败自动退回 PCA,绝不影响主图返回。
  * ═══════════════════════════════════════════════════════════════════ */
-let _UMAP = null;
-function getUMAP() {
-  if (_UMAP === null) {
-    try {
-      const req = createRequire(import.meta.url);
-      _UMAP = req('../public/vendor/umap-js/index.js').UMAP || false;
-    } catch (e) { console.error('umap-js vendor load failed:', e.message); _UMAP = false; }
-  }
-  return _UMAP || null;
-}
-function mulberry32(a) {
-  return function () {
-    a = (a + 0x6D2B79F5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-function umapNd(vectors, dim = 3) {
-  const UMAP = getUMAP();
-  if (!UMAP || vectors.length < 6) return null;
-  const n = vectors.length;
-  const u = new UMAP({
-    nComponents: dim,
-    nNeighbors: Math.max(2, Math.min(32, Math.round(Math.sqrt(n) * 1.7))),
-    /* Retain dense knots and sparse chains in the semantic manifold. */
-    minDist: 0.30,
-    spread: 1.25,
-    nEpochs: n < 40 ? 200 : 350,
-    random: mulberry32(42),
-  });
-  const out = u.fit(vectors);
-  return out.map(p => Array.from({ length: dim }, (_, a) => Number(p[a]) || 0));
-}
+/* 稀疏随机投影(Johnson-Lindenstrauss):1024 维 → k 维,距离近似保持。
+ * 为什么在这里做:UMAP 每轮都要在**原始维度**上算距离,1024 维是它最大的成本项;
+ * 先压到 32 维再跑,形状等价(固定 seed,可复现),冷启动从 18s 掉到 1s 级。 */
 /* 2D 凸包(单调链) */
 function convexHull2D(pts) {
   const p = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -345,66 +281,42 @@ function densityZ2D(pts, amp) {
 }
 /* 块分离:每个块整体刚性平移(块内形状原样保留),直到块间留出 gap 真空。
  * 支持 N 维 —— 三维时三个方向都留真空,星云才有体积感而不是平盘。 */
-function sepBlobsND(groups, gap, dim, factor = 1) {
-  const D = dim || 3;
-  const meta = groups.map(g => {
-    const c = new Array(D).fill(0);
-    for (const p of g.pts) for (let a = 0; a < D; a++) c[a] += p[a] / g.pts.length;
-    let r = 0;
-    for (const p of g.pts) {
-      let s2 = 0;
-      for (let a = 0; a < D; a++) s2 += (p[a] - c[a]) * (p[a] - c[a]);
-      r = Math.max(r, Math.sqrt(s2));
-    }
-    return { key: g.key, c, r: Math.max(r, 1e-6) };
-  });
-  const off = new Map(meta.map(m => [m.key, new Array(D).fill(0)]));
-  for (let it = 0; it < 240; it++) {
-    let moved = false;
-    for (let i = 0; i < meta.length; i++) {
-      for (let j = i + 1; j < meta.length; j++) {
-        const A = meta[i], B = meta[j];
-        const oa = off.get(A.key), ob = off.get(B.key);
-        const d = new Array(D);
-        let dist2 = 0;
-        for (let a = 0; a < D; a++) { d[a] = (B.c[a] + ob[a]) - (A.c[a] + oa[a]); dist2 += d[a] * d[a]; }
-        const dist = Math.sqrt(dist2) || 1e-6;
-        const need = (A.r + B.r) * factor + gap;
-        if (dist < need) {
-          const k = (need - dist) / 2 / dist;
-          for (let a = 0; a < D; a++) { oa[a] -= d[a] * k; ob[a] += d[a] * k; }
-          moved = true;
-        }
-      }
-    }
-    if (!moved) break;
-  }
-  return off;
-}
-function applyNebulaLayout(nodes, links, vecById) {
+/* 增量落位:已定位的点原地不动,新点插进自己星座(块)现有的体积里。
+ * 返回 null = 旧坐标覆盖不足(换库/换作用域),交给全量重排。
+ * 为什么要这层:记忆体每 2 分钟就有新写入,而全量 UMAP 要 30s 级 ——
+ * "每次打开都慢"的本质不是算得慢,是**每次都从头算**,新增一两条也重排整张图。 */
+/* 布局入口(异步):覆盖率高 → 主线程增量落位(毫秒级);否则派给 worker 全量重排。
+ * 为什么分两条路:增量只是"往已有坐标里插几个新点",主线程跑完不影响任何人;
+ * 而全量重排是 5~20s 的纯 CPU 同步循环,放在主线程会把 /api/status 一起堵死
+ * (2026-10-30 实测:构建期间 3 次 1s 超时 → 托盘探针误判掉线)。 */
+async function applyNebulaLayout(nodes, links, vecById, prior, progress) {
   const pairs = nodes.map(n => ({ n, v: vecById.get(n.id) })).filter(p => p.v);
   if (pairs.length < 6) return null;
-  let xyz = null, usedUmap = false;
-  try { xyz = umapNd(pairs.map(p => p.v), 3); usedUmap = !!xyz; } catch (e) { console.error('umap failed:', e.message); }
-  if (!xyz) xyz = pcaCoords(pairs.map(p => p.v), 3);   /* 兜底:PCA 三维 */
-  if (!xyz) return null;
-  /* 三轴归一化:单尺度保持各轴相对比例;再把最扁的轴抬到最大轴的 60%
-   * (只做比例校正,不改点序 —— 目的是别让"第三个方向"塌成纸片) */
-  const ext = [0, 1, 2].map(a => {
-    let lo = Infinity, hi = -Infinity;
-    for (const p of xyz) { if (p[a] < lo) lo = p[a]; if (p[a] > hi) hi = p[a]; }
-    return { mid: (lo + hi) / 2, span: Math.max(hi - lo, 1e-6) };
-  });
-  const maxSpan = Math.max(ext[0].span, ext[1].span, ext[2].span);
-  /* v1.23.2: 全局尺度随点数自适应扩散。
-   * 固定 190 时，点越多同一体积里越挤（联邦 2000+ 点直接糊成团）。
-   * 以 120 点为基准，半径按 √(N/120) 增长（投影是扁盘，按面积），上限 3 倍防止宇宙过大。 */
-  const countScale = Math.min(3.0, Math.sqrt(Math.max(1, pairs.length) / 120));
-  const S = (190 * countScale) / maxSpan;
-  const stretch = ext.map(e => Math.min(Math.max((0.6 * maxSpan) / e.span, 1), 3));
-  const P = xyz.map(p => [0, 1, 2].map(a => (p[a] - ext[a].mid) * S * stretch[a]));
   /* 块 = 主文件夹/分文件夹 两层 */
   const blobKey = (n) => `${n.layoutGroup || n.instance || n.lib || n.project || 'default'}/${consKeyOf(n)}`;
+  const { groupOf } = groupIndex(pairs, blobKey);
+  const cover = priorCoverage(pairs, prior);
+  const geoProgress = (stage, pct) => progress(stage, 0.34 + 0.58 * pct);
+  let geom = null;
+  if (cover >= 0.6 || pairs.length < 400) {
+    /* 小图 / 增量:直接在主线程算(几十毫秒~几百毫秒) */
+    geom = nebulaGeometry(pairs, groupOf, prior, geoProgress);
+  } else {
+    try {
+      geom = await geometryInWorker(pairs, groupOf, geoProgress);
+    } catch (e) {
+      console.error('layout worker failed, falling back to in-process:', e.message);
+      progress('worker 不可用，退回主线程重算（会卡住其它请求）', 0.40);
+      geom = nebulaGeometry(pairs, groupOf, null, geoProgress);
+    }
+  }
+  if (!geom) return null;
+  return finalizeNebula(nodes, links, pairs, blobKey, geom);
+}
+
+/* 落元数据:坐标 → 节点字段 / 块轮廓 / 干道 / 链接标记(纯主线程,几十毫秒) */
+function finalizeNebula(nodes, links, pairs, blobKey, geom) {
+  const { P, usedUmap, incremental, stretch } = geom;
   const groups = new Map();
   pairs.forEach((p, i) => {
     const k = blobKey(p.n);
@@ -412,48 +324,8 @@ function applyNebulaLayout(nodes, links, vecById) {
     groups.get(k).push(i);
   });
   const gs = [...groups.entries()].map(([key, idx]) => ({ key, idx, pts: idx.map(i => P[i]) }));
-  /* Separate constellations while retaining their internal density gradients. */
   const blobCenter = (g) => [0, 1, 2].map(a =>
     g.pts.reduce((sum, p) => sum + p[a], 0) / g.pts.length);
-  for (const g of gs) {
-    const center = blobCenter(g);
-    const vectors = g.idx.map(i => pairs[i].v);
-    let local = null;
-    try { local = umapNd(vectors, 3); } catch (e) { console.error('constellation UMAP failed:', e.message); }
-    if (!local) local = pcaCoords(vectors, 3);
-    const mean = [0, 1, 2].map(a => local.reduce((s,p) => s+p[a], 0)/local.length);
-    const distances = local.map(p => Math.hypot(...p.map((v,a) => v-mean[a])));
-    const sorted = distances.slice().sort((a,b) => a-b);
-    const radius = Math.max(1e-6, sorted[Math.floor((sorted.length-1)*0.95)]);
-    const targetRadius = 9 + 8 * Math.sqrt(Math.max(0, g.idx.length-1));
-    const scale = targetRadius / radius;
-    local.forEach((p,j) => {
-      const t = distances[j] / radius;
-      const tail = t > 1 ? (1 + 0.28 * Math.log1p((t-1)/0.28)) / t : 1;
-      p.forEach((v,a) => {g.pts[j][a] = center[a] + (v-mean[a])*scale*tail;});
-    });
-    // Resolve only near-coincident points; retain the density difference between knots and chains.
-    if (g.pts.length > 2) {
-      const nearest = g.pts.map((p,i) => Math.min(...g.pts.filter((q,j) => j!==i)
-        .map(q => Math.hypot(...q.map((v,a) => v-p[a]))))).sort((a,b) => a-b);
-      const floor = Math.max(0.12, nearest[Math.floor(nearest.length/2)] * 0.30);
-      for (let pass=0;pass<8;pass++) {
-        for(let i=0;i<g.pts.length;i++) for(let j=i+1;j<g.pts.length;j++) {
-          const p=g.pts[i],q=g.pts[j];
-          let d=q.map((v,a) => v-p[a]),len=Math.hypot(...d);
-          if(len>=floor) continue;
-          if(len<1e-9) {d=[Math.sin(i*7+j),Math.cos(j*11+i),Math.sin(i+j*3)];len=Math.hypot(...d);}
-          const push=(floor-Math.hypot(...q.map((v,a)=>v-p[a]))) * 0.5/len;
-          for(let a=0;a<3;a++) {p[a]-=d[a]*push;q[a]+=d[a]*push;}
-        }
-      }
-    }
-  }
-  const separation = sepBlobsND(gs, 8, 3, 1.10);
-  for (const g of gs) {
-    const delta = separation.get(g.key);
-    for (const p of g.pts) for (let a=0;a<3;a++) p[a] += delta[a];
-  }
 
   /* Write coordinates and replay them from the layout cache on later requests. */
   const placed = new Set();
@@ -593,7 +465,7 @@ function applyNebulaLayout(nodes, links, vecById) {
     return Math.round(hi - lo);
   });
   const zRatio = Math.round(Math.min(...ex) / Math.max(...ex) * 100);
-  return { ok: true, usedUmap, blobs, metaEdges, nodeXY, linkFlags, nodeCount: pairs.length, extents: ex, zRatio, stretch: stretch.map(v => Math.round(v * 100) / 100) };
+  return { ok: true, usedUmap, incremental, blobs, metaEdges, nodeXY, linkFlags, nodeCount: pairs.length, extents: ex, zRatio, stretch: stretch.map(v => Math.round(v * 100) / 100) };
 }
 
 /**
@@ -615,7 +487,7 @@ function paintNebula(nodes, links, L) {
     const f = L.linkFlags.get(`${sa}|${ta}`);
     if (f) { l.internal = f.internal; l.meta = f.meta; }
   }
-  return { ok: true, usedUmap: L.usedUmap, blobs: L.blobs, metaEdges: L.metaEdges, nodeCount: L.nodeCount, zRatio: L.zRatio, extents: L.extents, stretch: L.stretch, cached: !!L.cached };
+  return { ok: true, usedUmap: L.usedUmap, incremental: !!L.incremental, blobs: L.blobs, metaEdges: L.metaEdges, nodeCount: L.nodeCount, zRatio: L.zRatio, extents: L.extents, stretch: L.stretch, cached: !!L.cached };
 }
 function hash01Lib(id) {
   const s = String(id || '') + ':neb';
@@ -624,12 +496,159 @@ function hash01Lib(id) {
   return ((h >>> 0) % 10000) / 10000;
 }
 
-router.get('/graph', (req, res) => {
+/* 每个库的原始读取结果(记忆行 / 边 / 向量)按文件指纹缓存。
+ * 为什么要:一次联邦请求要开 100 个 sqlite 文件(每个都要 pragma + 加载 sqlite-vec),
+ * 实测 1.8s —— 而"打开星图"时通常只有 1~2 个库真的变了。 */
+const LIB_ROWS = new Map();
+const LIB_ROWS_MAX = 400;
+function readLibRows(lib) {
+  const stamp = fileStamp(lib.file);
+  const memo = LIB_ROWS.get(lib.file);
+  if (memo && memo.stamp === stamp) { LIB_ROWS.delete(lib.file); LIB_ROWS.set(lib.file, memo); return memo; }
+  const out = { stamp, memories: [], edges: [], vecs: [] };
+  let db = null;
+  try {
+    db = openLibDb(lib.file);
+    if (db) {
+      out.memories = db.prepare(`
+        SELECT id, text, project, type, mem_type, category, subcategory, tags,
+               importance, character_id, source,
+               subject, tier, expires_at, created_at, accessed_count
+        FROM memory WHERE is_active = 1 ORDER BY created_at ASC
+      `).all();
+      try { out.edges = db.prepare('SELECT source_id, target_id, relation_type FROM edges').all(); } catch { }
+      try {
+        const vecRows = db.prepare(`
+          SELECT m.id, v.embedding FROM memory m
+          JOIN vec_memory v ON m.rowid = v.rowid WHERE m.is_active = 1
+        `).all();
+        for (const r of vecRows) {
+          const vec = parseVec(r.embedding);
+          if (vec) out.vecs.push([r.id, vec]);
+        }
+      } catch (e) { console.error('vec load failed:', e.message); }
+    }
+  } catch (e) { console.error(`graph lib ${lib.file} failed:`, e.message); }
+  finally { if (db) db.close(); }
+  LIB_ROWS.set(lib.file, out);
+  while (LIB_ROWS.size > LIB_ROWS_MAX) LIB_ROWS.delete(LIB_ROWS.keys().next().value);
+  return out;
+}
+
+/* 统一出口:ETag/304 + gzip。7.7MB 未压缩的 JSON 在 localhost 也要几百毫秒解析,
+ * gzip 后约 1MB —— 浏览器解析时间也一并省掉。 */
+function sendGraph(req, res, entry) {
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('ETag', entry.etag);
+  res.setHeader('X-Graph-Built', String(entry.builtAt));
+  if (req.headers['if-none-match'] === entry.etag) return res.status(304).end();
+  const accepts = String(req.headers['accept-encoding'] || '');
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  if (/\bgzip\b/.test(accepts)) {
+    if (!entry.gzip) entry.gzip = gzipSync(entry.body);
+    res.setHeader('Content-Encoding', 'gzip');
+    res.setHeader('Vary', 'Accept-Encoding');
+    return res.end(entry.gzip);
+  }
+  res.end(entry.body);
+}
+
+/* ═══ 构建进度 / 并发合并 ═══
+ * 进度能"实时"的前提是重排跑在 worker 里 —— 主线程空着,才答得上这个接口;
+ * 否则构建期间连它自己都会超时(2026-10-30 实测 /api/status 连续 1s 无响应)。 */
+const BUILD_PROGRESS = new Map();   /* cacheKey → { stage, pct, startedAt } */
+const INFLIGHT = new Map();         /* cacheKey → Promise<entry>:同一快照只算一次 */
+const LAYOUT_WORKER_TIMEOUT = parseInt(process.env.GRAPH_WORKER_TIMEOUT || '180000', 10);
+
+function progressSet(cacheKey, stage, pct) {
+  const cur = BUILD_PROGRESS.get(cacheKey) || {};
+  BUILD_PROGRESS.set(cacheKey, {
+    stage,
+    pct: Math.min(0.99, Math.max(cur.pct || 0, pct)),   /* 单调,避免来回跳 */
+    startedAt: cur.startedAt || Date.now(),
+    at: Date.now(),
+  });
+}
+
+/* 把几何计算派给 worker_threads:整段 UMAP 期间事件循环是空的(实测主线程最大卡顿 15ms),
+ * 所以 /api/status、/api/graph/progress、别的星图页都照常应答。 */
+function geometryInWorker(pairs, groupOf, progress) {
+  const { flat, n, dim } = flattenVectors(pairs);
+  return new Promise((resolve, reject) => {
+    let w;
+    try { w = new Worker(new URL('./layout-worker.mjs', import.meta.url)); }
+    catch (e) { reject(e); return; }
+    let settled = false;
+    const finish = (err, geom) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      Promise.resolve(w.terminate()).catch(() => { });
+      if (err) reject(err); else resolve(geom);
+    };
+    const timer = setTimeout(() => finish(new Error('layout worker 超时')), LAYOUT_WORKER_TIMEOUT);
+    w.on('message', (m) => {
+      if (!m) return;
+      if (m.type === 'progress') { progress(m.stage, m.pct); return; }
+      if (m.type === 'error') { finish(new Error(m.error || 'worker error')); return; }
+      if (m.type === 'done') {
+        const c = new Float32Array(m.coords);
+        const P = new Array(n);
+        for (let i = 0; i < n; i++) P[i] = [c[i * 3], c[i * 3 + 1], c[i * 3 + 2]];
+        finish(null, { P, usedUmap: !!m.usedUmap, incremental: false, stretch: m.stretch || [1, 1, 1] });
+      }
+    });
+    w.on('error', (e) => finish(e));
+    w.postMessage({ flat: flat.buffer, n, dim, groupOf }, [flat.buffer]);
+  });
+}
+
+router.get('/graph', async (req, res) => {
   const scope = graphScope(req);
   const fed = isFedScope(scope);
   const project = String(req.query.project || '');
   const instance = String(req.query.instance || '');
   const libs = libsForScope(scope).filter(lib => (!project || lib.project === project) && (!instance || lib.instance === instance));
+  /* 快照没变就直接回上一次的整段 JSON(实测 4306 点:重建 36s → 命中 30ms) */
+  const snapSig = snapshotSignature(libs, scope, project, instance);
+  const cacheKey = `${scope}|${project}|${instance}`;
+  const cacheHit = GRAPH_CACHE.get(cacheKey);
+  if (cacheHit && cacheHit.sig === snapSig && String(req.query.fresh || '') !== '1') {
+    GRAPH_CACHE.delete(cacheKey); GRAPH_CACHE.set(cacheKey, cacheHit);   /* LRU 提升 */
+    return sendGraph(req, res, cacheHit);
+  }
+  let build = INFLIGHT.get(cacheKey);
+  if (!build) {
+    build = buildGraphPayload({
+      scope, fed, project, instance, libs, cacheKey, snapSig,
+      layouts: String(req.query.layouts || ''),
+      progress: (stage, pct) => progressSet(cacheKey, stage, pct),
+    });
+    INFLIGHT.set(cacheKey, build);
+    build.catch(() => { }).finally(() => INFLIGHT.delete(cacheKey));
+  }
+  let entry;
+  try { entry = await build; }
+  catch (e) {
+    console.error('graph build failed:', e && e.message);
+    return res.status(500).json({ ok: false, error: String((e && e.message) || e) });
+  }
+  BUILD_PROGRESS.delete(cacheKey);
+  sendGraph(req, res, entry);
+});
+
+/* 真实进度:页面在等 /api/graph 时轮询这里(worker 在跑,主线程答得动) */
+router.get('/graph/progress', (req, res) => {
+  const key = `${graphScope(req)}|${String(req.query.project || '')}|${String(req.query.instance || '')}`;
+  res.setHeader('Cache-Control', 'no-store');
+  const p = BUILD_PROGRESS.get(key);
+  if (!p) return res.json({ building: false, cached: !!GRAPH_CACHE.get(key) });
+  res.json({ building: true, stage: p.stage, pct: Math.round(p.pct * 1000) / 1000, elapsedMs: Date.now() - p.startedAt });
+});
+
+/* 构建主体(原 /api/graph 内联代码,独立出来只为合并并发请求) */
+async function buildGraphPayload({ scope, fed, project, instance, libs, cacheKey, snapSig, layouts, progress }) {
+  progress('读取记忆库', 0.02);
   const nodes = [];
   const links = [];
   const vecById = new Map();
@@ -641,21 +660,17 @@ router.get('/graph', (req, res) => {
     knowledge: '#26A69A', preference: '#EC407A', decision: '#FFA726',
     mistake: '#EF5350', general: '#78909C',
   };
-  for (const lib of libs) {
-    let db = null;
+  for (let li = 0; li < libs.length; li++) {
+    const lib = libs[li];
+    /* 100 个 sqlite 全同步读,整体 1~2s:每 8 个库让一次事件循环,免得把 /api/status 堵死 */
+    progress('读取记忆库', 0.02 + 0.16 * ((li + 1) / Math.max(1, libs.length)));
+    if ((li & 7) === 7) await new Promise(r => setImmediate(r));
     try {
-      db = openLibDb(lib.file);
-      if (!db) continue;
-      const memories = db.prepare(`
-        SELECT id, text, project, type, mem_type, category, subcategory, tags,
-               importance, character_id, source,
-               subject, tier, expires_at, created_at, accessed_count
-        FROM memory WHERE is_active = 1 ORDER BY created_at ASC
-      `).all();
+      const snap = readLibRows(lib);
+      const memories = snap.memories;
       totalMemories += memories.length;
 
-      let edges = [];
-      try { edges = db.prepare('SELECT source_id, target_id, relation_type FROM edges').all(); } catch {}
+      const edges = snap.edges;
 
       const libNodes = memories.map(m => {
         let tags = [];
@@ -684,16 +699,7 @@ router.get('/graph', (req, res) => {
        // Resolve after all files are read, so relations can span memType databases.
        pendingEdges.push(...edges.map(edge => ({ lib, edge })));
 
-      try {
-        const vecRows = db.prepare(`
-          SELECT m.id, v.embedding FROM memory m
-          JOIN vec_memory v ON m.rowid = v.rowid WHERE m.is_active = 1
-        `).all();
-        for (const r of vecRows) {
-          const vec = parseVec(r.embedding);
-          if (vec) vecById.set(graphNodeId(lib, r.id), vec);
-        }
-      } catch (e) { console.error('vec load failed:', e.message); }
+      for (const [rawId, vec] of snap.vecs) vecById.set(graphNodeId(lib, rawId), vec);
 
       // 库内相似度链接(v1.18.11:上限 100→400,大库不再整库断链)
       if (libNodes.length > 0 && libNodes.length <= 400) {
@@ -729,9 +735,9 @@ router.get('/graph', (req, res) => {
 
       nodes.push(...libNodes);
     } catch (e) { console.error(`graph lib ${lib.file} failed:`, e.message); }
-    finally { if (db) db.close(); }
   }
 
+  progress('整理关系边', 0.19);
   links.push(...resolveGraphRelations(nodes, pendingEdges));
   // Cross-library links must see the final region before grouping (previously all used "default").
   for (const n of nodes) n.layoutGroup = layoutGroupOf(n, fed);
@@ -748,6 +754,7 @@ router.get('/graph', (req, res) => {
     const existing = new Set(links.map(l => `${l.source}|${l.target}`));
     const CROSS_SIM = 0.55;
     for (const [, ns] of byInst) {
+      await new Promise(r => setImmediate(r));   /* 让出事件循环:kNN 之外的同步段也别堵死 HTTP */
       const libs = new Set(ns.map(n => n.lib || 'default'));
       if (libs.size < 2) continue; /* 单库星域无跨库概念 */
       const withV = ns.map(n => ({ n, v: vecById.get(n.id) })).filter(x => x.v);
@@ -773,6 +780,7 @@ router.get('/graph', (req, res) => {
     }
   } catch (e) { console.error('cross-lib links failed:', e.message); }
 
+  progress('计算语义投影', 0.24);
   const byGroup = new Map();
   for (const n of nodes) {
     const g = layoutGroupOf(n, fed);
@@ -788,6 +796,7 @@ router.get('/graph', (req, res) => {
       byFolder.get(f).push(n);
     }
     for (const [, fns] of byFolder) {
+      await new Promise(r => setImmediate(r));
       const pairs = fns.map(n => ({ n, vec: vecById.get(n.id) })).filter(p => p.vec);
       if (pairs.length < 2) continue;
       const coords = pca2d(pairs.map(p => p.vec));
@@ -798,8 +807,11 @@ router.get('/graph', (req, res) => {
     }
   }
   /* cosmograph 宇宙图:全库 embedding PCA(对应 point_x_by / point_y_by,仿真关闭)
-   * n×n Gram 矩阵,节点过多时抽样,失败不影响主图返回 */
+   * n×n Gram 矩阵,节点过多时抽样,失败不影响主图返回。
+   * v1.19:前端星图/星座图都不读 universeX/Y/Z(全仓 grep 无引用),默认不算;
+   * 需要时设 GRAPH_UNIVERSE_LAYOUT=1 或请求带 ?layouts=universe。 */
   try {
+    if (UNIVERSE_LAYOUT || String(layouts || '').includes('universe')) {
     let uniPairs = nodes.map(n => ({ n, vec: vecById.get(n.id) })).filter(p => p.vec);
     const UNI_CAP = 800;
     if (uniPairs.length > UNI_CAP) {
@@ -812,6 +824,7 @@ router.get('/graph', (req, res) => {
         p.n.universeY = uni[i][1];
         p.n.universeZ = uni[i][2] || 0;
       });
+    }
     }
   } catch (e) { console.error('universe PCA failed:', e.message); }
 /* v1.17.3 EVE 式三级星图:星域(实例)→星座(文件夹)→星系(记忆)
@@ -1080,29 +1093,26 @@ const gNames = [...byGroup.keys()];
    * 只回缓存元数据会让坐标退回旧布局 —— 这是"刷新一次新、再刷又变旧"的根因。 */
   let nebula = null;
   try {
-    const ck = graphLayoutSignature(JSON.stringify([scope, project]), nodes, links, vecById);
-    let L = NEBULA_CACHE.get(ck) || null;
-    if (!L) {
-      L = applyNebulaLayout(nodes, links, vecById);
-      if (L) {
-        NEBULA_CACHE.set(ck, L);
-        while (NEBULA_CACHE.size > NEBULA_CACHE_MAX) NEBULA_CACHE.delete(NEBULA_CACHE.keys().next().value);
-      }
-    } else {
-      // Bounded LRU: promote the reused entry; never keep every historical database snapshot.
-      NEBULA_CACHE.delete(ck);
-      NEBULA_CACHE.set(ck, L);
-      L.cached = true;
-    }
+    const prior = LAYOUT_REUSE ? loadPriorLayout(scope, project, instance) : null;
+    const L = await applyNebulaLayout(nodes, links, vecById, prior, progress);
     nebula = L ? paintNebula(nodes, links, L) : { ok: false, error: 'layout unavailable' };
+    if (L) savePriorLayout(scope, project, instance, L.nodeXY, L.usedUmap ? 'umap' : 'pca');
   } catch (e) {
     console.error('nebula layout failed:', e.message);
     nebula = { ok: false, error: String(e.message || e) };
   }
-  res.json({
+  progress('编码与传输', 0.94);
+  const body = JSON.stringify({
     consKind: CONS_KIND,          // 星座口径:memtype(默认)/ category(实例开关)
     nodes, links, stats, clusterBridges, nebula });
-});
+  const entry = {
+    sig: snapSig, body, gzip: null, builtAt: Date.now(),
+    etag: '"' + createHash('sha1').update(body).digest('hex').slice(0, 20) + '"',
+  };
+  GRAPH_CACHE.set(cacheKey, entry);
+  while (GRAPH_CACHE.size > GRAPH_CACHE_MAX) GRAPH_CACHE.delete(GRAPH_CACHE.keys().next().value);
+  return entry;
+}
 
 // ═══ API: GET /api/stats ═══
 router.get('/stats', (req, res) => {

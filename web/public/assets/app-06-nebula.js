@@ -677,10 +677,104 @@ function renderNebulaLegend(data, real) {
   const linkEl = document.querySelector('#legend .legend-link');
   if (linkEl) linkEl.textContent = '点行=展开下一层 · 点圆点=筛选 · 点标题=收起面板';
 }
+/* ═══ 加载进度(2026-10-30) ═══
+ * 真进度来自服务端:全量重排跑在 worker_threads 里,主线程空着,所以 /api/graph/progress
+ * 能实时答上来(阶段 + 百分比)。构建期间如果被别的请求占住/服务端没在构建,就退回
+ * "实测耗时模型"兜底 —— 目的是让人知道没卡死,而不是假装精确。永远停在 99% 直到数据真到。 */
+const LOAD_EST = (() => {
+  let n = 3000;
+  try { n = parseInt(localStorage.getItem('castalia.lastNodeCount') || '', 10) || 3000; } catch (e) {}
+  return Math.min(32000, Math.max(1200, 700 + n * 4.4));   /* n=4306 → ~20s,n=265 → ~1.9s */
+})();
+const LOAD_STAGES = [
+  [0.00, '读取记忆库'], [0.10, '整理关系边'], [0.16, '计算语义投影'],
+  [0.22, '重算全局布局（UMAP）'], [0.62, '重算星座布局'], [0.95, '编码与传输'],
+];
+function __loadProgress(probeQuery) {
+  const box = document.getElementById('loadprog');
+  if (!box) return { start() {}, stop() {} };
+  const fill = box.querySelector('.lp-fill');
+  const stageEl = box.querySelector('.lp-stage');
+  const timeEl = box.querySelector('.lp-time');
+  let t0 = 0, arm = 0, tick = 0, shown = false, stopped = false;
+  let serverPct = 0, serverStage = '';
+  const paint = () => {
+    if (stopped) return;
+    const dt = Date.now() - t0;
+    const est = Math.min(0.96, dt / LOAD_EST);
+    let stage = LOAD_STAGES[0][1];
+    for (const [at, name] of LOAD_STAGES) if (est >= at) stage = name;
+    /* 服务端报过进度就一律用它(真实);否则用估算兜底 */
+    const pct = serverStage ? Math.max(serverPct, Math.min(0.99, serverPct)) : est;
+    fill.style.width = (pct * 100).toFixed(1) + '%';
+    stageEl.textContent = (serverStage || stage) + ' · ' + Math.round(pct * 100) + '%';
+    timeEl.textContent = (dt / 1000).toFixed(1) + 's';
+  };
+  const poll = async () => {
+    if (stopped) return;
+    try {
+      const r = await fetch('/api/graph/progress' + (probeQuery ? '?' + probeQuery : ''), { cache: 'no-store' });
+      const p = await r.json();
+      if (p && p.building && typeof p.pct === 'number') {
+        serverPct = Math.max(serverPct, p.pct);
+        serverStage = p.stage || serverStage;
+      }
+    } catch (e) { /* 轮询失败不影响主请求 */ }
+    paint();
+    if (!stopped) tick = setTimeout(poll, 250);
+  };
+  return {
+    start() {
+      arm = setTimeout(() => {                 /* 命中缓存(<350ms)时不要闪一下 */
+        if (stopped) return;
+        shown = true; t0 = Date.now();
+        box.hidden = false; box.classList.remove('done');
+        paint(); tick = setTimeout(poll, 120);
+      }, 350);
+    },
+    /* 出错/空库:立刻收掉,别拖着 */
+    stop() {
+      stopped = true;
+      clearTimeout(arm); clearTimeout(tick);
+      if (!shown) return;
+      box.hidden = true; box.classList.remove('done');
+    },
+    /* 成功:先把条走满、停一下、再淡出,走完才让页面揭开(不抢先)
+     * 返回的 Promise 在条彻底消失后 resolve —— 调用方拿它来"等条读完再打开"。 */
+    finish() {
+      stopped = true;
+      clearTimeout(arm); clearTimeout(tick);
+      if (!shown) return Promise.resolve();
+      box.classList.add('done');
+      fill.style.width = '100%';
+      stageEl.textContent = '完成 · 100%';
+      timeEl.textContent = ((Date.now() - t0) / 1000).toFixed(1) + 's';
+      return new Promise(resolve => {
+        setTimeout(() => {                     /* 等 width 过渡(.25s)走完 */
+          box.style.opacity = '0';
+          setTimeout(() => {
+            box.hidden = true; box.style.opacity = ''; box.classList.remove('done');
+            resolve();
+          }, 190);                             /* 与 CSS 的 opacity 过渡一致 */
+        }, 330);
+      });
+    },
+  };
+}
+
 function __init() {
+  const __probe = 'scope=' + encodeURIComponent(GRAPH_SCOPE) + '&project=' + encodeURIComponent(GRAPH_PROJECT) +
+    '&instance=' + encodeURIComponent(new URLSearchParams(location.search).get('instance') || '');
+  const __prog = __loadProgress(__probe);
+  __prog.start();
+  /* 条没走完之前不揭开星图:把 loading 文案和进度条当同一件事收尾 */
+  let __barDone = Promise.resolve();
+  const __hideLoading = () => __barDone.then(() => { loading.style.display = 'none'; });
 fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE) + '&project=' + encodeURIComponent(GRAPH_PROJECT) + '&instance=' + encodeURIComponent(new URLSearchParams(location.search).get('instance') || '') + '&layout=folder-wedges')
   .then(r => r.json())
   .then(data => {
+      __barDone = __prog.finish();
+      try { localStorage.setItem('castalia.lastNodeCount', String((data.nodes || []).length)); } catch (e) {}
       if (data.consKind) window.CONS_KIND = String(data.consKind).toLowerCase();
     if (data.error || !data.nodes) throw new Error(data.error || '无法读取记忆库');
     allData = data;
@@ -689,7 +783,7 @@ fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE) + '&project=' + enco
     renderNebula(data);
     syncViewButtons();
     renderStats();
-    loading.style.display = 'none';
+    __hideLoading();
     document.getElementById('tour-btn').disabled = false;
     return fetch('/api/status').then(r => r.json());
   })
@@ -700,15 +794,17 @@ fetch('/api/graph?scope=' + encodeURIComponent(GRAPH_SCOPE) + '&project=' + enco
      * 会把红字盖在正常星图上(2026-10-18 实测 1503 节点仍出现)。 */
     const hasGraph = !!(allData && Array.isArray(allData.nodes) && allData.nodes.length > 0);
     if (s && s.dbExists === false && !hasGraph) {
+      __prog.stop();
       loading.innerHTML = '📭 记忆库为空或未创建——启动 MCP server 或写入第一条记忆后,图谱会自动出现';
       loading.classList.add('error');
       loading.style.display = '';
     } else {
       loading.classList.remove('error');
-      loading.style.display = 'none';
+      __hideLoading();
     }
   })
   .catch(err => {
+    __prog.stop();
     /* 图已经画出来了说明数据没问题;此时 /api/status 抖动不能把红字盖回星图上。 */
     if (allData && Array.isArray(allData.nodes) && allData.nodes.length > 0) {
       loading.style.display = 'none';

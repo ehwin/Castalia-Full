@@ -69,6 +69,8 @@ SYNC_ITEMS = [
     'public/castalia-mark.png',
     'public/favicon.png',
     'routes/graph.js',
+    'routes/layout-geometry.mjs',
+    'routes/layout-worker.mjs',
     'routes/lib.js',
     'routes/config.js',
     'routes/aggregate.js',
