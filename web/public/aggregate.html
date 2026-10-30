@@ -94,6 +94,15 @@
   .row .where { color: var(--accent2); font-size: 11px; white-space: nowrap; min-width: 132px; }
   .row .txt { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row .time { color: var(--dim2); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  /* 来源分面(2026-10-30):事件层(daily_event)以前只能在原文里认出"# 日期 · 标题",
+     现在给一行 chips 直接筛选;事件行按 day/标题/概述 渲染,悬停看完整摘录与"未完"。 */
+  .src-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .chip { background: var(--panel); border: 1px solid var(--border); color: var(--dim); font-size: 11px;
+    padding: 3px 9px; border-radius: 999px; cursor: pointer; }
+  .chip:hover { color: var(--text); }
+  .chip.on { color: #06231f; background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .row.ev .where { color: var(--accent); }
+  .row.ev .where b { font-weight: 600; }
   .card { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
     border-radius: var(--r); padding: 11px 14px; margin-bottom: 8px; }
   .card .meta { font-size: 11px; color: var(--dim); margin-bottom: 5px; }
@@ -121,6 +130,13 @@
       <div class="btn-row" style="margin-top:8px">
         <button onclick="doSearch()">搜索</button>
         <button class="ghost" onclick="clearSearch()">清空</button>
+      </div>
+      <div class="src-chips" id="srcChips">
+        <button class="chip on" data-src="" onclick="pickSrc('', this)">全部</button>
+        <button class="chip" data-src="event" onclick="pickSrc('event', this)">事件</button>
+        <button class="chip" data-src="conv" onclick="pickSrc('conv', this)">对话</button>
+        <button class="chip" data-src="reflect" onclick="pickSrc('reflect', this)">反刍</button>
+        <button class="chip" data-src="lore" onclick="pickSrc('lore', this)">人设</button>
       </div>
       <div class="side-hint" id="scopeHint">默认看最近动态 · 搜索结果显示在右侧</div>
     </div>
@@ -161,6 +177,47 @@ async function j(url, opt) { const r = await fetch(url, opt); return r.json(); }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmtTime(t) { if (!t) return '—'; const d = new Date(String(t).replace(' ', 'T') + 'Z'); if (isNaN(d)) return String(t); return d.toLocaleString('zh-CN', { hour12: false }); }
 function colorOf(i) { return INST_COLOR[i] || 'var(--accent2)'; }
+/* ═══ 来源分面(2026-10-30) ══════════════════════════════════════════════════
+ * 记忆总成里混着四种来源:事件层(# 日期·标题,逐字引文)、对话流水、反刍产物(reflect_*)、人设。
+ * 事件层以前只能靠肉眼在原文里认出来;这里给 chips 直接筛,并把它渲染成 日期/标题/概述,
+ * 完整摘录留在 title 里(悬停可见)。筛选是纯客户端:后端一次最多给 500 条,分面不必再跑查询。
+ */
+let SRC = '';
+function srcKind(source) {
+  const v = String(source || '');
+  if (v === 'daily_event') return 'event';
+  if (v === 'conversation_log') return 'conv';
+  if (v.startsWith('reflect')) return 'reflect'; // reflect_insight / reflect-all / reflect_merge …
+  if (v === 'manual_lore' || v === 'manual') return 'lore';
+  return 'other';
+}
+function bySrc(list) { return SRC ? list.filter(x => srcKind(x.source) === SRC) : list; }
+function pickSrc(k, btn) {
+  SRC = k;
+  document.querySelectorAll('#srcChips .chip').forEach(b => b.classList.toggle('on', b === btn));
+  render();
+}
+/** 事件行正文:`# YYYY-MM-DD · 标题` + 一句话概述(+ 摘录/未完,留在 title 提示里) */
+function evParts(text) {
+  const lines = String(text || '').split('\n');
+  const head = lines[0] || '';
+  const m = head.match(/^#\s*(\d{4}-\d{2}-\d{2})\s*·?\s*(.*)$/);
+  const title = (m ? (m[2] || '') : head).trim();
+  return { day: m ? m[1] : '', title: title.slice(0, 40), summary: (lines[1] || '').trim() };
+}
+/** 统一行渲染:事件行走 事件 → 日期 / 标题 · 概述 */
+function rowHtml(r) {
+  if (srcKind(r.source) === 'event') {
+    const p = evParts(r.text);
+    return `<div class="row ev"><span class="where"><b>事件</b> ${esc(p.day || '—')}</span>`
+      + `<span class="txt" title="${esc(r.text)}">${esc(p.title)}${p.summary ? ' · ' + esc(p.summary) : ''}</span>`
+      + `<span class="time">${esc(r.time)}</span></div>`;
+  }
+  return `<div class="row"><span class="where">${esc(r.where)}</span>`
+    + `<span class="txt" title="${esc(r.text)}">${esc(r.text)}</span>`
+    + `<span class="time">${esc(r.time)}</span></div>`;
+}
+function emptyMsg(what) { return `<div class="empty">${SRC ? '当前筛选下没有' + what : what + '还没有内容'}</div>`; }
 function setHead(title, meta) { document.getElementById('title').textContent = title; document.getElementById('meta').textContent = meta || ''; }
 
 /* ── 左栏:全部库 ── */
@@ -181,7 +238,8 @@ async function loadOverview() {
     }
     LIBS = [...merged.values()];
     const total = LIBS.reduce((a, l) => a + l.memories, 0);
-    if (!QUERY && SCOPE.kind === 'recent') setHead('最近动态', `全部库 · ${total} 条记忆`);
+    // 有来源筛选时让 render() 的计数说了算，否则会被这里覆盖成总数（实测"人设 0 条"却显示 4055 条）
+    if (!QUERY && SCOPE.kind === 'recent' && !SRC) setHead('最近动态', `全部库 · ${total} 条记忆`);
 
     const showEmpty = document.getElementById('showEmpty').checked;
     const blanks = LIBS.filter(l => !l.memories && !l.facts);
@@ -242,39 +300,45 @@ async function render() {
     if (QUERY) {
       /* 全部库 → 跨库语义检索;某个库 → 库内 LIKE(用 /api/manage/memories 的 q) */
       if (SCOPE.kind === 'lib') {
-        const d = await j(`/api/manage/memories?instance=${encodeURIComponent(SCOPE.instance)}&project=${encodeURIComponent(SCOPE.project)}${SCOPE.memType ? '&memType=' + encodeURIComponent(SCOPE.memType) : ''}&q=${encodeURIComponent(QUERY)}&limit=500`);
+        const d = await j(`/api/manage/memories?instance=${encodeURIComponent(SCOPE.instance)}&project=${encodeURIComponent(SCOPE.project)}${SCOPE.memType ? '&memType=' + encodeURIComponent(SCOPE.memType) : ''}&q=${encodeURIComponent(QUERY)}&limit=500${SRC ? '&source=' + encodeURIComponent(SRC) : ''}`);
         const where = SCOPE.project + (SCOPE.memType ? ' / ' + (MT_NAME[SCOPE.memType] || SCOPE.memType) : '');
         if (!d.ok) { box.innerHTML = `<div class="empty">${esc(d.error || '搜索失败')}</div>`; setHead(`${where} · 搜索「${QUERY}」`, ''); return; }
-        setHead(`${where} · 搜索「${QUERY}」`, `命中 ${d.count ?? 0} 条`);
-        box.innerHTML = !d.memories.length ? '<div class="empty">这个库里没有命中</div>' : d.memories.map(m => `
-          <div class="row"><span class="where">${esc(m.memType || 'general')}${m.important ? ' ⭐' : ''}</span>
-          <span class="txt" title="${esc(m.text)}">${esc(m.text)}</span>
-          <span class="time">${fmtTime(m.createdAt)}</span></div>`).join('');
+        const hits = bySrc(d.memories || []);
+        setHead(`${where} · 搜索「${QUERY}」`, `命中 ${hits.length} 条${SRC ? '（已筛选）' : ''}`);
+        box.innerHTML = !hits.length ? emptyMsg('命中') : hits.map(m => rowHtml({
+          where: (m.memType || 'general') + (m.important ? ' ⭐' : ''),
+          text: m.text, time: fmtTime(m.createdAt), source: m.source,
+        })).join('');
       } else {
         const d = await j('/api/aggregate/search?q=' + encodeURIComponent(QUERY) + '&topK=30');
         if (!d.ok) { box.innerHTML = `<div class="empty">${esc(d.error || '搜索失败')}</div>`; setHead(`搜索「${QUERY}」`, ''); return; }
-        setHead(`搜索「${QUERY}」`, `命中 ${d.count ?? 0} 条 · 全部库`);
-        box.innerHTML = !d.count ? '<div class="empty">没有命中</div>' : d.results.map(r => `
-          <div class="card"><div class="meta">[<span class="inst">${esc(r.instance)}</span> · <span class="proj">${esc(r.project)}</span>] 匹配 ${r.score} · ${fmtTime(r.createdAt)}</div>
-          <div class="txt">${esc(r.text)}</div></div>`).join('');
+        const hits = bySrc(d.results || []);
+        setHead(`搜索「${QUERY}」`, `命中 ${hits.length} 条 · 全部库${SRC ? '（已筛选）' : ''}`);
+        box.innerHTML = !hits.length ? emptyMsg('命中') : hits.map(r => {
+          const p = srcKind(r.source) === 'event' ? evParts(r.text) : null;
+          const label = p ? `事件 ${esc(p.day)}` : esc(srcKind(r.source));
+          return `<div class="card"><div class="meta">[<span class="inst">${esc(r.instance)}</span> · <span class="proj">${esc(r.project)}</span>] ${label} · 匹配 ${r.score} · ${fmtTime(r.createdAt)}</div>
+          <div class="txt">${esc(p ? (p.title + (p.summary ? '：' + p.summary : '')) : r.text)}</div></div>`;
+        }).join('');
       }
     } else if (SCOPE.kind === 'lib') {
-      const d = await j(`/api/manage/memories?instance=${encodeURIComponent(SCOPE.instance)}&project=${encodeURIComponent(SCOPE.project)}${SCOPE.memType ? '&memType=' + encodeURIComponent(SCOPE.memType) : ''}&limit=500`);
+      const d = await j(`/api/manage/memories?instance=${encodeURIComponent(SCOPE.instance)}&project=${encodeURIComponent(SCOPE.project)}${SCOPE.memType ? '&memType=' + encodeURIComponent(SCOPE.memType) : ''}&limit=500${SRC ? '&source=' + encodeURIComponent(SRC) : ''}`);
       const where = SCOPE.project + (SCOPE.memType ? ' / ' + (MT_NAME[SCOPE.memType] || SCOPE.memType) : '');
       if (!d.ok) { box.innerHTML = `<div class="empty">${esc(d.error || '读取失败')}</div>`; setHead(where, ''); return; }
-      const mem = d.memories || [];
-      setHead(where, `${SCOPE.instance} · ${d.count ?? mem.length} 条记忆`);
-      box.innerHTML = !mem.length ? '<div class="empty">这个库还没有记忆</div>' : mem.map(m => `
-        <div class="row"><span class="where">${esc(m.memType || 'general')}${m.important ? ' ⭐' : ''}</span>
-        <span class="txt" title="${esc(m.text)}">${esc(m.text)}</span>
-        <span class="time">${fmtTime(m.createdAt)}</span></div>`).join('');
+      const mem = bySrc(d.memories || []);
+      setHead(where, `${SCOPE.instance} · ${mem.length} 条记忆${SRC ? '（已筛选）' : ''}`);
+      box.innerHTML = !mem.length ? emptyMsg('记忆') : mem.map(m => rowHtml({
+        where: (m.memType || 'general') + (m.important ? ' ⭐' : ''),
+        text: m.text, time: fmtTime(m.createdAt), source: m.source,
+      })).join('');
     } else {
-      const d = await j('/api/aggregate/recent?limit=80');
-      setHead('最近动态', `全部库 · ${d.count ?? 0} 条`);
-      box.innerHTML = !d.count ? '<div class="empty">还没有记忆</div>' : d.results.map(r => `
-        <div class="row"><span class="where">${esc(r.instance)}/${esc(r.project)}</span>
-        <span class="txt" title="${esc(r.text)}">${esc(r.text)}</span>
-        <span class="time">${fmtTime(r.createdAt)}</span></div>`).join('');
+      /* 取满 100(服务端上限):筛选是客户端的,取 80 条再筛会让事件层看起来"没有" */
+      const d = await j(`/api/aggregate/recent?limit=200${SRC ? '&source=' + encodeURIComponent(SRC) : ''}`);
+      const rows = bySrc(d.results || []);
+      setHead('最近动态', `全部库 · ${rows.length} 条${SRC ? '（已筛选）' : ''}`);
+      box.innerHTML = !rows.length ? emptyMsg('记忆') : rows.map(r => rowHtml({
+        where: `${r.instance}/${r.project}`, text: r.text, time: fmtTime(r.createdAt), source: r.source,
+      })).join('');
     }
   } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   loadOverview();

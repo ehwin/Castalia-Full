@@ -185,16 +185,16 @@ function lexicalForLib(db, lib, terms, phrases) {
   try {
     if (phrases.length) {
       const rows = db.prepare(`
-        SELECT m.id, m.text, m.created_at FROM memory_fts JOIN memory m ON m.rowid = memory_fts.rowid
+        SELECT m.id, m.text, m.created_at, m.source FROM memory_fts JOIN memory m ON m.rowid = memory_fts.rowid
         WHERE memory_fts MATCH ? AND m.is_active = 1 AND COALESCE(m.status,'') <> 'superseded'
         ORDER BY bm25(memory_fts) LIMIT 8`).all(phrases.join(' OR '));
-      rows.forEach((r, i) => out.push({ instance: lib.instance, project: lib.project, id: r.id, text: r.text, createdAt: r.created_at, score: Math.max(0.5, 0.92 - i * 0.02), basis: 'phrase' }));
+      rows.forEach((r, i) => out.push({ instance: lib.instance, project: lib.project, id: r.id, text: r.text, createdAt: r.created_at, source: r.source, score: Math.max(0.5, 0.92 - i * 0.02), basis: 'phrase' }));
     }
   } catch { /* 没建 memory_fts 的库(AIRI 全族)走下面的 bigram */ }
   try {
     if (terms.length) {
       const conds = terms.map(() => 'text LIKE ?').join(' OR ');
-      const rows = db.prepare(`SELECT id, text, created_at FROM memory WHERE is_active = 1 AND (${conds}) ORDER BY created_at DESC LIMIT 12`)
+      const rows = db.prepare(`SELECT id, text, created_at, source FROM memory WHERE is_active = 1 AND (${conds}) ORDER BY created_at DESC LIMIT 12`)
         .all(...terms.map(t => `%${t}%`));
       for (const r of rows) {
         const hit = terms.filter(t => String(r.text).toLowerCase().includes(t)).length;
@@ -211,13 +211,13 @@ function vectorForLib(db, lib, qvec, k) {
     const space = db.prepare('SELECT dim FROM _embed_space LIMIT 1').get();
     if (!space || Number(space.dim) !== qvec.length) return out;
     const rows = db.prepare('SELECT rowid AS rid, distance FROM vec_memory WHERE embedding MATCH ? ORDER BY distance LIMIT ?').all(vecBlob(qvec), k);
-    const get = db.prepare('SELECT id, text, created_at FROM memory WHERE rowid = ? AND is_active = 1');
+    const get = db.prepare('SELECT id, text, created_at, source FROM memory WHERE rowid = ? AND is_active = 1');
     for (const r of rows) {
       const m = get.get(r.rid);
       if (!m) continue;
       const cos = 1 - Number(r.distance) ** 2 / 2;
       if (!(cos > 0)) continue;
-      out.push({ instance: lib.instance, project: lib.project, id: m.id, text: m.text, createdAt: m.created_at, score: Math.round(Math.min(1, cos) * 1000) / 1000, basis: 'vector' });
+      out.push({ instance: lib.instance, project: lib.project, id: m.id, text: m.text, createdAt: m.created_at, source: m.source, score: Math.round(Math.min(1, cos) * 1000) / 1000, basis: 'vector' });
     }
   } catch { /* ignore */ }
   return out;
@@ -241,10 +241,59 @@ function mergeHits(all, k) {
   return [...byText.values()].sort((a, b) => b.score - a.score || String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, k);
 }
 
+/** 来源分面（2026-10-30）：记忆总成的 chips 要服务端过滤 —— 只拿"最近 100 条"再在前端筛，
+ *  老的人设/事件行根本进不了窗口，看起来就是"筛选后没有"。四类与 engine 的 source 取值对应：
+ *  事件 daily_event / 对话 conversation_log / 反刍 reflect* / 人设 manual_lore+manual。 */
+function sourceFilter(kind) {
+  const k = String(kind || '').toLowerCase();
+  if (k === 'event') return { sql: " AND COALESCE(source,'') = 'daily_event'", params: [] };
+  if (k === 'conv') return { sql: " AND COALESCE(source,'') = 'conversation_log'", params: [] };
+  if (k === 'reflect') return { sql: " AND COALESCE(source,'') LIKE 'reflect%'", params: [] };
+  if (k === 'lore') return { sql: " AND COALESCE(source,'') IN ('manual_lore','manual')", params: [] };
+  return { sql: '', params: [] };
+}
+
+/** 统一索引的 docs 表没有 source 列（加列要重建索引），这里按库补一次：
+ *  同一个库一条 IN 查询，命中 ≤200 条、涉及的库通常 1~5 个，代价可忽略。
+ *  补不上的（库文件不在/查失败）留空，前端按"其它"归类，不影响检索结果本身。
+ *  —— 记忆总成的来源分面（事件层/对话/反刍/人设）要靠它，2026-10-30。 */
+function attachSource(hits) {
+  const byLib = new Map();
+  for (const h of hits) {
+    const key = `${h.instance}|${h.project}`;
+    if (!byLib.has(key)) byLib.set(key, []);
+    byLib.get(key).push(h);
+  }
+  const files = libFiles();
+  for (const [key, group] of byLib) {
+    const [instance, project] = key.split('|');
+    const ids = [...new Set(group.map(h => h.id).filter(Boolean))];
+    if (!ids.length) continue;
+    // 库里 instance 是展示名（AIRI/Hermes），索引里是小写（airi/hermes）—— 大小写不敏感地配，
+    // 都配不上时退回按 project 配（同一个 project 名在本机是唯一的）。
+    const norm = (v) => String(v || '').toLowerCase();
+    let holders = files.filter(l => norm(l.instance) === norm(instance) && norm(l.project) === norm(project));
+    if (!holders.length) holders = files.filter(l => norm(l.project) === norm(project));
+    for (const f of holders) {
+      let db = null;
+      try {
+        db = openLibDb(f.file);
+        if (!db) continue;
+        const rows = db.prepare(`SELECT id, source FROM memory WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids);
+        const map = new Map(rows.map(r => [String(r.id), r.source]));
+        for (const h of group) if (map.has(String(h.id))) h.source = map.get(String(h.id));
+      } catch { /* 单库失败不影响检索 */ }
+      finally { if (db) { try { db.close(); } catch {} } }
+    }
+  }
+  return hits;
+}
+
 function shape(h) {
   return {
     instance: h.instance, project: h.project, id: h.id,
     text: String(h.text).length > 200 ? String(h.text).slice(0, 200) + '…' : String(h.text),
+    source: h.source || '',
     score: h.score, basis: h.basis, createdAt: h.createdAt || h.created_at,
   };
 }
@@ -283,7 +332,7 @@ router.get('/aggregate/search', async (req, res) => {
         ...(vecErr ? { vectorError: vecErr } : {}),
         ...(rrErr ? { rerankError: rrErr } : {}),
         took: { fts: tFts, vector: tVec, rerank: reranked ? tRr : 0, total: Date.now() - t0 },
-        results: hits.slice(0, topK * 4).map(shape),
+        results: attachSource(hits).slice(0, topK * 4).map(shape),
       });
     } catch (e) {
       console.error('[aggregate/search] 统一索引失败,退回 fan-out:', e.message);
@@ -347,15 +396,16 @@ router.get('/aggregate/search', async (req, res) => {
 
 // ═══ /api/aggregate/recent ═══
 router.get('/aggregate/recent', (req, res) => {
-  const limit = Math.min(100, parseInt(req.query.limit || '30', 10) || 30);
+  const limit = Math.min(200, parseInt(req.query.limit || '30', 10) || 30);
+  const sf = sourceFilter(req.query.source);
   const rows = [];
   for (const l of libFiles()) {
     let db = null;
     try {
       db = openLibDb(l.file);
       if (!db) continue;
-      const rs = db.prepare('SELECT id, text, mem_type, created_at FROM memory WHERE is_active=1 ORDER BY created_at DESC LIMIT ?').all(limit);
-      for (const r of rs) rows.push({ instance: l.instance, project: l.project, id: r.id, text: String(r.text).slice(0, 150), memType: r.mem_type, createdAt: r.created_at });
+      const rs = db.prepare(`SELECT id, text, mem_type, created_at, source FROM memory WHERE is_active=1${sf.sql} ORDER BY created_at DESC LIMIT ?`).all(...sf.params, limit);
+      for (const r of rs) rows.push({ instance: l.instance, project: l.project, id: r.id, text: String(r.text).slice(0, 150), memType: r.mem_type, source: r.source, createdAt: r.created_at });
     } catch {} finally { if (db) db.close(); }
   }
   rows.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
@@ -408,6 +458,7 @@ router.get('/manage/memories', (req, res) => {
   const libs = libFiles().filter(l => (!instance || l.instance === instance) && (!project || l.project === project)
     && (!memType || String(l.memType || 'general') === memType));
   if (!libs.length) return res.json({ ok: false, error: '库不存在(instance/project 未匹配)', memories: [] });
+  const sf = sourceFilter(req.query.source);
   const base = `SELECT id, substr(text,1,600) AS text, length(text) AS textLen, type, mem_type, category, tier, importance, source, created_at, updated_at FROM memory`;
   const all = [];
   for (const lib of libs) {
@@ -416,9 +467,9 @@ router.get('/manage/memories', (req, res) => {
       db = openLibDb(lib.file);
       if (!db) continue;
       const rows = q
-        ? db.prepare(`${base} WHERE is_active=1 AND (text LIKE ? OR mem_type LIKE ? OR category LIKE ? OR type LIKE ?) ORDER BY created_at DESC LIMIT ?`)
-            .all(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, limit)
-        : db.prepare(`${base} WHERE is_active=1 ORDER BY created_at DESC LIMIT ?`).all(limit);
+        ? db.prepare(`${base} WHERE is_active=1${sf.sql} AND (text LIKE ? OR mem_type LIKE ? OR category LIKE ? OR type LIKE ?) ORDER BY created_at DESC LIMIT ?`)
+            .all(...sf.params, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, limit)
+        : db.prepare(`${base} WHERE is_active=1${sf.sql} ORDER BY created_at DESC LIMIT ?`).all(...sf.params, limit);
       for (const r of rows) all.push(Object.assign({}, r, { __instance: lib.instance, __project: lib.project, __memType: lib.memType || 'general', __file: lib.file }));
     } catch (e) { /* 单个文件坏掉不影响整体 */ }
     finally { if (db) { try { db.close(); } catch (e2) {} } }
